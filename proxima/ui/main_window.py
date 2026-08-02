@@ -3479,12 +3479,7 @@ class MainWindow(Gtk.Window):
             self._save_guest_pref("compression_index", index)
 
     def _split_console(self):
-        """Give the console in front a pane of its own.
-
-        The console moves rather than a blank pane opening: an empty
-        notebook draws no tab strip, so there would be nothing to drag a tab
-        onto -- and dragging tabs between panes is the point of having them.
-        """
+        """Give the console in front a pane of its own."""
         console = self.current_console()
         if console is None:
             return
