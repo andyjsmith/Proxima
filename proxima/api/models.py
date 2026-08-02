@@ -263,63 +263,77 @@ def parse_spice_clients(text):
     Returns (client count, addresses), or None when the text does not look
     like 'info spice' output at all.
 
-    The output is two sections and only the second one counts:
+    Two spellings are in the wild and both turn up depending on the QEMU
+    build. An idle server says so on one line:
 
         Server:
-             address: 0.0.0.0:61000
-                auth: spice
+             address: 127.0.0.1:61002 [tls]
+            compiled: 0.15.2
         Channels: none
 
-    A connected client contributes several channels -- display, inputs,
-    cursor and so on -- each with its own line and its own source port, all
-    sharing one session-id. Counting sessions is therefore the only way to
-    get "how many people", and counting addresses would report one viewer as
-    five.
+    A busy one repeats a singular block per channel:
 
-    Output with no Channels section returns None -- "cannot tell" -- and
-    never zero. The difference decides whether somebody gets thrown off
-    their session: a reply this function does not recognise is a reason to
-    ask the user, not a licence to assume the console is free. Only QEMU
-    actually saying "Channels: none" counts as empty.
+        Channel:
+             address: 127.0.0.1:42220 [tls]
+             session: 1938609120
+             channel: 1:0
+             channel name: main
+
+    One viewer opens several channels -- main, display, inputs, cursor, and
+    playback and record when there is audio -- each from its own source
+    port, all sharing one session. Counting sessions is therefore the only
+    way to get "how many people": counting addresses would report a single
+    viewer as four to six.
+
+    Output with no channel section at all returns None -- "cannot tell" --
+    and never zero. The difference decides whether somebody gets thrown off
+    their session, so a reply this function does not recognise is a reason
+    to ask the user rather than a licence to assume the console is free.
+    Only QEMU actually saying "none" counts as empty.
     """
-    lines = (text or "").splitlines()
     sessions = []
     addresses = []
     in_channels = False
     seen_channels = False
 
-    for line in lines:
+    for line in (text or "").splitlines():
         stripped = line.strip()
         if not stripped:
-            continue
-        lowered = stripped.lower()
-        if lowered.startswith("channels:"):
-            seen_channels = True
-            # "Channels: none" settles it on the same line.
-            remainder = stripped.split(":", 1)[1].strip().lower()
-            if remainder in ("none", "no", "0"):
-                return 0, []
-            in_channels = True
-            continue
-        if lowered.endswith(":") and ":" not in lowered[:-1]:
-            # Another section header, e.g. "Server:". Ends the channel list.
-            in_channels = False
-            continue
-        if not in_channels:
             continue
         key, _, value = stripped.partition(":")
         key = key.strip().lower()
         value = value.strip()
-        if key == "session-id":
+
+        # "Channels:" heads a list; "Channel:" heads one block and repeats.
+        # Only with nothing after the colon, because "channel: 1:0" inside a
+        # block is an ordinary field that happens to share the word.
+        if key in ("channel", "channels") and not value:
+            seen_channels = True
+            in_channels = True
+            continue
+        if key == "channels":
+            seen_channels = True
+            if value.lower() in ("none", "no", "0"):
+                return 0, []
+            in_channels = True
+            continue
+        if key == "server":
+            in_channels = False      # the server block, not a client
+            continue
+        if not in_channels:
+            continue
+
+        if key in ("session", "session-id"):
             if value not in sessions:
                 sessions.append(value)
         elif key == "address":
-            addresses.append(value)
+            # "127.0.0.1:42220 [tls]" -- the flag is not part of the address.
+            addresses.append(value.split()[0] if value else value)
 
     if sessions:
         return len(sessions), addresses
     if addresses:
-        # Channels with no session-id at all: an older QEMU, or a format
+        # Channels with no session line at all: an older QEMU, or a format
         # change. One client is the smallest claim consistent with what is
         # there.
         return 1, addresses

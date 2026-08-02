@@ -241,16 +241,26 @@ class FakeAPI:
         count = self.SPICE_CLIENTS.get(vmid, 0)
         if count is None:
             raise ProxmoxError("VM is not running", status=500)
+        header = ("Server:\n     address: 127.0.0.1:61000 [tls]\n"
+                  "    migrated: false\n        auth: spice\n"
+                  "    compiled: 0.15.2\n  mouse-mode: client\n")
         if not count:
-            return ("Server:\n     address: 0.0.0.0:61000\n"
-                    "        auth: spice\nChannels: none")
-        blocks = "".join(
-            f"     address: 10.0.0.{9 + i}:5100{i}\n"
-            f"  session-id: {1000 + i}\n"
-            f" channel-type: 1\n   channel-id: 0\n          tls: true\n"
-            for i in range(count))
-        return ("Server:\n     address: 0.0.0.0:61000\n"
-                "        auth: spice\nChannels:\n" + blocks)
+            return header + "Channels: none"
+        # The shape a real Proxmox host returns, captured from a live
+        # server: a singular "Channel:" block repeated per channel, one
+        # shared "session" per viewer, and a [tls] flag glued to the
+        # address. Inventing this format instead of capturing it is exactly
+        # what let the feature ship broken with its tests passing.
+        names = ("main", "display", "inputs", "cursor")
+        blocks = ""
+        for client in range(count):
+            for index, name in enumerate(names):
+                port = 42220 + client * 100 + index
+                blocks += (f"Channel:\n     address: 127.0.0.1:{port} [tls]\n"
+                           f"     session: {1938609120 + client}\n"
+                           f"     channel: {index + 1}:0\n"
+                           f"     channel name: {name}\n")
+        return header + blocks
 
     def spice_clients(self, node, vmid):
         from proxima.api.models import parse_spice_clients
@@ -2517,6 +2527,78 @@ def main():
             row["name"] = "build-runner"
     window.refresh()
     pump(0.6)
+
+    # -- 'info spice', as a real server actually writes it -----------------
+    # Verbatim from Proxmox with QEMU/SPICE 0.15.2. This exact text was
+    # once read as "nobody is connected", which silently threw people off
+    # their consoles, so it is pinned here rather than paraphrased.
+    from proxima.api.models import parse_spice_clients as _parse
+
+    REAL_BUSY = (
+        "Server:\n"
+        "     address: 127.0.0.1:61000 [tls]\n"
+        "    migrated: false\n"
+        "        auth: spice\n"
+        "    compiled: 0.15.2\n"
+        "  mouse-mode: client\n"
+        "Channel:\n"
+        "     address: 127.0.0.1:42220 [tls]\n"
+        "     session: 1938609120\n"
+        "     channel: 1:0\n"
+        "     channel name: main\n"
+        "Channel:\n"
+        "     address: 127.0.0.1:42234 [tls]\n"
+        "     session: 1938609120\n"
+        "     channel: 3:0\n"
+        "     channel name: inputs\n"
+        "Channel:\n"
+        "     address: 127.0.0.1:42242 [tls]\n"
+        "     session: 1938609120\n"
+        "     channel: 2:0\n"
+        "     channel name: display\n"
+        "Channel:\n"
+        "     address: 127.0.0.1:42232 [tls]\n"
+        "     session: 1938609120\n"
+        "     channel: 4:0\n"
+        "     channel name: cursor\n")
+    REAL_IDLE = (
+        "Server:\n"
+        "     address: 127.0.0.1:61002 [tls]\n"
+        "    migrated: false\n"
+        "        auth: spice\n"
+        "    compiled: 0.15.2\n"
+        "  mouse-mode: client\n"
+        "Channels: none")
+
+    for label, text, expected in (
+            ("one viewer, four channels", REAL_BUSY, (1, 4)),
+            ("idle server", REAL_IDLE, (0, 0)),
+            # Two viewers differ only by their session number.
+            ("two viewers", REAL_BUSY + REAL_BUSY.replace(
+                "1938609120", "999999"), (2, 8)),
+    ):
+        parsed = _parse(text)
+        if parsed is None:
+            failures.append(f"real 'info spice' ({label}) was not understood")
+        elif parsed[0] != expected[0] or len(parsed[1]) != expected[1]:
+            failures.append(
+                f"real 'info spice' ({label}) parsed as {parsed[0]} "
+                f"client(s) from {len(parsed[1])} channel(s), expected "
+                f"{expected[0]} from {expected[1]}")
+        else:
+            print(f"[smoke] real 'info spice' {label} -> "
+                  f"{parsed[0]} client(s)")
+
+    if any(a.endswith("[tls]") for a in (_parse(REAL_BUSY) or (0, []))[1]):
+        failures.append("the [tls] flag was kept as part of an address")
+
+    # And the safety property, on the shapes that are not output at all.
+    for label, text in (("empty", ""), ("junk", "who knows"),
+                        ("an error message", "Permission denied")):
+        if _parse(text) is not None:
+            failures.append(f"{label} was read as an answer, not as unknown")
+    else:
+        print("[smoke] unrecognised replies mean 'cannot tell', never 'empty'")
 
     # -- another client on the SPICE console -----------------------------
     # Nobody may be thrown off a console by accident, and "the monitor
