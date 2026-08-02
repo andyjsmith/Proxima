@@ -373,12 +373,18 @@ class VMSettingsDialog(Gtk.Dialog):
         firewall.connect("toggled", self._on_net_firewall, entry)
         box.pack_start(firewall, False, False, 0)
 
-        if mac:
-            address = Gtk.Label(xalign=0.0)
-            address.get_style_context().add_class("dim")
-            address.set_text(mac)
-            address.set_tooltip_text("MAC address")
-            box.pack_start(address, False, False, 0)
+        address = Gtk.Entry()
+        address.set_width_chars(17)
+        address.set_max_length(17)
+        address.set_placeholder_text("MAC")
+        address.set_text(mac or "")
+        address.set_tooltip_text(
+            "MAC address, as AA:BB:CC:DD:EE:FF. Changing it changes what the "
+            "guest OS sees, which can move its network configuration to a "
+            "new interface.")
+        address.connect("changed", self._on_net_mac, entry)
+        entry["mac_widget"] = address
+        box.pack_start(address, False, False, 0)
 
         remove = Gtk.Button()
         remove.set_relief(Gtk.ReliefStyle.NONE)
@@ -403,6 +409,29 @@ class VMSettingsDialog(Gtk.Dialog):
                  else (key, value) for key, value in entry["pairs"]]
         entry["pairs"] = pairs
         self._sync_buttons()
+
+    def _on_net_mac(self, editable, entry):
+        """Take a MAC only once it is a whole address.
+
+        Applying it character by character would mean every intermediate
+        state is a change, so the dialog would be dirty with a half-typed
+        address and Apply would offer to write one. The field marks itself
+        as wrong until it is complete instead.
+        """
+        if self._loading:
+            return
+        text = editable.get_text().strip()
+        if devices.valid_mac(text):
+            editable.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY,
+                                             None)
+            entry["pairs"] = devices.set_nic_mac(entry["pairs"], text.upper())
+            self._sync_buttons()
+            return
+        editable.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY,
+                                         "dialog-warning-symbolic")
+        editable.set_icon_tooltip_text(
+            Gtk.EntryIconPosition.SECONDARY,
+            "Not a complete MAC address (AA:BB:CC:DD:EE:FF)")
 
     def _on_net_bridge(self, editable, entry):
         if self._loading:

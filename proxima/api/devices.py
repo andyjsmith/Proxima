@@ -14,6 +14,7 @@ individual parts are replaced, and the remainder is rendered back untouched.
 """
 
 import random
+import re
 
 # Values that appear on their own, without a key, are the device model. The
 # shorthand "virtio=<mac>" means model virtio with that MAC address.
@@ -101,6 +102,28 @@ def nic_model(pairs):
         if key == "model":
             return value, get_pair(pairs, "macaddr", "")
     return "", ""
+
+
+MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+
+def valid_mac(text):
+    return bool(MAC_RE.match((text or "").strip()))
+
+
+def set_nic_mac(pairs, mac):
+    """Replace a NIC's MAC, whichever spelling the line uses.
+
+    "virtio=<mac>" carries the address in the model's own value, while
+    "model=virtio" keeps it in a separate macaddr field. Both are valid and
+    both turn up, so both are handled rather than normalised -- rewriting
+    somebody's line into the other spelling is a gratuitous change.
+    """
+    model, _ = nic_model(pairs)
+    for index, (key, value) in enumerate(pairs):
+        if key == model and key in NIC_MODELS:
+            return pairs[:index] + [(key, mac)] + pairs[index + 1:]
+    return set_pair(pairs, "macaddr", mac)
 
 
 def random_mac():

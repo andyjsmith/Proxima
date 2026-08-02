@@ -57,6 +57,13 @@ class ConsoleStatusPanel(Gtk.Box):
             "network-offline-symbolic", Gtk.IconSize.DIALOG)
         self.pack_start(self.icon, False, False, 0)
 
+        # No GtkSpinner here, and it is not an oversight. One was tried:
+        # it segfaults this GTK/Windows build when its widget is unmapped
+        # or destroyed, which happens routinely -- "Connecting..." is on
+        # screen at the exact moment the real console replaces the
+        # placeholder. Tying it to the mapped state was not enough. The
+        # tree's CellRendererSpinner is a different implementation and is
+        # unaffected; this one waits for a GTK that can be trusted with it.
         self.title = Gtk.Label()
         self.title.get_style_context().add_class("console-status-title")
         self.pack_start(self.title, False, False, 0)
@@ -85,9 +92,21 @@ class ConsoleStatusPanel(Gtk.Box):
         for child in (self.icon, self.title, self.detail, self.buttons,
                       self.reconnect_button):
             child.show()
+        # A spinner still animating when its widget is torn down takes the
+        # process with it on this stack, and a panel is routinely destroyed
+        # mid-spin: "Connecting..." is showing at the exact moment the real
+        # console replaces the placeholder.
+        # A GtkSpinner that is animating while its widget is unmapped or
+        # torn down takes the process with it on this stack -- and a panel
+        # is routinely destroyed mid-spin, since "Connecting..." is showing
+        # at the moment the real console replaces the placeholder. So the
+        # animation is tied strictly to being mapped: nothing else is
+        # allowed to start it.
+
+        # The spinner is shown only for states that are waiting.
 
     def show_message(self, title, detail="", icon="network-offline-symbolic",
-                     can_reconnect=True, actions=None):
+                     can_reconnect=True, actions=None, busy=False):
         """Put a message over the console.
 
         'actions' is a list of (label, callback) shown beside Reconnect. The
@@ -104,6 +123,11 @@ class ConsoleStatusPanel(Gtk.Box):
         self.detail.set_text(detail or "")
         self.detail.set_visible(bool(detail))
         self.icon.set_from_icon_name(icon, Gtk.IconSize.DIALOG)
+        # 'busy' still chooses the artwork -- a waiting state gets the
+        # loading glyph rather than the offline plug.
+        if busy:
+            self.icon.set_from_icon_name("content-loading-symbolic",
+                                         Gtk.IconSize.DIALOG)
         self.reconnect_button.set_visible(can_reconnect)
 
         for label, callback in actions or ():

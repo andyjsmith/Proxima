@@ -258,7 +258,10 @@ def audio_is_spice(audio_value):
 
 
 def parse_spice_clients(text):
-    """Read QEMU's 'info spice' output. Returns (client count, addresses).
+    """Read QEMU's 'info spice' output.
+
+    Returns (client count, addresses), or None when the text does not look
+    like 'info spice' output at all.
 
     The output is two sections and only the second one counts:
 
@@ -273,15 +276,17 @@ def parse_spice_clients(text):
     get "how many people", and counting addresses would report one viewer as
     five.
 
-    Anything unparseable comes back as zero clients, because the caller
-    already treats a failed *call* as unknown; a well-formed reply that this
-    function cannot make sense of is far more likely to be an empty server
-    than a full one.
+    Output with no Channels section returns None -- "cannot tell" -- and
+    never zero. The difference decides whether somebody gets thrown off
+    their session: a reply this function does not recognise is a reason to
+    ask the user, not a licence to assume the console is free. Only QEMU
+    actually saying "Channels: none" counts as empty.
     """
     lines = (text or "").splitlines()
     sessions = []
     addresses = []
     in_channels = False
+    seen_channels = False
 
     for line in lines:
         stripped = line.strip()
@@ -289,6 +294,7 @@ def parse_spice_clients(text):
             continue
         lowered = stripped.lower()
         if lowered.startswith("channels:"):
+            seen_channels = True
             # "Channels: none" settles it on the same line.
             remainder = stripped.split(":", 1)[1].strip().lower()
             if remainder in ("none", "no", "0"):
@@ -312,9 +318,14 @@ def parse_spice_clients(text):
 
     if sessions:
         return len(sessions), addresses
-    # Channels with no session-id at all: an older QEMU, or a format change.
-    # One client is the smallest claim consistent with what is there.
-    return (1, addresses) if addresses else (0, [])
+    if addresses:
+        # Channels with no session-id at all: an older QEMU, or a format
+        # change. One client is the smallest claim consistent with what is
+        # there.
+        return 1, addresses
+    if seen_channels:
+        return 0, []
+    return None                          # not 'info spice' output at all
 
 
 def vga_is_spice(vga_value):

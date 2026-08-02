@@ -147,23 +147,63 @@ class VncConsole(Gtk.Box):
 
     # -- rendering -----------------------------------------------------
 
+    def _rebuild_surface(self):
+        """Point the cairo surface at the client's current framebuffer.
+
+        Must be called with fb_lock held. Returns whether there is a usable
+        surface afterwards.
+        """
+        width, height = self.client.width, self.client.height
+        if not width or not height:
+            self._surface = None
+            return False
+        self._buffer = self.client.framebuffer
+        stride = cairo.ImageSurface.format_stride_for_width(
+            cairo.FORMAT_RGB24, width)
+        if stride != width * 4:
+            # A 32bpp surface is always 4-byte aligned in practice; if
+            # cairo ever disagrees, fall back to a copy per frame rather
+            # than hand it a mis-strided buffer.
+            self._surface = None
+            self._status(f"unexpected cairo stride {stride} for {width}px")
+            return False
+        self._surface = cairo.ImageSurface.create_for_data(
+            memoryview(self._buffer), cairo.FORMAT_RGB24,
+            width, height, stride)
+        return True
+
+    def _sync_surface(self):
+        """Rebuild the surface if the guest has changed resolution.
+
+        A guest can resize at any moment -- another client with guest resize
+        enabled will do it the instant its window changes size -- and the
+        RFB thread swaps the framebuffer for a new one of the new size
+        immediately, while the resize callback only reaches the main loop on
+        the next idle. Anything reading the geometry in between sees the old
+        surface against the new framebuffer.
+
+        That gap is what puts the pointer somewhere other than where the
+        picture says it is: drawing and pointer mapping both derive from the
+        surface, so they agree with each other but not with the guest. This
+        closes it by making every reader check first, rather than trusting
+        that the idle has already run.
+        """
+        if self._closed or self.client is None or cairo is None:
+            return False
+        with self.client.fb_lock:
+            if (self._surface is not None
+                    and self._surface.get_width() == self.client.width
+                    and self._surface.get_height() == self.client.height
+                    and self._buffer is self.client.framebuffer):
+                return True
+            return self._rebuild_surface()
+
     def _on_resize(self, width, height):
         if self._closed or self.client is None:
             return False
         with self.client.fb_lock:
-            self._buffer = self.client.framebuffer
-            stride = cairo.ImageSurface.format_stride_for_width(
-                cairo.FORMAT_RGB24, width)
-            if stride != width * 4:
-                # A 32bpp surface is always 4-byte aligned in practice; if
-                # cairo ever disagrees, fall back to a copy per frame rather
-                # than hand it a mis-strided buffer.
-                self._surface = None
-                self._status(f"unexpected cairo stride {stride} for {width}px")
+            if not self._rebuild_surface():
                 return False
-            self._surface = cairo.ImageSurface.create_for_data(
-                memoryview(self._buffer), cairo.FORMAT_RGB24,
-                width, height, stride)
         # A modest floor, not the guest's resolution. Asking for the full
         # framebuffer makes the drawing area's *minimum* size larger than the
         # tab it lives in, and a widget allocated more space than its parent
@@ -243,6 +283,7 @@ class VncConsole(Gtk.Box):
         what a Windows guest does at boot, switching resolution when the
         display driver loads.
         """
+        self._sync_surface()
         if self._surface is None:
             return 0, 0
         return self._surface.get_width(), self._surface.get_height()
@@ -271,6 +312,10 @@ class VncConsole(Gtk.Box):
         return scale, offset_x, offset_y
 
     def _on_draw(self, _widget, context):
+        # Before the lock: a guest that resized since the last frame needs a
+        # new surface, and drawing the old one would show the picture at a
+        # size the pointer no longer agrees with.
+        self._sync_surface()
         if self._surface is None:
             return False
         with self.client.fb_lock:
@@ -425,8 +470,7 @@ class VncConsole(Gtk.Box):
             return
         self.pending = True
         self.status_panel.show_message(
-            title, detail, icon="content-loading-symbolic",
-            can_reconnect=False)
+            title, detail, can_reconnect=False, busy=True)
         if self.area is not None:
             self.area.queue_draw()
 

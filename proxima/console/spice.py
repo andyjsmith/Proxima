@@ -722,8 +722,7 @@ class SpiceConsole(Gtk.Box):
             return
         self.pending = True
         self.status_panel.show_message(
-            title, detail, icon="content-loading-symbolic",
-            can_reconnect=False)
+            title, detail, can_reconnect=False, busy=True)
         if self._display is not None:
             self._display.queue_draw()
 

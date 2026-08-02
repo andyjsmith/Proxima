@@ -45,15 +45,41 @@ def keep_active(window):
     that: application CSS outranks the theme, so it took the disabled
     styling with it.
 
-    Unsetting re-emits the signal with the flag already gone, so the guard
-    below terminates it rather than looping.
-    """
-    def on_state_change(widget, _old_flags):
-        if widget.get_state_flags() & Gtk.StateFlags.BACKDROP:
-            widget.unset_state_flags(Gtk.StateFlags.BACKDROP)
+    **The clearing has to wait for an idle.** GTK emits state-flags-changed
+    on the toplevel *before* it has finished walking the children. Clearing
+    the flag from inside that handler starts a nested walk that does clear
+    them -- and then the outer walk resumes and puts BACKDROP back on every
+    child. The window then reads as active while everything inside it reads
+    as backdrop, permanently, because the window's own flag is already
+    right and nothing will disturb it again. That is worse than the
+    dimming: it looks like the entire interface is disabled.
 
-    window.connect("state-flags-changed", on_state_change)
-    on_state_change(window, 0)
+    Deferring means the flag is cleared once the propagation has finished,
+    where the unset propagates properly. The cost is that a window can be
+    drawn dimmed for one frame as it loses focus.
+    """
+    state = {"queued": False, "dead": False}
+
+    def clear():
+        state["queued"] = False
+        if state["dead"]:
+            return False
+        if window.get_state_flags() & Gtk.StateFlags.BACKDROP:
+            window.unset_state_flags(Gtk.StateFlags.BACKDROP)
+        return False
+
+    def schedule(*_args):
+        if state["queued"] or state["dead"]:
+            return
+        state["queued"] = True
+        GLib.idle_add(clear)
+
+    window.connect("state-flags-changed", schedule)
+    # Belt and braces: the flag arrives with the window deactivating, and
+    # this is the signal that says so in as many words.
+    window.connect("notify::is-active", schedule)
+    window.connect("destroy", lambda *_: state.update(dead=True))
+    schedule()
     return window
 
 

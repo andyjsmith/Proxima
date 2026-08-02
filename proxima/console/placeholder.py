@@ -62,8 +62,7 @@ class PlaceholderConsole(Gtk.Box):
     def show_pending_state(self, title, detail=""):
         self.pending = True
         self.status_panel.show_message(
-            title, detail, icon="content-loading-symbolic",
-            can_reconnect=False)
+            title, detail, can_reconnect=False, busy=True)
 
     def clear_pending_state(self):
         self.pending = False
@@ -74,7 +73,9 @@ class PlaceholderConsole(Gtk.Box):
             TITLES.get(status, f"Guest is {status}"),
             DETAILS.get(status, ""),
             icon=ICONS.get(status, "media-playback-stop-symbolic"),
-            can_reconnect=status not in NO_RECONNECT)
+            can_reconnect=status not in NO_RECONNECT,
+            # "Connecting..." is a wait; "stopped" is a result.
+            busy=status == "connecting")
 
     def show_choice_state(self, title, detail, actions,
                           icon="dialog-warning-symbolic"):

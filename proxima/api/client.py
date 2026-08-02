@@ -608,22 +608,36 @@ class ProxmoxAPI:
             if exc.status in (401, 403, 404, 501):
                 self.monitor_available = False
             raise
-        if isinstance(result, str):
-            return result
-        # Older builds wrap it; newer ones return the bare string.
         if isinstance(result, dict):
-            return str(result.get("data") or "")
-        return ""
+            # Older builds wrap it; newer ones return the bare string.
+            result = result.get("data")
+        if isinstance(result, str) and result.strip():
+            return result
+        # Not a refusal, but not an answer either. Raising keeps the caller
+        # from reading an empty or unexpected payload as a real result.
+        raise ProxmoxError(
+            f"the monitor returned nothing usable for {command!r} "
+            f"({type(result).__name__})")
 
     def spice_clients(self, node, vmid):
         """How many SPICE clients QEMU currently has on a VM.
 
         Returns (count, addresses). Raises ProxmoxError if the question
-        could not be asked at all -- which is not the same as zero, and the
-        caller has to keep the two apart or it will happily displace
-        somebody every time the monitor is unavailable.
+        could not be asked, or was answered with something unrecognisable --
+        neither of which is the same as zero, and the caller has to keep
+        them apart or it will happily displace somebody every time the
+        monitor is unavailable.
         """
-        return parse_spice_clients(self.qemu_monitor(node, vmid, "info spice"))
+        text = self.qemu_monitor(node, vmid, "info spice")
+        parsed = parse_spice_clients(text)
+        if parsed is None:
+            # Printed in full because the only way this gets fixed is by
+            # seeing what the server actually said.
+            print("[api] unrecognised 'info spice' output:")
+            for line in text.splitlines()[:20]:
+                print(f"[api]   {line}")
+            raise ProxmoxError("could not read the monitor's SPICE report")
+        return parsed
 
     def vnc_ticket(self, node, vmid, kind="qemu"):
         """A websocket-capable VNC proxy session.
