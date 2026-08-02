@@ -15,9 +15,16 @@ titlebar is then drawn by GTK with the application's own theme, in the same
 colours, and follows light/dark automatically.
 
 The header bar carries the window title, the connection summary as its
-subtitle, and two buttons (Refresh, Preferences). Nothing was moved off the
-toolbar or the status bar. That is deliberate: a header bar that also
-rearranged the rest of the chrome would be much harder to take back out
+subtitle, the **menu bar** (File / VM / View / Help), and two buttons
+(Refresh, Preferences).
+
+The menus are *moved*, not duplicated: `MainWindow.__init__` packs the menu
+bar into the root box only when there is no header bar. Two menu bars would
+be two sources of truth for what is enabled, and reclaiming the row the menu
+bar used to occupy is most of the point of the feature.
+
+Nothing was moved off the toolbar or the status bar. That is deliberate: a
+header bar that also rearranged those would be much harder to take back out
 again, and the layout is the part most likely to be judged on taste.
 
 ## Why it needs a restart
@@ -25,7 +32,17 @@ again, and the layout is the part most likely to be judged on taste.
 GTK decides between client-side and server-side decorations when a window is
 created and does not revisit it. Calling `set_titlebar()` on a window that is
 already on screen leaves it in a mixed state. The setting is therefore read
-once, in `MainWindow.__init__`, before anything else is built.
+once, in `MainWindow.__init__`, before anything else is packed. The menu bar
+is built just before that point, because the header bar needs it.
+
+## Why the decoration layout is stated explicitly
+
+`bar.set_decoration_layout(":minimize,maximize,close")` is not decoration.
+The layout otherwise comes from the `gtk-decoration-layout` setting, which on
+Windows is frequently unset -- and an unset layout is how the first attempt
+at this ended up with a titlebar carrying no close button at all. Stating it
+means the window controls do not depend on a system setting that may not be
+there.
 
 ## Known trade-offs on Windows
 
@@ -45,7 +62,8 @@ once, in `MainWindow.__init__`, before anything else is built.
 | --- | --- |
 | `proxima/config.py` | `"use_header_bar": False` in `DEFAULTS`, with its comment |
 | `proxima/ui/main_window.py` | `MainWindow._build_header_bar()` — the whole method |
-| `proxima/ui/main_window.py` | In `__init__`, the `self.header_bar = None` / `if config.get("use_header_bar")` block, placed before `root` is built |
+| `proxima/ui/main_window.py` | In `__init__`, the `self.header_bar = None` / `if … else: root.pack_start(self.menubar, …)` block, and building `self.menubar` before it |
+| `proxima/theme/css.py` | The `headerbar menubar` rules in `COMPACT_CSS` |
 | `proxima/ui/main_window.py` | In `_update_connection_label()`, the `if self.header_bar is not None:` block that sets the subtitle |
 | `proxima/ui/main_window.py` | In `open_settings()`, the `elif` branch reporting "Restart required to change the titlebar" |
 | `proxima/ui/settings_dialog.py` | The `_check(...)` for `"use_header_bar"` in `_appearance_page()`, and the row index of the "Installed GTK themes" note (3 with it, 2 without) |
@@ -55,9 +73,22 @@ once, in `MainWindow.__init__`, before anything else is built.
 ## To remove it
 
 1. Delete each row in the table above.
-2. Change the themes note in `_appearance_page()` back to `grid.attach(note, 0, 2, 2, 1)`.
-3. `grep -rn "use_header_bar\|header_bar" proxima/ tools/` should come back
+2. In `__init__`, go back to packing the menu bar unconditionally:
+   `root.pack_start(self.menubar, False, False, 0)` with no `if`. This is the
+   only step that changes behaviour rather than just deleting code — with the
+   feature gone the menus have nowhere else to live.
+3. Change the themes note in `_appearance_page()` back to `grid.attach(note, 0, 2, 2, 1)`.
+4. `grep -rn "use_header_bar\|header_bar" proxima/ tools/` should come back
    empty.
 
 Nothing else references the setting, and no other code branches on it, so
 there is no behaviour to unpick beyond that.
+
+## A trap worth remembering
+
+A `Gtk.MenuItem` that is **both sensitive and carrying a tooltip** segfaults
+this GTK build when the window is first mapped. It is unrelated to the header
+bar, but it was found while working on it and it cost a long debugging
+session: the crash happens with server-side decorations and *not* with a
+header bar, which makes it look like a header bar problem. Menu items here
+either stay insensitive until used or carry no tooltip.

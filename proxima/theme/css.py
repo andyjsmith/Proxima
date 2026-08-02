@@ -20,6 +20,17 @@ notebook > header > tabs > tab        { min-height: 0; padding: 4px 12px; }
 headerbar         { min-height: 34px; padding: 0 4px; }
 headerbar button  { min-height: 24px; }
 
+/* With the in-application titlebar on, the menu bar lives inside it. A
+   GtkMenuBar brings its own background and border, which in a header bar
+   reads as a strip pasted across the frame; these strip that back so the
+   menus sit on the titlebar itself. Item padding is restated because the
+   menu bar is now the tallest thing up there. */
+headerbar menubar            { background: none; border: none; padding: 0; }
+headerbar menubar > menuitem { padding: 4px 9px; border-radius: 4px; }
+headerbar menubar > menuitem:hover {
+    background-color: alpha(currentColor, 0.12);
+}
+
 toolbar           { padding: 2px; }
 statusbar         { min-height: 0; padding: 0; }
 menuitem          { min-height: 0; padding: 3px 8px; }

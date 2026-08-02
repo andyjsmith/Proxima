@@ -3136,6 +3136,43 @@ def main():
             failures.append("the header bar shows no connection summary")
         else:
             print(f"[smoke] in-application titlebar builds: {subtitle!r}")
+
+        # The menus move into the titlebar; they must be there exactly once,
+        # and must not also be left in the window body.
+        def descends_from(widget, ancestor):
+            while widget is not None:
+                if widget is ancestor:
+                    return True
+                widget = widget.get_parent()
+            return False
+
+        menubar = header_window.menubar
+        if not descends_from(menubar, header_window.header_bar):
+            failures.append("the menu bar did not move into the titlebar")
+        elif descends_from(menubar, header_window.get_child()):
+            failures.append("the menu bar is in the titlebar AND the window")
+        else:
+            labels = [c.get_label() for c in menubar.get_children()]
+            print(f"[smoke] menus live in the titlebar: {', '.join(labels)}")
+
+        # ...and the window controls have to survive sharing the bar with
+        # them. An unset decoration layout is how they vanished before.
+        if not header_window.header_bar.get_show_close_button():
+            failures.append("the titlebar has no window controls")
+        elif "close" not in (
+                header_window.header_bar.get_decoration_layout() or ""):
+            failures.append(
+                "the titlebar's decoration layout has no close button: "
+                f"{header_window.header_bar.get_decoration_layout()!r}")
+        else:
+            print("[smoke] the titlebar keeps its window controls")
+
+    # With the header bar off, the menus stay in the window body.
+    if descends_from(window.menubar, window.get_child()) is False:
+        failures.append("without a header bar the menu bar left the window")
+    else:
+        print("[smoke] without a header bar the menus stay where they were")
+
     header_window.shutdown()
     header_window.destroy()
     pump(0.3)

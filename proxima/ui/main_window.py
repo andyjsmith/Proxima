@@ -172,20 +172,22 @@ class MainWindow(Gtk.Window):
         # terminal, must not grey the whole application out.
         theme_keep_active(self)
 
-        # Before anything else is built: GTK decides between its own
-        # titlebar and the window manager's when the window is created, and
-        # will not change its mind later.
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.add(root)
+
+        # The menu bar is built first either way, because with a header bar
+        # it goes inside it. GTK decides between its own titlebar and the
+        # window manager's when the window is created and will not change
+        # its mind later, so that has to be settled here rather than later.
+        self.menubar = self._build_menubar()
+        self.toolbar = self._build_toolbar()
+
         self.header_bar = None
         if config.get("use_header_bar"):
             self.header_bar = self._build_header_bar()
             self.set_titlebar(self.header_bar)
-
-        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.add(root)
-
-        self.menubar = self._build_menubar()
-        self.toolbar = self._build_toolbar()
-        root.pack_start(self.menubar, False, False, 0)
+        else:
+            root.pack_start(self.menubar, False, False, 0)
         root.pack_start(self.toolbar, False, False, 0)
 
         self.paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
@@ -306,16 +308,24 @@ class MainWindow(Gtk.Window):
     def _build_header_bar(self):
         """A GTK-drawn titlebar, so the frame is themed like the rest.
 
-        Deliberately thin. It carries the window title, what the status bar
-        would otherwise spend space saying about the connection, and one
-        button -- everything else stays exactly where it is on the toolbar.
-        A header bar that also rearranged the toolbar would be far harder to
-        take back out, and taking it back out is an explicitly supported
-        outcome here. See docs/header-bar.md.
+        The menus move into it rather than being duplicated there: two menu
+        bars would be two sources of truth for what is enabled, and the row
+        the menu bar used to occupy is the height this was meant to save.
+        Everything else stays exactly where it is on the toolbar -- a header
+        bar that also rearranged the toolbar would be much harder to take
+        back out, and taking it back out is an explicitly supported outcome
+        here. See docs/header-bar.md.
         """
         bar = Gtk.HeaderBar()
         bar.set_show_close_button(True)
+        # Stated rather than inherited. The layout comes from
+        # gtk-decoration-layout, which on Windows is frequently unset --
+        # and an unset layout is how a header bar ends up with no close
+        # button at all, which is exactly what happened the first time.
+        bar.set_decoration_layout(":minimize,maximize,close")
         bar.set_title(APP_NAME)
+
+        bar.pack_start(self.menubar)
 
         refresh = Gtk.Button.new_from_icon_name("view-refresh-symbolic",
                                                 Gtk.IconSize.MENU)
