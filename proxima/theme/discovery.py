@@ -37,8 +37,7 @@ def theme_roots():
         candidates.append(Path(os.environ["XDG_DATA_HOME"]) / "themes")
 
     if os.environ.get("MSYSTEM_PREFIX"):
-        candidates.append(
-            Path(os.environ["MSYSTEM_PREFIX"]) / "share" / "themes")
+        candidates.append(Path(os.environ["MSYSTEM_PREFIX"]) / "share" / "themes")
 
     candidates += [
         Path(sys.prefix) / "share" / "themes",
@@ -91,7 +90,7 @@ def installed_themes():
     for root in theme_roots():
         if root.is_dir():
             names |= _theme_names_in(root)
-    names.add("Adwaita")     # compiled into GTK, has no directory
+    names.add("Adwaita")  # compiled into GTK, has no directory
     return sorted(names)
 
 
@@ -110,16 +109,14 @@ def _pick_variant(names, family, dark):
 
     def score(name):
         lowered = name.lower()
-        suffix = lowered[len(family_lower):]
+        suffix = lowered[len(family_lower) :]
         points = 0
         is_dark = "dark" in suffix
         is_light = "light" in suffix
-        if dark and is_dark:
-            points += 100
-        elif not dark and (is_light or not is_dark):
+        if dark and is_dark or not dark and (is_light or not is_dark):
             points += 100
         elif dark and not is_dark:
-            points += 10        # usable via prefer-dark-theme
+            points += 10  # usable via prefer-dark-theme
         if "compact" in suffix:
             points += 20
         # Prefer the plainest name at equal footing.
@@ -151,8 +148,13 @@ def resolve_theme(preferred, dark, names=None):
 def diagnose():
     """Print exactly where we looked and what we found."""
     print("\n--- theme discovery ---")
-    for var in ("HOME", "USERPROFILE", "XDG_DATA_HOME", "MSYSTEM_PREFIX",
-                "GTK_THEME_DIR"):
+    for var in (
+        "HOME",
+        "USERPROFILE",
+        "XDG_DATA_HOME",
+        "MSYSTEM_PREFIX",
+        "GTK_THEME_DIR",
+    ):
         print(f"  {var:<16} = {os.environ.get(var, '(unset)')}")
     print(f"  {'Path.home()':<16} = {Path.home()}")
     print(f"  {'sys.prefix':<16} = {sys.prefix}")

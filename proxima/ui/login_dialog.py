@@ -9,12 +9,12 @@ import threading
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib  # noqa: E402
+from gi.repository import GLib, Gtk
 
-from ..api import ProxmoxError, AuthError, TwoFactorRequired
+from .. import secrets
+from ..api import AuthError, ProxmoxError, TwoFactorRequired
 from ..api.connection import Connection, split_host
 from ..theme import decorate as theme_decorate
-from .. import secrets
 
 REALMS = [
     ("pam", "pam (Linux PAM)"),
@@ -26,8 +26,9 @@ class LoginDialog(Gtk.Dialog):
     """Collects a host and credentials and returns a connected ProxmoxAPI."""
 
     def __init__(self, parent, config):
-        super().__init__(title="Connect to Proxmox VE", transient_for=parent,
-                         modal=True)
+        super().__init__(
+            title="Connect to Proxmox VE", transient_for=parent, modal=True
+        )
         self.config = config
         self.connection = None
         self.api = None
@@ -46,10 +47,14 @@ class LoginDialog(Gtk.Dialog):
         grid = Gtk.Grid(row_spacing=6, column_spacing=10)
         content.pack_start(grid, False, False, 0)
 
-        self.host_entry = self._row(grid, 0, "Server", config.get("host", ""),
-                                    placeholder="pve.example.com  or  10.0.0.5:8006")
-        self.user_entry = self._row(grid, 1, "Username",
-                                    config.get("username", "root"))
+        self.host_entry = self._row(
+            grid,
+            0,
+            "Server",
+            config.get("host", ""),
+            placeholder="pve.example.com  or  10.0.0.5:8006",
+        )
+        self.user_entry = self._row(grid, 1, "Username", config.get("username", "root"))
 
         grid.attach(self._label("Realm"), 0, 2, 1, 1)
         self.realm_combo = Gtk.ComboBoxText()
@@ -59,8 +64,9 @@ class LoginDialog(Gtk.Dialog):
         grid.attach(self.realm_combo, 1, 2, 1, 1)
 
         grid.attach(self._label("Password"), 0, 3, 1, 1)
-        self.password_entry = Gtk.Entry(visibility=False,
-                                        input_purpose=Gtk.InputPurpose.PASSWORD)
+        self.password_entry = Gtk.Entry(
+            visibility=False, input_purpose=Gtk.InputPurpose.PASSWORD
+        )
         self.password_entry.set_activates_default(True)
         self.password_entry.set_hexpand(True)
         grid.attach(self.password_entry, 1, 3, 1, 1)
@@ -73,16 +79,20 @@ class LoginDialog(Gtk.Dialog):
         self.verify_check = Gtk.CheckButton(label="Verify TLS certificate")
         self.verify_check.set_active(bool(config.get("verify_ssl", False)))
         self.verify_check.set_tooltip_text(
-            "Off by default: Proxmox uses a self-signed certificate")
+            "Off by default: Proxmox uses a self-signed certificate"
+        )
         content.pack_start(self.verify_check, False, False, 0)
 
         self.save_check = Gtk.CheckButton(label="Save connection")
         self.save_check.set_active(True)
         self.save_check.set_tooltip_text(
             "Reconnect on startup. The password is stored "
-            + ("encrypted for your Windows account."
-               if secrets.is_secure()
-               else "obfuscated, not encrypted, in the settings file."))
+            + (
+                "encrypted for your Windows account."
+                if secrets.is_secure()
+                else "obfuscated, not encrypted, in the settings file."
+            )
+        )
         content.pack_start(self.save_check, False, False, 0)
 
         self.spinner = Gtk.Spinner()
@@ -122,8 +132,14 @@ class LoginDialog(Gtk.Dialog):
     def _set_busy(self, busy, text=""):
         self._busy = busy
         self.connect_button.set_sensitive(not busy)
-        for widget in (self.host_entry, self.user_entry, self.password_entry,
-                       self.otp_entry, self.realm_combo, self.verify_check):
+        for widget in (
+            self.host_entry,
+            self.user_entry,
+            self.password_entry,
+            self.otp_entry,
+            self.realm_combo,
+            self.verify_check,
+        ):
             widget.set_sensitive(not busy)
         self.save_check.set_sensitive(not busy)
         self.spinner.set_visible(busy)
@@ -139,8 +155,7 @@ class LoginDialog(Gtk.Dialog):
             return
         escaped = GLib.markup_escape_text(text)
         if error:
-            self.message.set_markup(
-                f"<span foreground='#e01b24'>{escaped}</span>")
+            self.message.set_markup(f"<span foreground='#e01b24'>{escaped}</span>")
         else:
             self.message.set_markup(f"<span alpha='70%'>{escaped}</span>")
 
@@ -173,14 +188,18 @@ class LoginDialog(Gtk.Dialog):
         self._set_busy(True, f"Connecting to {host}...")
 
         def worker():
-            connection = Connection(host, port=port, username=username,
-                                    realm=realm, verify_ssl=verify,
-                                    save=self.save_check.get_active())
+            connection = Connection(
+                host,
+                port=port,
+                username=username,
+                realm=realm,
+                verify_ssl=verify,
+                save=self.save_check.get_active(),
+            )
             try:
                 connection.connect(password=password, otp=otp or None)
             except TwoFactorRequired as need:
-                GLib.idle_add(self._need_tfa, connection, username, realm,
-                              need)
+                GLib.idle_add(self._need_tfa, connection, username, realm, need)
                 return
             except (AuthError, ProxmoxError) as exc:
                 GLib.idle_add(self._failed, str(exc))
@@ -190,8 +209,7 @@ class LoginDialog(Gtk.Dialog):
                 return
             GLib.idle_add(self._succeeded, connection)
 
-        threading.Thread(target=worker, daemon=True,
-                         name="proxmox-login").start()
+        threading.Thread(target=worker, daemon=True, name="proxmox-login").start()
 
     def _need_tfa(self, connection, username, realm, need):
         self._set_busy(False)
@@ -208,16 +226,16 @@ class LoginDialog(Gtk.Dialog):
 
         def worker():
             try:
-                connection.api.login_tfa(username, need.partial_ticket, otp,
-                                         realm=realm)
+                connection.api.login_tfa(
+                    username, need.partial_ticket, otp, realm=realm
+                )
             except (AuthError, ProxmoxError) as exc:
                 GLib.idle_add(self._failed, str(exc))
                 return
             connection.state = "connected"
             GLib.idle_add(self._succeeded, connection)
 
-        threading.Thread(target=worker, daemon=True,
-                         name="proxmox-login-tfa").start()
+        threading.Thread(target=worker, daemon=True, name="proxmox-login-tfa").start()
         return False
 
     def _failed(self, message):
@@ -250,8 +268,11 @@ def run_login(parent, config):
         if response == Gtk.ResponseType.APPLY:
             result = dialog.connection
             break
-        if response in (Gtk.ResponseType.CANCEL, Gtk.ResponseType.DELETE_EVENT,
-                        Gtk.ResponseType.NONE):
+        if response in (
+            Gtk.ResponseType.CANCEL,
+            Gtk.ResponseType.DELETE_EVENT,
+            Gtk.ResponseType.NONE,
+        ):
             break
     dialog.destroy()
     return result

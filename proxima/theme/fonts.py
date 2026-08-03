@@ -20,11 +20,11 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("PangoCairo", "1.0")
-from gi.repository import Gtk, PangoCairo  # noqa: E402
+from gi.repository import Gtk, PangoCairo
 
 try:
     import cairo
-except ImportError:                        # pragma: no cover
+except ImportError:  # pragma: no cover
     cairo = None
 
 
@@ -52,7 +52,7 @@ FONT_BACKEND_CHOICES = [
 
 # Fonts worth offering for a dense professional UI.
 FONT_CHOICES = [
-    "",                     # leave the theme's choice alone
+    "",  # leave the theme's choice alone
     "Segoe UI 9",
     "Segoe UI 10",
     "Inter 10",
@@ -101,8 +101,7 @@ def font_backend():
     except (TypeError, ValueError):
         return (str(font_type), True)
 
-    names = {0: "toy", 1: "freetype", 2: "win32",
-             3: "quartz", 4: "user", 5: "dwrite"}
+    names = {0: "toy", 1: "freetype", 2: "win32", 3: "quartz", 4: "user", 5: "dwrite"}
     name = names.get(value, f"type-{value}")
     # Only the FreeType backend implements cairo hint styles. GDI, DirectWrite
     # and Quartz all do their own hinting and ignore the requested style.
@@ -126,8 +125,7 @@ def apply_font_options(screen, config, root_widget=None):
 
     # 1. GtkSettings first. Correct on Linux, ignored on Windows.
     settings.set_property("gtk-xft-antialias", 0 if antialias == "none" else 1)
-    settings.set_property("gtk-xft-rgba",
-                          "rgb" if antialias == "subpixel" else "none")
+    settings.set_property("gtk-xft-rgba", "rgb" if antialias == "subpixel" else "none")
     settings.set_property("gtk-xft-hinting", 0 if hint_style == "none" else 1)
     settings.set_property("gtk-xft-hintstyle", f"hint{hint_style}")
 
@@ -139,9 +137,9 @@ def apply_font_options(screen, config, root_widget=None):
     options = cairo.FontOptions()
     options.set_antialias(_cairo_antialias(antialias))
     options.set_hint_style(_cairo_hint_style(hint_style))
-    options.set_hint_metrics(cairo.HINT_METRICS_ON
-                             if config.get("hint_metrics")
-                             else cairo.HINT_METRICS_OFF)
+    options.set_hint_metrics(
+        cairo.HINT_METRICS_ON if config.get("hint_metrics") else cairo.HINT_METRICS_OFF
+    )
     options.set_subpixel_order(cairo.SUBPIXEL_ORDER_RGB)
     screen.set_font_options(options)
 

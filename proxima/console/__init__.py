@@ -1,4 +1,6 @@
-from .spice import SpiceConsole, AVAILABLE as SPICE_AVAILABLE
-from .vnc import VncConsole, AVAILABLE as VNC_AVAILABLE
+from .spice import AVAILABLE as SPICE_AVAILABLE
+from .spice import SpiceConsole
+from .vnc import AVAILABLE as VNC_AVAILABLE
+from .vnc import VncConsole
 
-__all__ = ["SpiceConsole", "VncConsole", "SPICE_AVAILABLE", "VNC_AVAILABLE"]
+__all__ = ["SPICE_AVAILABLE", "VNC_AVAILABLE", "SpiceConsole", "VncConsole"]

@@ -24,21 +24,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
-from proxima.api import notes as notes_mod  # noqa: E402
+from gi.repository import Gdk, Gtk
+
+from proxima.api import notes as notes_mod
 from proxima.api.connection import (
     CONNECTED,
     Connection,
-    ConnectionManager,  # noqa: E402
 )
-from proxima.api.models import Guest, vga_is_spice  # noqa: E402
-from proxima.config import Config  # noqa: E402
-from proxima.theme import apply as apply_theme  # noqa: E402
-from proxima.ui.clone import CloneDialog  # noqa: E402
-from proxima.ui.login_dialog import LoginDialog  # noqa: E402
-from proxima.ui.main_window import MainWindow  # noqa: E402
-from proxima.ui.settings_dialog import SettingsDialog  # noqa: E402
-from proxima.ui.snapshots import SnapshotManager  # noqa: E402
+from proxima.api.models import Guest, vga_is_spice
+from proxima.config import Config
+from proxima.theme import apply as apply_theme
+from proxima.ui.clone import CloneDialog
+from proxima.ui.login_dialog import LoginDialog
+from proxima.ui.main_window import MainWindow
+from proxima.ui.settings_dialog import SettingsDialog
+from proxima.ui.snapshots import SnapshotManager
 
 SAMPLE = [
     {
@@ -164,7 +164,6 @@ class FakeAPI:
     def set_guest_notes(self, node, vmid, text, kind="qemu"):
         self.calls.append(("set-notes", vmid))
         self.NOTES[vmid] = text
-        return None
 
     # Display adapter per VM, covering each branch of the SPICE decision.
     VGA = {
@@ -183,28 +182,32 @@ class FakeAPI:
 
     def guest_config(self, node, vmid, kind="qemu"):
         self.calls.append(("config", vmid))
-        config = {"vga": self.VGA.get(vmid, "std"), "agent": "1",
-                  "cores": 2, "sockets": 1, "memory": 2048,
-                  "net0": "virtio=BC:24:11:00:00:01,bridge=vmbr0,"
-                          "firewall=1,rate=10",
-                  "digest": f"digest-{vmid}"}
+        config = {
+            "vga": self.VGA.get(vmid, "std"),
+            "agent": "1",
+            "cores": 2,
+            "sockets": 1,
+            "memory": 2048,
+            "net0": "virtio=BC:24:11:00:00:01,bridge=vmbr0,firewall=1,rate=10",
+            "digest": f"digest-{vmid}",
+        }
         config.update(self.HARDWARE.get(vmid, {}))
         if vmid in self.PROTECTED:
             config["protection"] = 1
         return config
 
-    def set_guest_config(self, node, vmid, changes=None, delete=None,
-                         kind="qemu", digest=None):
-        self.calls.append(("set-config", vmid, dict(changes or {}),
-                           tuple(delete or ()), digest))
+    def set_guest_config(
+        self, node, vmid, changes=None, delete=None, kind="qemu", digest=None
+    ):
+        self.calls.append(
+            ("set-config", vmid, dict(changes or {}), tuple(delete or ()), digest)
+        )
         stored = dict(self.HARDWARE.get(vmid, {}))
         stored.update(changes or {})
         for key in delete or ():
             stored.pop(key, None)
-            stored[key] = None          # remembers that it was deleted
-        self.HARDWARE[vmid] = {k: v for k, v in stored.items()
-                               if v is not None}
-        return None
+            stored[key] = None  # remembers that it was deleted
+        self.HARDWARE[vmid] = {k: v for k, v in stored.items() if v is not None}
 
     def node_bridges(self, node):
         self.calls.append(("bridges", node))
@@ -236,14 +239,15 @@ class FakeAPI:
         self.calls.append(("monitor", vmid, command))
         if not self.monitor_available:
             self.monitor_available = False
-            raise ProxmoxError("Permission check failed (VM.Monitor)",
-                               status=403)
+            raise ProxmoxError("Permission check failed (VM.Monitor)", status=403)
         count = self.SPICE_CLIENTS.get(vmid, 0)
         if count is None:
             raise ProxmoxError("VM is not running", status=500)
-        header = ("Server:\n     address: 127.0.0.1:61000 [tls]\n"
-                  "    migrated: false\n        auth: spice\n"
-                  "    compiled: 0.15.2\n  mouse-mode: client\n")
+        header = (
+            "Server:\n     address: 127.0.0.1:61000 [tls]\n"
+            "    migrated: false\n        auth: spice\n"
+            "    compiled: 0.15.2\n  mouse-mode: client\n"
+        )
         if not count:
             return header + "Channels: none"
         # The shape a real Proxmox host returns, captured from a live
@@ -256,10 +260,12 @@ class FakeAPI:
         for client in range(count):
             for index, name in enumerate(names):
                 port = 42220 + client * 100 + index
-                blocks += (f"Channel:\n     address: 127.0.0.1:{port} [tls]\n"
-                           f"     session: {1938609120 + client}\n"
-                           f"     channel: {index + 1}:0\n"
-                           f"     channel name: {name}\n")
+                blocks += (
+                    f"Channel:\n     address: 127.0.0.1:{port} [tls]\n"
+                    f"     session: {1938609120 + client}\n"
+                    f"     channel: {index + 1}:0\n"
+                    f"     channel name: {name}\n"
+                )
         return header + blocks
 
     def spice_clients(self, node, vmid):
@@ -376,11 +382,11 @@ class FakeAPI:
             # ...and it takes a couple of polls to get there, which is the
             # gap the tree has to cover without flicking back and forth.
             FakeAPI._deferred_rename = (vmid, name, 2)
-            return None
+            return
         for row in SAMPLE:
             if row["vmid"] == vmid:
                 row["name"] = name
-        return None
+        return
 
     def next_vmid(self):
         return 903
@@ -464,7 +470,6 @@ def wait_for_guests(window, seconds=10):
 
 def build_window(api, config):
     """A MainWindow with one fake connection already attached."""
-    from proxima.ui.main_window import MainWindow
 
     window = MainWindow(config)
     connection = window.connections.add(make_connection(api))
@@ -2178,8 +2183,9 @@ def main():
 
     window._toggle_clipboard()
     pump(0.3)
-    if (window.vdagent_icon.struck
-            or not getattr(live_console(), "share_clipboard", False)):
+    if window.vdagent_icon.struck or not getattr(
+        live_console(), "share_clipboard", False
+    ):
         failures.append("clipboard did not toggle back on")
     else:
         print("[smoke] clipboard toggles back on")
@@ -2415,7 +2421,7 @@ def main():
     # A change that has been asked for spins until the cluster confirms it.
     # The one unacceptable outcome is a row that spins for ever, so every
     # way out is checked.
-    busy_key = f"{CONN_ID}/pve-node-01/qemu/102"      # stopped
+    busy_key = f"{CONN_ID}/pve-node-01/qemu/102"  # stopped
     busy_guest = window.sidebar.guests[busy_key]
 
     def busy_names():
@@ -2451,8 +2457,15 @@ def main():
 
     # Renaming to the name it already has must not start a wait that
     # nothing could ever finish.
-    window._mark_busy(busy_key, "name", "renamed-vm", "renamed-vm",
-                      "Renaming...", 30, name="renamed-vm")
+    window._mark_busy(
+        busy_key,
+        "name",
+        "renamed-vm",
+        "renamed-vm",
+        "Renaming...",
+        30,
+        name="renamed-vm",
+    )
     if busy_key in window._busy:
         failures.append("renaming to the current name started a spinner")
     else:
@@ -2460,8 +2473,15 @@ def main():
 
     # A change that never arrives -- undone in the web UI before we saw it,
     # or a task that failed silently -- gives up on its deadline.
-    window._mark_busy(busy_key, "name", "renamed-vm", "never-lands",
-                      "Renaming...", 0.4, name="never-lands")
+    window._mark_busy(
+        busy_key,
+        "name",
+        "renamed-vm",
+        "never-lands",
+        "Renaming...",
+        0.4,
+        name="never-lands",
+    )
     if busy_key not in window._busy:
         failures.append("a pending rename did not register")
     deadline = time.time() + 8
@@ -2474,11 +2494,10 @@ def main():
 
     # Somebody else moving the guest resolves it too, even though the value
     # is not the one we asked for.
-    window._mark_busy(busy_key, "status", "stopped", "paused",
-                      "Suspending...", 30)
+    window._mark_busy(busy_key, "status", "stopped", "paused", "Suspending...", 30)
     for row in SAMPLE:
         if row["vmid"] == 102:
-            row["status"] = "running"       # not what we asked for
+            row["status"] = "running"  # not what we asked for
     try:
         deadline = time.time() + 8
         while time.time() < deadline and busy_key in window._busy:
@@ -2497,13 +2516,11 @@ def main():
     # A failed action clears its own spinner rather than waiting it out.
     # _action_failed also raises an error dialog, which would sit there
     # modal with nobody to dismiss it, so it is stubbed for this check.
-    window._mark_busy(busy_key, "status", "stopped", "running", "Starting...",
-                      30)
+    window._mark_busy(busy_key, "status", "stopped", "running", "Starting...", 30)
     real_error_dialog = window._error_dialog
     window._error_dialog = lambda *a, **k: None
     try:
-        window._action_failed(action_defs.ACTIONS_BY_NAME["start"], busy_guest,
-                              "nope")
+        window._action_failed(action_defs.ACTIONS_BY_NAME["start"], busy_guest, "nope")
     finally:
         window._error_dialog = real_error_dialog
     if busy_key in window._busy:
@@ -2560,7 +2577,8 @@ def main():
         "     address: 127.0.0.1:42232 [tls]\n"
         "     session: 1938609120\n"
         "     channel: 4:0\n"
-        "     channel name: cursor\n")
+        "     channel name: cursor\n"
+    )
     REAL_IDLE = (
         "Server:\n"
         "     address: 127.0.0.1:61002 [tls]\n"
@@ -2568,14 +2586,14 @@ def main():
         "        auth: spice\n"
         "    compiled: 0.15.2\n"
         "  mouse-mode: client\n"
-        "Channels: none")
+        "Channels: none"
+    )
 
     for label, text, expected in (
-            ("one viewer, four channels", REAL_BUSY, (1, 4)),
-            ("idle server", REAL_IDLE, (0, 0)),
-            # Two viewers differ only by their session number.
-            ("two viewers", REAL_BUSY + REAL_BUSY.replace(
-                "1938609120", "999999"), (2, 8)),
+        ("one viewer, four channels", REAL_BUSY, (1, 4)),
+        ("idle server", REAL_IDLE, (0, 0)),
+        # Two viewers differ only by their session number.
+        ("two viewers", REAL_BUSY + REAL_BUSY.replace("1938609120", "999999"), (2, 8)),
     ):
         parsed = _parse(text)
         if parsed is None:
@@ -2584,21 +2602,23 @@ def main():
             failures.append(
                 f"real 'info spice' ({label}) parsed as {parsed[0]} "
                 f"client(s) from {len(parsed[1])} channel(s), expected "
-                f"{expected[0]} from {expected[1]}")
+                f"{expected[0]} from {expected[1]}"
+            )
         else:
-            print(f"[smoke] real 'info spice' {label} -> "
-                  f"{parsed[0]} client(s)")
+            print(f"[smoke] real 'info spice' {label} -> {parsed[0]} client(s)")
 
     if any(a.endswith("[tls]") for a in (_parse(REAL_BUSY) or (0, []))[1]):
         failures.append("the [tls] flag was kept as part of an address")
 
     # And the safety property, on the shapes that are not output at all.
-    for label, text in (("empty", ""), ("junk", "who knows"),
-                        ("an error message", "Permission denied")):
+    for label, text in (
+        ("empty", ""),
+        ("junk", "who knows"),
+        ("an error message", "Permission denied"),
+    ):
         if _parse(text) is not None:
             failures.append(f"{label} was read as an answer, not as unknown")
-    else:
-        print("[smoke] unrecognised replies mean 'cannot tell', never 'empty'")
+    print("[smoke] unrecognised replies mean 'cannot tell', never 'empty'")
 
     # -- another client on the SPICE console -----------------------------
     # Nobody may be thrown off a console by accident, and "the monitor
@@ -2619,12 +2639,10 @@ def main():
         failures.append(f"an occupied console was not detected: {occupancy}")
     elif window._plan_console(occupied_guest)["protocol"] != "occupied":
         failures.append("planning ignored the other client")
-    elif window._plan_console(occupied_guest,
-                              takeover=True)["protocol"] != "spice":
+    elif window._plan_console(occupied_guest, takeover=True)["protocol"] != "spice":
         failures.append("take over did not skip the occupancy check")
     else:
-        print("[smoke] another client on the console is detected and "
-              "overridable")
+        print("[smoke] another client on the console is detected and overridable")
 
     # Our own session must not count as somebody else, or every reconnect
     # would stop to ask.
@@ -2704,7 +2722,8 @@ def main():
     if getattr(held, "last_status", "") != "choice":
         failures.append(
             f"an automatic open did not put the choice on the tab "
-            f"(tab shows {getattr(held, 'last_status', None)!r})")
+            f"(tab shows {getattr(held, 'last_status', None)!r})"
+        )
     elif len(held.status_panel._extra) != 2:
         failures.append("the occupied tab does not offer both ways out")
     elif held.status_panel.reconnect_button.get_visible():
@@ -2763,7 +2782,7 @@ def main():
 
     window.tasks_tool_item.set_active(True)
     pump(0.4)
-    window.task_feed.close()          # the pane's own X
+    window.task_feed.close()  # the pane's own X
     pump(0.3)
     if window.tasks_tool_item.get_active():
         failures.append("closing the pane left its toolbar button pressed in")
@@ -2785,12 +2804,13 @@ def main():
         # Unset rather than refused later: with no drag source the tree
         # cannot start a drag at all, which is the point of the switch.
         targets = window.sidebar.view.drag_dest_get_target_list()
-        if targets is not None and targets.find(
-                Gdk.Atom.intern("proxima/guest", False))[0]:
+        if (
+            targets is not None
+            and targets.find(Gdk.Atom.intern("proxima/guest", False))[0]
+        ):
             failures.append("the tree still accepts guest drops with dnd off")
         else:
-            print("[smoke] drag and drop switch disarms the tree and strikes "
-                  "its icon")
+            print("[smoke] drag and drop switch disarms the tree and strikes its icon")
     window._toggle_dnd()
     pump(0.2)
     if not window.sidebar.dnd_enabled or window.dnd_icon.struck:
@@ -2808,8 +2828,11 @@ def main():
     entry = None
     menu = Gtk.Menu()
     window.sidebar._build_single_menu(menu, settings_guest)
-    labels = [c.get_label() for c in menu.get_children()
-              if isinstance(c, Gtk.MenuItem) and c.get_label()]
+    labels = [
+        c.get_label()
+        for c in menu.get_children()
+        if isinstance(c, Gtk.MenuItem) and c.get_label()
+    ]
     if not labels or labels[-1] != "Settings":
         failures.append(f"Settings is not the last context menu entry: {labels}")
     else:
@@ -2826,12 +2849,17 @@ def main():
     if not opened:
         failures.append("Settings never opened for a guest with no config read")
     else:
-        dialog = VMSettingsDialog(window, api, settings_guest,
-                                  on_saved=lambda s: window._guest_settings_saved(
-                                      settings_key, s))
+        dialog = VMSettingsDialog(
+            window,
+            api,
+            settings_guest,
+            on_saved=lambda s: window._guest_settings_saved(settings_key, s),
+        )
         pump(0.3)
-        tabs = [dialog.get_content_area().get_children()[0].get_tab_label_text(c)
-                for c in dialog.get_content_area().get_children()[0].get_children()]
+        tabs = [
+            dialog.get_content_area().get_children()[0].get_tab_label_text(c)
+            for c in dialog.get_content_area().get_children()[0].get_children()
+        ]
         if tabs != ["Hardware", "Options", "Proxmox Manager"]:
             failures.append(f"settings tabs are {tabs}")
         elif dialog.apply_button.get_sensitive():
@@ -2978,8 +3006,9 @@ def main():
         elif any(gated.values()):
             failures.append("a stopped-only field was editable while running")
         else:
-            print(f"[smoke] {len(gated)} stopped-only fields disabled while "
-                  "the VM runs")
+            print(
+                f"[smoke] {len(gated)} stopped-only fields disabled while the VM runs"
+            )
     live.destroy()
     pump(0.3)
     FakeAPI.HARDWARE = {}
@@ -3048,11 +3077,11 @@ def main():
         # them. An unset decoration layout is how they vanished before.
         if not header_window.header_bar.get_show_close_button():
             failures.append("the titlebar has no window controls")
-        elif "close" not in (
-                header_window.header_bar.get_decoration_layout() or ""):
+        elif "close" not in (header_window.header_bar.get_decoration_layout() or ""):
             failures.append(
                 "the titlebar's decoration layout has no close button: "
-                f"{header_window.header_bar.get_decoration_layout()!r}")
+                f"{header_window.header_bar.get_decoration_layout()!r}"
+            )
         else:
             print("[smoke] the titlebar keeps its window controls")
 

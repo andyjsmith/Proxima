@@ -9,7 +9,7 @@ swapped for a real console as soon as the guest starts.
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gtk
 
 from .status_panel import ConsoleStatusPanel
 
@@ -45,8 +45,14 @@ class PlaceholderConsole(Gtk.Box):
     connected = False
     pending = False
 
-    supports = {"auto_resize": False, "scaling": False, "codec": False,
-                "compression": False, "refresh": False, "ctrl_alt_del": False}
+    supports = {
+        "auto_resize": False,
+        "scaling": False,
+        "codec": False,
+        "compression": False,
+        "refresh": False,
+        "ctrl_alt_del": False,
+    }
 
     def __init__(self, title="console", status="stopped", on_reconnect=None):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
@@ -54,15 +60,13 @@ class PlaceholderConsole(Gtk.Box):
         self.on_reconnect = on_reconnect or (lambda: None)
         self.last_status = ""
 
-        self.status_panel = ConsoleStatusPanel(
-            on_reconnect=lambda: self.on_reconnect())
+        self.status_panel = ConsoleStatusPanel(on_reconnect=lambda: self.on_reconnect())
         self.pack_start(self.status_panel, True, True, 0)
         self.show_guest_state(status)
 
     def show_pending_state(self, title, detail=""):
         self.pending = True
-        self.status_panel.show_message(
-            title, detail, can_reconnect=False, busy=True)
+        self.status_panel.show_message(title, detail, can_reconnect=False, busy=True)
 
     def clear_pending_state(self):
         self.pending = False
@@ -75,10 +79,10 @@ class PlaceholderConsole(Gtk.Box):
             icon=ICONS.get(status, "media-playback-stop-symbolic"),
             can_reconnect=status not in NO_RECONNECT,
             # "Connecting..." is a wait; "stopped" is a result.
-            busy=status == "connecting")
+            busy=status == "connecting",
+        )
 
-    def show_choice_state(self, title, detail, actions,
-                          icon="dialog-warning-symbolic"):
+    def show_choice_state(self, title, detail, actions, icon="dialog-warning-symbolic"):
         """Something needs a decision before this tab can become a console.
 
         Used when another client already holds the guest's SPICE session:
@@ -88,14 +92,18 @@ class PlaceholderConsole(Gtk.Box):
         """
         self.last_status = "choice"
         self.status_panel.show_message(
-            title, detail, icon=icon, can_reconnect=False, actions=actions)
+            title, detail, icon=icon, can_reconnect=False, actions=actions
+        )
 
     def show_error_state(self, message):
         """Opening failed. Say so in the tab and offer another go."""
         self.last_status = "error"
         self.status_panel.show_message(
-            "Could not open the console", message,
-            icon="dialog-error-symbolic", can_reconnect=True)
+            "Could not open the console",
+            message,
+            icon="dialog-error-symbolic",
+            can_reconnect=True,
+        )
 
     # -- the console interface, inert ----------------------------------
 

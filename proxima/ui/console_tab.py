@@ -7,7 +7,7 @@ no guest resize, clipboard sharing or audio.
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk  # noqa: E402
+from gi.repository import Gdk, Gtk
 
 
 class ConsoleTabLabel(Gtk.EventBox):
@@ -28,11 +28,11 @@ class ConsoleTabLabel(Gtk.EventBox):
         # The same icon either way. A warning triangle on every VNC tab
         # overstates it -- VNC is a working console, just a plainer one --
         # and the status bar already names the protocol in the corner.
-        tooltip = ("VNC: no guest resize, clipboard or audio"
-                   if protocol == "vnc" else "SPICE")
+        tooltip = (
+            "VNC: no guest resize, clipboard or audio" if protocol == "vnc" else "SPICE"
+        )
 
-        icon = Gtk.Image.new_from_icon_name("video-display-symbolic",
-                                            Gtk.IconSize.MENU)
+        icon = Gtk.Image.new_from_icon_name("video-display-symbolic", Gtk.IconSize.MENU)
         icon.set_tooltip_text(tooltip)
         box.pack_start(icon, False, False, 0)
 
@@ -48,8 +48,9 @@ class ConsoleTabLabel(Gtk.EventBox):
         close.set_relief(Gtk.ReliefStyle.NONE)
         close.set_focus_on_click(False)
         close.get_style_context().add_class("tab-close")
-        close.add(Gtk.Image.new_from_icon_name("window-close-symbolic",
-                                               Gtk.IconSize.MENU))
+        close.add(
+            Gtk.Image.new_from_icon_name("window-close-symbolic", Gtk.IconSize.MENU)
+        )
         close.set_tooltip_text("Close")
         close.connect("clicked", lambda *_: on_close())
         box.pack_start(close, False, False, 0)
@@ -70,7 +71,7 @@ class ConsoleTabLabel(Gtk.EventBox):
         """Trim only genuinely long names; the tooltip keeps the full one."""
         if len(title) <= cls.MAX_CHARS:
             return title
-        return title[:cls.MAX_CHARS - 3] + "..."
+        return title[: cls.MAX_CHARS - 3] + "..."
 
     def set_title(self, title):
         self.label.set_text(self._fit(title))

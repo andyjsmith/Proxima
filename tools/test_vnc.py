@@ -28,9 +28,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from proxima.console import des  # noqa: E402
-from proxima.console.rfb import RfbClient  # noqa: E402
-from proxima.console.wsclient import WebSocketStream  # noqa: E402
+from proxima.console import des
+from proxima.console.rfb import RfbClient
+from proxima.console.wsclient import WebSocketStream
 
 PASSWORD = "PVE:root@pam:687A1B2C::abcdef"
 WIDTH, HEIGHT = 64, 32
@@ -56,7 +56,7 @@ class SocketStream:
         while remaining:
             chunk = self.sock.recv(remaining)
             if not chunk:
-                raise IOError("closed")
+                raise OSError("closed")
             parts.append(chunk)
             remaining -= len(chunk)
         return b"".join(parts)
@@ -508,10 +508,10 @@ class WsServerStream:
         while len(self.buffer) < count:
             frame = ws_read_frame(self.conn)
             if frame is None:
-                raise IOError("closed")
+                raise OSError("closed")
             opcode, payload, _masked = frame
             if opcode == 8:
-                raise IOError("closed")
+                raise OSError("closed")
             self.buffer += payload
         chunk = bytes(self.buffer[:count])
         del self.buffer[:count]
@@ -590,6 +590,7 @@ def test_vnc_widget():
 
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk
+
     from proxima.console.vnc import VncConsole
 
     server = FakeVncWebSocketServer()
@@ -696,7 +697,8 @@ def test_pointer_mapping():
     import gi
 
     gi.require_version("Gtk", "3.0")
-    from gi.repository import Gdk, Gtk
+    from gi.repository import Gdk
+
     from proxima.console.vnc import VncConsole
 
     console = VncConsole.__new__(VncConsole)
@@ -797,6 +799,7 @@ def test_offline_effect():
     """A dead console is greyed and dimmed, not left looking live."""
     print("\nOffline console effect")
     import cairo
+
     from proxima.console.status_panel import draw_offline_effect
 
     surface = cairo.ImageSurface(cairo.FORMAT_RGB24, 32, 32)
@@ -824,6 +827,7 @@ def test_disconnect_panel():
 
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk
+
     from proxima.console.vnc import VncConsole
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -896,6 +900,7 @@ def test_view_menu():
 
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk
+
     from proxima.config import Config
     from proxima.console.vnc import VncConsole
 

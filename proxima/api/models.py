@@ -3,7 +3,6 @@
 import re
 from dataclasses import dataclass, field
 
-
 # Both halves of a guest's identity are worth showing -- the name says what
 # it is, the VMID is what every Proxmox error message and CLI command uses.
 # The setting only chooses which one leads.
@@ -59,16 +58,19 @@ def human_age(timestamp, now=None):
     if not timestamp:
         return ""
     import time as _time
+
     seconds = int((now if now is not None else _time.time()) - int(timestamp))
     if seconds < 0:
         return "in the future"
     if seconds < 60:
         return "just now"
-    for limit, size, name in ((3600, 60, "minute"),
-                              (86400, 3600, "hour"),
-                              (604800, 86400, "day"),
-                              (2592000, 604800, "week"),
-                              (31536000, 2592000, "month")):
+    for limit, size, name in (
+        (3600, 60, "minute"),
+        (86400, 3600, "hour"),
+        (604800, 86400, "day"),
+        (2592000, 604800, "week"),
+        (31536000, 2592000, "month"),
+    ):
         if seconds < limit:
             count = seconds // size
             return f"{count} {name}{'s' if count != 1 else ''} ago"
@@ -120,7 +122,7 @@ class Guest:
     vmid: int
     name: str
     node: str
-    kind: str = "qemu"           # "qemu" or "lxc"
+    kind: str = "qemu"  # "qemu" or "lxc"
     status: str = "unknown"
     template: bool = False
     uptime: int = 0
@@ -136,7 +138,7 @@ class Guest:
     connection: str = ""
     # Filled in lazily from the guest config once it is inspected.
     config: dict = field(default_factory=dict)
-    display: str = ""            # the 'vga' setting, when known
+    display: str = ""  # the 'vga' setting, when known
     # None here means "unknown display type, worth trying SPICE" -- the same
     # meaning vga_is_spice() gives it. Whether the config has been read at
     # all is config_loaded's job; conflating the two made an unrecognised
@@ -147,7 +149,7 @@ class Guest:
     # known once the config has been read, so None means "not looked yet"
     # rather than "not protected".
     protected: bool = None
-    console_note: str = ""       # why the last console chose what it did
+    console_note: str = ""  # why the last console chose what it did
     # Newest snapshot, or None. snapshots_loaded distinguishes "no snapshots"
     # from "not looked yet", which the Revert button has to tell apart.
     latest_snapshot: dict = None
@@ -228,9 +230,21 @@ class Guest:
 
     def merge_live(self, other):
         """Copy volatile fields from a freshly polled copy, keeping config."""
-        for attr in ("name", "status", "uptime", "cpu", "maxcpu", "mem",
-                     "maxmem", "maxdisk", "tags", "lock", "template", "node",
-                     "connection"):
+        for attr in (
+            "name",
+            "status",
+            "uptime",
+            "cpu",
+            "maxcpu",
+            "mem",
+            "maxmem",
+            "maxdisk",
+            "tags",
+            "lock",
+            "template",
+            "node",
+            "connection",
+        ):
             setattr(self, attr, getattr(other, attr))
 
 
@@ -318,7 +332,7 @@ def parse_spice_clients(text):
             in_channels = True
             continue
         if key == "server":
-            in_channels = False      # the server block, not a client
+            in_channels = False  # the server block, not a client
             continue
         if not in_channels:
             continue
@@ -339,7 +353,7 @@ def parse_spice_clients(text):
         return 1, addresses
     if seen_channels:
         return 0, []
-    return None                          # not 'info spice' output at all
+    return None  # not 'info spice' output at all
 
 
 def vga_is_spice(vga_value):
@@ -361,7 +375,7 @@ def vga_is_spice(vga_value):
     before the first comma matters.
     """
     if not vga_value:
-        return False                     # unset means std -> VNC only
+        return False  # unset means std -> VNC only
     kind = str(vga_value).split(",")[0].strip().lower()
     if any(kind.startswith(prefix) for prefix in SPICE_VGA_PREFIXES):
         return True

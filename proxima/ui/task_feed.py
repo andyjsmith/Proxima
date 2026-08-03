@@ -9,19 +9,20 @@ there is no permanently docked strip taking height from the console. Polling
 only runs while the pane is visible.
 """
 
-import threading
 import datetime
+import threading
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib  # noqa: E402
+from gi.repository import GLib, Gtk
 
 from ..api import ProxmoxError
 from ..theme import decorate as theme_decorate
 
-(COL_START, COL_END, COL_SERVER, COL_NODE, COL_USER, COL_DESC,
- COL_STATUS, COL_UPID) = range(8)
+(COL_START, COL_END, COL_SERVER, COL_NODE, COL_USER, COL_DESC, COL_STATUS, COL_UPID) = (
+    range(8)
+)
 
 RUNNING = "running"
 
@@ -31,8 +32,7 @@ def _clock(value):
     midnight, which the cluster's own history routinely does."""
     if not value:
         return ""
-    return datetime.datetime.fromtimestamp(int(value)).strftime(
-        "%Y-%m-%d %H:%M:%S")
+    return datetime.datetime.fromtimestamp(int(value)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _describe(row):
@@ -71,8 +71,9 @@ class TaskFeed(Gtk.Box):
 
         close = Gtk.Button()
         close.set_relief(Gtk.ReliefStyle.NONE)
-        close.add(Gtk.Image.new_from_icon_name("window-close-symbolic",
-                                               Gtk.IconSize.MENU))
+        close.add(
+            Gtk.Image.new_from_icon_name("window-close-symbolic", Gtk.IconSize.MENU)
+        )
         close.set_tooltip_text("Close")
         close.connect("clicked", lambda *_: self.close())
         header.pack_start(close, False, False, 0)
@@ -85,9 +86,13 @@ class TaskFeed(Gtk.Box):
         # Only the description ellipsizes; giving every renderer an
         # ellipsize mode makes each column report a minimum width of almost
         # nothing, which is what collapsed them all to "...".
-        for title, index in (("Start", COL_START), ("End", COL_END),
-                             ("Server", COL_SERVER), ("Node", COL_NODE),
-                             ("User", COL_USER)):
+        for title, index in (
+            ("Start", COL_START),
+            ("End", COL_END),
+            ("Server", COL_SERVER),
+            ("Node", COL_NODE),
+            ("User", COL_USER),
+        ):
             renderer = Gtk.CellRendererText()
             renderer.set_property("ypad", 1)
             column = Gtk.TreeViewColumn(title, renderer, text=index)
@@ -97,10 +102,9 @@ class TaskFeed(Gtk.Box):
         renderer = Gtk.CellRendererText()
         renderer.set_property("ypad", 1)
         renderer.set_property("ellipsize", 3)
-        description = Gtk.TreeViewColumn("Description", renderer,
-                                         text=COL_DESC)
+        description = Gtk.TreeViewColumn("Description", renderer, text=COL_DESC)
         description.set_resizable(True)
-        description.set_expand(True)       # takes the leftover width
+        description.set_expand(True)  # takes the leftover width
         description.set_min_width(160)
         self.view.append_column(description)
 
@@ -194,18 +198,19 @@ class TaskFeed(Gtk.Box):
             status = _status_of(row)
             if status == RUNNING:
                 running += 1
-            self.store.append([
-                _clock(row.get("starttime")),
-                _clock(row.get("endtime")),
-                row.get("_server", ""),
-                row.get("node", ""),
-                row.get("user", ""),
-                _describe(row),
-                status,
-                row.get("upid", ""),
-            ])
-        self.title_label.set_text(
-            f"Tasks ({running} running)" if running else "Tasks")
+            self.store.append(
+                [
+                    _clock(row.get("starttime")),
+                    _clock(row.get("endtime")),
+                    row.get("_server", ""),
+                    row.get("node", ""),
+                    row.get("user", ""),
+                    _describe(row),
+                    status,
+                    row.get("upid", ""),
+                ]
+            )
+        self.title_label.set_text(f"Tasks ({running} running)" if running else "Tasks")
         return False
 
     # -- task log ------------------------------------------------------
@@ -216,9 +221,12 @@ class TaskFeed(Gtk.Box):
         node = self.store.get_value(row, COL_NODE)
         if not upid or not node:
             return
-        self._show_log(node, upid,
-                       self.store.get_value(row, COL_DESC),
-                       self.store.get_value(row, COL_SERVER))
+        self._show_log(
+            node,
+            upid,
+            self.store.get_value(row, COL_DESC),
+            self.store.get_value(row, COL_SERVER),
+        )
 
     def _api_for_server(self, server):
         for connection in self.connections.connected:
@@ -227,8 +235,9 @@ class TaskFeed(Gtk.Box):
         raise ProxmoxError(f"{server} is no longer connected")
 
     def _show_log(self, node, upid, title, server):
-        window = Gtk.Dialog(title=f"Task log - {title}",
-                            transient_for=self.get_toplevel(), modal=True)
+        window = Gtk.Dialog(
+            title=f"Task log - {title}", transient_for=self.get_toplevel(), modal=True
+        )
         window.add_button("Close", Gtk.ResponseType.CLOSE)
         window.set_default_size(720, 420)
 
@@ -250,7 +259,6 @@ class TaskFeed(Gtk.Box):
                 lines = [f"could not read the task log: {exc}"]
             GLib.idle_add(lambda: buffer.set_text("\n".join(lines) or "(empty)"))
 
-        threading.Thread(target=worker, daemon=True,
-                         name="task-log").start()
+        threading.Thread(target=worker, daemon=True, name="task-log").start()
         window.run()
         window.destroy()

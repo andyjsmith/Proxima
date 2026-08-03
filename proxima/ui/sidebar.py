@@ -19,7 +19,7 @@ saved and restored around the rebuild instead.
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk
 
 from ..api.connection import CONNECTED, CONNECTING, FAILED
 from ..api.models import GUEST_NAME_CHARS, format_guest_name
@@ -158,8 +158,9 @@ class Sidebar(Gtk.Box):
         "settings-requested": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
-    def __init__(self, row_ypad=1, name_format="name", templates_last=True,
-                 dnd_enabled=True):
+    def __init__(
+        self, row_ypad=1, name_format="name", templates_last=True, dnd_enabled=True
+    ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.guests = {}
@@ -298,8 +299,9 @@ class Sidebar(Gtk.Box):
         had = bool(self.busy)
         # Compare what is actually drawn, not just the key set: a rename's
         # displayed name lives in here too.
-        relabel = ({k: v[1] for k, v in busy.items()}
-                   != {k: v[1] for k, v in self.busy.items()})
+        relabel = {k: v[1] for k, v in busy.items()} != {
+            k: v[1] for k, v in self.busy.items()
+        }
         self.busy = busy
         if relabel:
             self.rebuild()
@@ -387,10 +389,9 @@ class Sidebar(Gtk.Box):
         """
         if self.dnd_enabled:
             self.view.enable_model_drag_source(
-                Gdk.ModifierType.BUTTON1_MASK, [DRAG_TARGET],
-                Gdk.DragAction.MOVE)
-            self.view.enable_model_drag_dest([DRAG_TARGET],
-                                             Gdk.DragAction.MOVE)
+                Gdk.ModifierType.BUTTON1_MASK, [DRAG_TARGET], Gdk.DragAction.MOVE
+            )
+            self.view.enable_model_drag_dest([DRAG_TARGET], Gdk.DragAction.MOVE)
         else:
             self.view.unset_rows_drag_source()
             self.view.unset_rows_drag_dest()
@@ -762,8 +763,7 @@ class Sidebar(Gtk.Box):
             # Show the name that was asked for. The server has not caught up
             # yet, and flicking back to the old one in the meantime is
             # exactly what the spinner exists to avoid.
-            label = format_guest_name(
-                _Renamed(guest, pending[1]), self.name_format)
+            label = format_guest_name(_Renamed(guest, pending[1]), self.name_format)
         else:
             label = format_guest_name(guest, self.name_format)
         if guest.is_container:
@@ -1145,7 +1145,8 @@ class Sidebar(Gtk.Box):
             menu.append(Gtk.SeparatorMenuItem())
             settings = Gtk.MenuItem(label="Settings")
             settings.set_tooltip_text(
-                "Console settings for this VM, stored on the server")
+                "Console settings for this VM, stored on the server"
+            )
             settings.connect(
                 "activate", lambda *_: self.emit("settings-requested", guest.key)
             )

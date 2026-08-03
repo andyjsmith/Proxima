@@ -14,22 +14,19 @@ import os
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk
 
-from .. import APP_NAME, __version__
+from .. import APP_NAME, __version__, secrets
 from ..api import AuthError, ProxmoxError
 from ..api import notes as notes_meta
-from ..api.connection import (CONNECTED, FAILED, Connection,
-                              ConnectionManager)
-from .. import secrets
-from ..api.models import (audio_is_spice, human_age, valid_guest_name,
-                          vga_is_spice)
+from ..api.connection import FAILED, Connection, ConnectionManager
+from ..api.models import audio_is_spice, valid_guest_name, vga_is_spice
 from ..console import SPICE_AVAILABLE, SpiceConsole, VncConsole
 from ..console.placeholder import PlaceholderConsole
 from ..console.spice import IMAGE_COMPRESSION, VIDEO_CODECS
@@ -52,7 +49,6 @@ from .split import MAX_PANES, SplitView
 from .summary import SummaryPage
 from .task_feed import TaskFeed
 from .vm_settings import VMSettingsDialog
-
 
 # Distinguishes "work it out yourself" from "explicitly no console".
 _CURRENT = object()
@@ -81,15 +77,15 @@ class _PendingChange:
     nothing could end.
     """
 
-    __slots__ = ("field", "was", "target", "label", "deadline", "name")
+    __slots__ = ("deadline", "field", "label", "name", "target", "was")
 
     def __init__(self, field, was, target, label, deadline, name=None):
-        self.field = field          # "name" or "status"
+        self.field = field  # "name" or "status"
         self.was = was
-        self.target = target        # None when any change will do
-        self.label = label          # shown in the row's tooltip
+        self.target = target  # None when any change will do
+        self.label = label  # shown in the row's tooltip
         self.deadline = deadline
-        self.name = name            # name to display meanwhile, if any
+        self.name = name  # name to display meanwhile, if any
 
     def resolved_by(self, guest, now):
         if guest is None or now >= self.deadline:
@@ -127,7 +123,7 @@ class MainWindow(Gtk.Window):
         self._pending_actions = {}
         # Changes asked for that the cluster has not reported yet, drawn as
         # a spinner on the guest's row. See _mark_busy.
-        self._busy = {}                 # guest key -> _PendingChange
+        self._busy = {}  # guest key -> _PendingChange
         # Guest keys whose console was deliberately switched protocol for
         # this session. Cleared when the tab closes, so the next open goes
         # back to whatever the guest's own settings ask for. These override
@@ -139,11 +135,11 @@ class MainWindow(Gtk.Window):
         # as long as the console is open. Deliberately not persisted: the
         # buttons are helpers for the session in front of you, and the
         # settled answer belongs in the guest's own settings.
-        self._session_switches = {}     # (guest key, name) -> bool
+        self._session_switches = {}  # (guest key, name) -> bool
         # When we last tore down a live SPICE session, per guest. QEMU keeps
         # counting a client for a moment after it goes, so without this
         # every reconnect would look like somebody else was already on it.
-        self._recent_spice = {}         # guest key -> monotonic time
+        self._recent_spice = {}  # guest key -> monotonic time
         # Consoles to reopen from the last session, and when to give up
         # waiting for their guests to appear in the inventory.
         self._restore_keys = []
@@ -157,8 +153,10 @@ class MainWindow(Gtk.Window):
         # maximised, and whether it was maximised. Setting the default size
         # first means unmaximising lands on last session's size rather than
         # on GTK's idea of a minimum.
-        self._normal_size = (int(config.get("window_width", 1280)),
-                             int(config.get("window_height", 800)))
+        self._normal_size = (
+            int(config.get("window_width", 1280)),
+            int(config.get("window_height", 800)),
+        )
         self._maximized = bool(config.get("window_maximized", False))
         self._fullscreen_state = False
         self.set_default_size(*self._normal_size)
@@ -197,34 +195,35 @@ class MainWindow(Gtk.Window):
             row_ypad=theme_css.ROW_YPAD,
             name_format=config.get("tree_name_format", "name"),
             templates_last=bool(config.get("templates_last", True)),
-            dnd_enabled=bool(config.get("enable_dnd", True)))
+            dnd_enabled=bool(config.get("enable_dnd", True)),
+        )
         self.sidebar.connect("guest-selected", self._on_guest_selected)
         self.sidebar.connect("guest-activated", self._on_guest_activated)
         self.sidebar.connect("guest-action", self._on_guest_action)
         self.sidebar.connect("filter-changed", lambda *_: self.refresh())
         self.sidebar.connect("bulk-action", self._on_bulk_action)
         self.sidebar.connect("view-changed", self._on_view_changed)
-        self.sidebar.connect("connect-requested",
-                             lambda *_: self.open_connect_dialog())
+        self.sidebar.connect("connect-requested", lambda *_: self.open_connect_dialog())
         self.sidebar.connect(
-            "disconnect-requested",
-            lambda _s, cid: self.disconnect_connection(cid))
-        self.sidebar.connect("reconnect-requested",
-                             lambda _s, cid: self.reconnect_connection(cid))
+            "disconnect-requested", lambda _s, cid: self.disconnect_connection(cid)
+        )
         self.sidebar.connect(
-            "guest-moved",
-            lambda _s, key, path: self.move_guest_to_folder(key, path))
-        self.sidebar.connect("new-subfolder",
-                             lambda _s, key: self.prompt_new_subfolder(key))
+            "reconnect-requested", lambda _s, cid: self.reconnect_connection(cid)
+        )
         self.sidebar.connect(
-            "guest-renamed",
-            lambda _s, key, name: self.rename_guest(key, name))
-        self.sidebar.connect("clone-requested",
-                             lambda _s, key: self.clone_guest(key))
-        self.sidebar.connect("delete-requested",
-                             lambda _s, key: self.delete_guest(key))
-        self.sidebar.connect("settings-requested",
-                             lambda _s, key: self.open_guest_settings(key))
+            "guest-moved", lambda _s, key, path: self.move_guest_to_folder(key, path)
+        )
+        self.sidebar.connect(
+            "new-subfolder", lambda _s, key: self.prompt_new_subfolder(key)
+        )
+        self.sidebar.connect(
+            "guest-renamed", lambda _s, key, name: self.rename_guest(key, name)
+        )
+        self.sidebar.connect("clone-requested", lambda _s, key: self.clone_guest(key))
+        self.sidebar.connect("delete-requested", lambda _s, key: self.delete_guest(key))
+        self.sidebar.connect(
+            "settings-requested", lambda _s, key: self.open_guest_settings(key)
+        )
         self.paned.pack1(self.sidebar, False, False)
         self.sidebar.set_visible(bool(config.get("sidebar_visible", True)))
 
@@ -242,8 +241,9 @@ class MainWindow(Gtk.Window):
         # Through the split view, so the page is actually shown: the
         # notebooks carry no-show-all, so appending alone would leave the
         # Summary invisible and the pane reporting no current page.
-        self.panes.append(self.summary, Gtk.Label(label="Summary"),
-                          notebook=self.notebook)
+        self.panes.append(
+            self.summary, Gtk.Label(label="Summary"), notebook=self.notebook
+        )
         # The Summary is not a console: it belongs to the first pane and
         # should not be draggable into one of the others.
         self.notebook.set_tab_detachable(self.summary, False)
@@ -277,7 +277,8 @@ class MainWindow(Gtk.Window):
         # toolbar button showing the truth.
         self.task_feed = TaskFeed(
             self.connections,
-            on_closed=lambda: self._set_toggle(self.tasks_tool_item, False))
+            on_closed=lambda: self._set_toggle(self.tasks_tool_item, False),
+        )
         root.pack_start(self.task_feed, False, False, 0)
 
         self.statusbar_box = self._build_statusbar()
@@ -327,14 +328,16 @@ class MainWindow(Gtk.Window):
 
         bar.pack_start(self.menubar)
 
-        refresh = Gtk.Button.new_from_icon_name("view-refresh-symbolic",
-                                                Gtk.IconSize.MENU)
+        refresh = Gtk.Button.new_from_icon_name(
+            "view-refresh-symbolic", Gtk.IconSize.MENU
+        )
         refresh.set_tooltip_text("Refresh inventory (F5)")
         refresh.connect("clicked", lambda *_: self.refresh())
         bar.pack_start(refresh)
 
-        settings = Gtk.Button.new_from_icon_name("preferences-system-symbolic",
-                                                 Gtk.IconSize.MENU)
+        settings = Gtk.Button.new_from_icon_name(
+            "preferences-system-symbolic", Gtk.IconSize.MENU
+        )
         settings.set_tooltip_text("Preferences")
         settings.connect("clicked", lambda *_: self.open_settings())
         bar.pack_end(settings)
@@ -346,8 +349,9 @@ class MainWindow(Gtk.Window):
         file_menu = Gtk.Menu()
         file_item = Gtk.MenuItem(label="_File", use_underline=True)
         file_item.set_submenu(file_menu)
-        self._menu_item(file_menu, "Connect...", self.open_connect_dialog,
-                        accel="<Control>n")
+        self._menu_item(
+            file_menu, "Connect...", self.open_connect_dialog, accel="<Control>n"
+        )
         self._menu_item(file_menu, "Refresh Inventory", self.refresh, accel="F5")
         self._menu_item(file_menu, "Preferences...", self.open_settings)
         file_menu.append(Gtk.SeparatorMenuItem())
@@ -367,19 +371,21 @@ class MainWindow(Gtk.Window):
         # Relabels itself: from SPICE it offers VNC, from VNC it offers SPICE
         # back. Two entries, one of them always dead, would say less.
         self.switch_protocol_item = self._menu_item(
-            vm_menu, "Reopen Console with VNC", self._switch_console_protocol)
+            vm_menu, "Reopen Console with VNC", self._switch_console_protocol
+        )
         self.switch_protocol_item.set_sensitive(False)
         self.ctrl_alt_del_item = self._menu_item(
             vm_menu, "Send Ctrl+Alt+Del", self._send_ctrl_alt_del
         )
         self.ctrl_alt_del_item.set_sensitive(False)
         self.screenshot_item = self._menu_item(
-            vm_menu, "Save Console Screenshot...", self._save_screenshot)
+            vm_menu, "Save Console Screenshot...", self._save_screenshot
+        )
         self.screenshot_item.set_sensitive(False)
         vm_menu.append(Gtk.SeparatorMenuItem())
         for action in action_defs.POWER_ACTIONS:
             if action.name == "resume":
-                continue        # shown on the Start entry when it applies
+                continue  # shown on the Start entry when it applies
             item = self._menu_item(
                 vm_menu,
                 action.label,
@@ -484,12 +490,15 @@ class MainWindow(Gtk.Window):
         menu.append(Gtk.SeparatorMenuItem())
 
         self.split_item = self._menu_item(
-            menu, "Move Console to a New Pane", self._split_console)
+            menu, "Move Console to a New Pane", self._split_console
+        )
         self.split_item.set_tooltip_text(
             "Show this console beside the others. Once there is more than "
-            "one pane, tabs can be dragged between them.")
+            "one pane, tabs can be dragged between them."
+        )
         self.gather_item = self._menu_item(
-            menu, "Close Split View", self._gather_consoles)
+            menu, "Close Split View", self._gather_consoles
+        )
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -615,8 +624,7 @@ class MainWindow(Gtk.Window):
         self.split_item_tb = Gtk.ToolButton()
         self.split_item_tb.set_label("Split")
         self.split_item_tb.set_icon_name("view-dual-symbolic")
-        self.split_item_tb.set_tooltip_text(
-            "Show this console beside the others")
+        self.split_item_tb.set_tooltip_text("Show this console beside the others")
         self.split_item_tb.set_sensitive(False)
         self.split_item_tb.connect("clicked", lambda *_: self._split_console())
         bar.insert(self.split_item_tb, -1)
@@ -638,8 +646,7 @@ class MainWindow(Gtk.Window):
         self.tree_tool_item.set_label("Tree")
         self.tree_tool_item.set_icon_name("sidebar-show-symbolic")
         self.tree_tool_item.set_tooltip_text("Show or hide the inventory tree")
-        self.tree_tool_item.set_active(
-            bool(self.config.get("sidebar_visible", True)))
+        self.tree_tool_item.set_active(bool(self.config.get("sidebar_visible", True)))
         self.tree_tool_item.connect("toggled", self._on_tree_toggled)
         bar.insert(self.tree_tool_item, -1)
 
@@ -730,27 +737,26 @@ class MainWindow(Gtk.Window):
         # turns that feature off for the guest, and the setting is kept
         # client side, per guest, across sessions.
         self.vdagent_icon = StatusIndicator(
-            "edit-paste-symbolic", "SPICE agent",
-            on_toggle=self._toggle_clipboard)
+            "edit-paste-symbolic", "SPICE agent", on_toggle=self._toggle_clipboard
+        )
         box.pack_start(self.vdagent_icon, False, False, 2)
 
-        self.qga_icon = StatusIndicator(
-            "utilities-terminal-symbolic", "Guest agent")
+        self.qga_icon = StatusIndicator("utilities-terminal-symbolic", "Guest agent")
         box.pack_start(self.qga_icon, False, False, 2)
 
         # Whether the guest has an audio device routed over SPICE. Proxmox
         # adds none by default, so silence is nearly always this.
         self.audio_icon = StatusIndicator(
-            "audio-volume-high-symbolic", "Audio",
-            on_toggle=self._toggle_audio)
+            "audio-volume-high-symbolic", "Audio", on_toggle=self._toggle_audio
+        )
         box.pack_start(self.audio_icon, False, False, 2)
 
         # Dragging a guest between folders. Not about the console at all,
         # but it belongs with the other two: it is a thing that is either
         # armed or not, and this is where you find out which.
         self.dnd_icon = StatusIndicator(
-            "list-drag-handle-symbolic", "Drag and drop",
-            on_toggle=self._toggle_dnd)
+            "list-drag-handle-symbolic", "Drag and drop", on_toggle=self._toggle_dnd
+        )
         box.pack_start(self.dnd_icon, False, False, 2)
 
         self._set_indicator(self.vdagent_icon, None, "SPICE agent")
@@ -770,8 +776,7 @@ class MainWindow(Gtk.Window):
         return box
 
     @staticmethod
-    def _set_indicator(icon, state, label, enabled=True, detail=None,
-                       can_toggle=None):
+    def _set_indicator(icon, state, label, enabled=True, detail=None, can_toggle=None):
         """state: True connected, False not running, None not applicable.
 
         'enabled' is the user's own switch, drawn as a strike through the
@@ -818,8 +823,8 @@ class MainWindow(Gtk.Window):
         # entries that depend on being connected are refreshed here rather
         # than only on a tab switch.
         self.screenshot_item.set_sensitive(
-            hasattr(console, "screenshot")
-            and getattr(console, "connected", False))
+            hasattr(console, "screenshot") and getattr(console, "connected", False)
+        )
 
         data = console.telemetry()
         if not data:
@@ -883,15 +888,13 @@ class MainWindow(Gtk.Window):
         self._session_switches[(guest.key, name)] = enabled
 
         console = self.consoles.get(guest.key)
-        supported = bool(console
-                         and getattr(console, "supports", {}).get(name))
+        supported = bool(console and getattr(console, "supports", {}).get(name))
         setter = getattr(console, f"set_{name}_enabled", None) if console else None
         applied = bool(supported and setter and setter(enabled))
 
         state = "on" if enabled else "off"
         if applied:
-            self.set_status(
-                f"{guest.label}: {label} {state} for this console")
+            self.set_status(f"{guest.label}: {label} {state} for this console")
         elif supported:
             # The console knows the new setting but cannot act on it without
             # being rebuilt -- audio, which is fixed when the SPICE session
@@ -907,8 +910,8 @@ class MainWindow(Gtk.Window):
             # is still held for this session and takes hold the next time it
             # can; anything longer-lived belongs in the guest's settings.
             self.set_status(
-                f"{guest.label}: {label} {state} (applies when a SPICE "
-                "console is open)")
+                f"{guest.label}: {label} {state} (applies when a SPICE console is open)"
+            )
         self._context_changed()
 
     def _toggle_clipboard(self):
@@ -940,16 +943,30 @@ class MainWindow(Gtk.Window):
             # but has nothing to act on. Still toggleable: switching it on
             # here so it is ready in folder view is a reasonable thing to do.
             self._set_indicator(
-                self.dnd_icon, None, label, enabled=enabled, can_toggle=True,
-                detail=("n/a in node view - " + ("on" if enabled else "off")
-                        + " for folder view"))
+                self.dnd_icon,
+                None,
+                label,
+                enabled=enabled,
+                can_toggle=True,
+                detail=(
+                    "n/a in node view - "
+                    + ("on" if enabled else "off")
+                    + " for folder view"
+                ),
+            )
             return
         self._set_indicator(
-            self.dnd_icon, enabled, label, enabled=enabled, can_toggle=True,
-            detail=("guests can be dragged between folders - click to turn "
-                    "off" if enabled
-                    else "turned off - click to allow dragging guests "
-                         "between folders"))
+            self.dnd_icon,
+            enabled,
+            label,
+            enabled=enabled,
+            can_toggle=True,
+            detail=(
+                "guests can be dragged between folders - click to turn off"
+                if enabled
+                else "turned off - click to allow dragging guests between folders"
+            ),
+        )
 
     def _update_clipboard_indicator(self, console=_CURRENT, connected=None):
         """Clipboard sharing: whether it can work, and whether it is allowed.
@@ -964,17 +981,25 @@ class MainWindow(Gtk.Window):
         enabled = self._guest_switch(guest, "clipboard")
         if connected is None:
             connected = bool(getattr(console, "agent_connected", False))
-        usable = bool(console is not None
-                      and getattr(console, "supports", {}).get("clipboard"))
+        usable = bool(
+            console is not None and getattr(console, "supports", {}).get("clipboard")
+        )
         label = "Clipboard (SPICE agent)"
 
         if not usable:
-            detail = ("n/a - this console is VNC, which has no clipboard "
-                      "channel" if console is not None
-                      else "n/a - needs an open SPICE console")
-            self._set_indicator(self.vdagent_icon, None, label,
-                                enabled=enabled, can_toggle=False,
-                                detail=detail)
+            detail = (
+                "n/a - this console is VNC, which has no clipboard channel"
+                if console is not None
+                else "n/a - needs an open SPICE console"
+            )
+            self._set_indicator(
+                self.vdagent_icon,
+                None,
+                label,
+                enabled=enabled,
+                can_toggle=False,
+                detail=detail,
+            )
             return
         if not enabled:
             detail = "turned off - click to share the clipboard again"
@@ -982,8 +1007,14 @@ class MainWindow(Gtk.Window):
             detail = "sharing - click to turn off"
         else:
             detail = "spice-vdagent is not running in the guest"
-        self._set_indicator(self.vdagent_icon, connected, label,
-                            enabled=enabled, can_toggle=True, detail=detail)
+        self._set_indicator(
+            self.vdagent_icon,
+            connected,
+            label,
+            enabled=enabled,
+            can_toggle=True,
+            detail=detail,
+        )
 
     def _update_audio_indicator(self, console=_CURRENT):
         """SPICE audio needs a device on the guest, and a SPICE console.
@@ -1003,45 +1034,73 @@ class MainWindow(Gtk.Window):
         audio = (guest.config or {}).get("audio0") if guest else None
         has_device = audio_is_spice(audio)
         self.audio_icon.set_icon_name(
-            "audio-volume-high-symbolic" if has_device
-            else "audio-volume-muted-symbolic")
+            "audio-volume-high-symbolic"
+            if has_device
+            else "audio-volume-muted-symbolic"
+        )
 
         if guest is None or guest.is_container:
-            self._set_indicator(self.audio_icon, None, label,
-                                can_toggle=False)
+            self._set_indicator(self.audio_icon, None, label, can_toggle=False)
             return
         if not self.config.get("enable_audio", True):
             self._set_indicator(
-                self.audio_icon, None, label, can_toggle=False,
-                detail="off for every console in Preferences")
+                self.audio_icon,
+                None,
+                label,
+                can_toggle=False,
+                detail="off for every console in Preferences",
+            )
             return
         if console is None or not getattr(console, "supports", {}).get("audio"):
             self._set_indicator(
-                self.audio_icon, None, label, enabled=enabled,
+                self.audio_icon,
+                None,
+                label,
+                enabled=enabled,
                 can_toggle=False,
-                detail=("n/a - " + ("this console is VNC, which carries no "
-                                    "audio" if console is not None
-                                    else "needs an open SPICE console")))
+                detail=(
+                    "n/a - "
+                    + (
+                        "this console is VNC, which carries no audio"
+                        if console is not None
+                        else "needs an open SPICE console"
+                    )
+                ),
+            )
             return
         if not guest.config_loaded:
-            return                      # unknown until the config is read
+            return  # unknown until the config is read
 
         if has_device:
             self._set_indicator(
-                self.audio_icon, True, label, enabled=enabled,
+                self.audio_icon,
+                True,
+                label,
+                enabled=enabled,
                 can_toggle=True,
-                detail=f"{audio} - click to turn {'off' if enabled else 'on'}")
+                detail=f"{audio} - click to turn {'off' if enabled else 'on'}",
+            )
         elif audio:
             self._set_indicator(
-                self.audio_icon, False, label, enabled=enabled,
+                self.audio_icon,
+                False,
+                label,
+                enabled=enabled,
                 can_toggle=False,
-                detail=f"{audio} (not routed over SPICE)")
+                detail=f"{audio} (not routed over SPICE)",
+            )
         else:
             self._set_indicator(
-                self.audio_icon, False, label, enabled=enabled,
+                self.audio_icon,
+                False,
+                label,
+                enabled=enabled,
                 can_toggle=False,
-                detail=("no device. Add audio0: "
-                        "device=ich9-intel-hda,driver=spice in Proxmox."))
+                detail=(
+                    "no device. Add audio0: "
+                    "device=ich9-intel-hda,driver=spice in Proxmox."
+                ),
+            )
 
     def _refresh_guest_agent_indicator(self, guest):
         """Ping the QEMU guest agent for the selected guest, off-thread."""
@@ -1157,7 +1216,7 @@ class MainWindow(Gtk.Window):
         if theme_name:
             self._last_theme = (theme_name, dark)
         theme_name, dark = getattr(self, "_last_theme", ("", False))
-        suffix = f"  |  {theme_name}{' dark' if dark else ''}" if theme_name             else ""
+        suffix = f"  |  {theme_name}{' dark' if dark else ''}" if theme_name else ""
         self.connection_label.set_text(text + suffix)
         if self.header_bar is not None:
             # The same fact, in the one place a header bar has room for it.
@@ -1172,13 +1231,13 @@ class MainWindow(Gtk.Window):
         dialog = SettingsDialog(self, self.config, on_change=self.apply_appearance)
         dialog.run()
         self.task_feed.interval = max(
-            1, int(self.config.get("task_refresh_seconds", 5)))
+            1, int(self.config.get("task_refresh_seconds", 5))
+        )
         self.task_feed.restart()
         after = (self.config.get("font_backend"), self.config.get("sw_decoders"))
         if before != after:
             self.set_status("Restart required for font backend / decoder changes")
-        elif bool(self.config.get("use_header_bar")) != (
-                self.header_bar is not None):
+        elif bool(self.config.get("use_header_bar")) != (self.header_bar is not None):
             # GTK picks a window's decorations when the window is created,
             # so this one genuinely cannot be applied in place.
             self.set_status("Restart required to change the titlebar")
@@ -1229,12 +1288,12 @@ class MainWindow(Gtk.Window):
                 return
             GLib.idle_add(self._connection_ready, connection)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"connect-{connection.host}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"connect-{connection.host}"
+        ).start()
 
     def _connection_ready(self, connection):
-        self.set_status(
-            f"Connected to {connection.label} as {connection.api.username}")
+        self.set_status(f"Connected to {connection.label} as {connection.api.username}")
         self.sidebar.update(self.connections)
         self._update_connection_label()
         self.burst_poll(seconds=6)
@@ -1262,8 +1321,7 @@ class MainWindow(Gtk.Window):
         connection = self.connections.get(connection_id)
         if connection is None:
             return
-        for key in [k for k in self.consoles
-                    if k.startswith(connection_id + "/")]:
+        for key in [k for k in self.consoles if k.startswith(connection_id + "/")]:
             self.close_console(key)
         self.connections.remove(connection_id)
         # A manual disconnect is a decision: stop reconnecting it at startup.
@@ -1329,8 +1387,7 @@ class MainWindow(Gtk.Window):
         # Reopening moves the selection to the last console; the tree
         # selection is the more useful thing to leave in front.
         if not self._restore_keys and self.panes.total_pages() > 1:
-            self.set_status(
-                f"Reopened {self.panes.total_pages() - 1} console(s)")
+            self.set_status(f"Reopened {self.panes.total_pages() - 1} console(s)")
 
     def _save_session(self):
         """Record the open consoles and tree expansion for the next start."""
@@ -1369,17 +1426,20 @@ class MainWindow(Gtk.Window):
             try:
                 api = self.api_for(guest)
                 current = api.guest_notes(guest.node, guest.vmid, guest.kind)
-                api.set_guest_notes(guest.node, guest.vmid,
-                                    notes_meta.with_folder(current, parts),
-                                    guest.kind)
+                api.set_guest_notes(
+                    guest.node,
+                    guest.vmid,
+                    notes_meta.with_folder(current, parts),
+                    guest.kind,
+                )
             except Exception as exc:
-                GLib.idle_add(self.set_status,
-                              f"{guest.label}: could not move - {exc}")
+                GLib.idle_add(self.set_status, f"{guest.label}: could not move - {exc}")
                 return
             GLib.idle_add(self._folder_moved, key, parts)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"folder-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"folder-{guest.vmid}"
+        ).start()
 
     def _folder_moved(self, key, parts):
         guest = self.sidebar.guests.get(key)
@@ -1389,7 +1449,8 @@ class MainWindow(Gtk.Window):
         guest.notes_loaded = True
         self.sidebar.rebuild()
         self.set_status(
-            f"{guest.label} moved to {'/'.join(parts) if parts else 'the root'}")
+            f"{guest.label} moved to {'/'.join(parts) if parts else 'the root'}"
+        )
         return False
 
     def prompt_new_subfolder(self, key):
@@ -1397,9 +1458,11 @@ class MainWindow(Gtk.Window):
         if guest is None:
             return
         parent = "/".join(guest.folder)
-        name = self._prompt("New Subfolder",
-                            f"Subfolder of {parent or 'the root'}:",
-                            placeholder="Customer A")
+        name = self._prompt(
+            "New Subfolder",
+            f"Subfolder of {parent or 'the root'}:",
+            placeholder="Customer A",
+        )
         if not name:
             return
         # "/" is the path separator, so it cannot appear in a single level.
@@ -1419,8 +1482,7 @@ class MainWindow(Gtk.Window):
         """
         if not self.sidebar.folder_view or self._folder_scan:
             return
-        pending = [g for g in self.sidebar.guests.values()
-                   if not g.notes_loaded]
+        pending = [g for g in self.sidebar.guests.values() if not g.notes_loaded]
         if not pending:
             return
         self._folder_scan = True
@@ -1428,13 +1490,13 @@ class MainWindow(Gtk.Window):
         def read(guest):
             try:
                 text = self.api_for(guest).guest_notes(
-                    guest.node, guest.vmid, guest.kind)
+                    guest.node, guest.vmid, guest.kind
+                )
             except Exception:
                 text = ""
             # The settings live in the same block, so take them while the
             # notes are in hand rather than reading them again later.
-            return guest.key, notes_meta.folder_of(text), \
-                notes_meta.settings_of(text)
+            return guest.key, notes_meta.folder_of(text), notes_meta.settings_of(text)
 
         def worker():
             try:
@@ -1444,8 +1506,7 @@ class MainWindow(Gtk.Window):
                 results = []
             GLib.idle_add(self._apply_folders, results)
 
-        threading.Thread(target=worker, daemon=True,
-                         name="folder-scan").start()
+        threading.Thread(target=worker, daemon=True, name="folder-scan").start()
 
     def _apply_folders(self, results):
         self._folder_scan = False
@@ -1477,27 +1538,36 @@ class MainWindow(Gtk.Window):
                 "Invalid name",
                 f"Proxmox will not accept {name!r}.\n\n"
                 "A name is made of letters, digits, hyphens and dots, and "
-                "no part of it may start or end with a hyphen.")
+                "no part of it may start or end with a hyphen.",
+            )
             return
 
         self.set_status(f"{guest.label}: renaming to {name}...")
         # Immediately, and before the call returns: the row shows the new
         # name with a spinner from the moment the edit is committed.
-        self._mark_busy(key, "name", guest.name, name,
-                        f"Renaming to {name}...", self.RENAME_TIMEOUT,
-                        name=name)
+        self._mark_busy(
+            key,
+            "name",
+            guest.name,
+            name,
+            f"Renaming to {name}...",
+            self.RENAME_TIMEOUT,
+            name=name,
+        )
 
         def worker():
             try:
-                self.api_for(guest).rename_guest(guest.node, guest.vmid, name,
-                                                 guest.kind)
+                self.api_for(guest).rename_guest(
+                    guest.node, guest.vmid, name, guest.kind
+                )
             except Exception as exc:
                 GLib.idle_add(self._rename_failed, guest, name, str(exc))
                 return
             GLib.idle_add(self._renamed, key, name)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"rename-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"rename-{guest.vmid}"
+        ).start()
 
     def _renamed(self, key, name):
         guest = self.sidebar.guests.get(key)
@@ -1554,8 +1624,9 @@ class MainWindow(Gtk.Window):
                 return
             GLib.idle_add(self._guest_settings_loaded, key, config)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"settings-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"settings-{guest.vmid}"
+        ).start()
 
     def _guest_settings_loaded(self, key, config):
         guest = self.sidebar.guests.get(key)
@@ -1573,9 +1644,13 @@ class MainWindow(Gtk.Window):
     def _show_guest_settings(self, guest, api):
         self.set_status("")
         VMSettingsDialog(
-            self, api, guest,
-            on_saved=lambda settings, k=guest.key:
-                self._guest_settings_saved(k, settings))
+            self,
+            api,
+            guest,
+            on_saved=lambda settings, k=guest.key: self._guest_settings_saved(
+                k, settings
+            ),
+        )
 
     def _guest_settings_saved(self, key, settings):
         """Take the new settings into use, and say what still needs a reopen.
@@ -1596,8 +1671,7 @@ class MainWindow(Gtk.Window):
         # A session override still wins: an explicit click on the status bar
         # button is about this console, and saving settings is not a reason
         # to overrule it.
-        if ("clipboard" not in
-                {name for k, name in self._session_switches if k == key}):
+        if "clipboard" not in {name for k, name in self._session_switches if k == key}:
             wanted = settings.get("clipboard") != "disabled"
             setter = getattr(console, "set_clipboard_enabled", None)
             if setter is not None:
@@ -1605,20 +1679,25 @@ class MainWindow(Gtk.Window):
 
         if console is not None and getattr(console, "supports", {}).get("audio"):
             if bool(getattr(console, "play_audio", True)) != (
-                    settings.get("audio") != "disabled"):
+                settings.get("audio") != "disabled"
+            ):
                 pending.append("audio")
-        if (console is not None
-                and key not in self._force_vnc
-                and key not in self._force_spice):
+        if (
+            console is not None
+            and key not in self._force_vnc
+            and key not in self._force_spice
+        ):
             if settings.get("protocol") == "vnc":
                 mismatch = console.protocol != "vnc"
             else:
                 # "Default" only implies SPICE where SPICE is actually on
                 # offer; a VNC console on a guest with no SPICE display is
                 # already what the default asks for.
-                mismatch = (console.protocol != "spice"
-                            and self._can_use_spice(guest)
-                            and not self.config.get("prefer_vnc"))
+                mismatch = (
+                    console.protocol != "spice"
+                    and self._can_use_spice(guest)
+                    and not self.config.get("prefer_vnc")
+                )
             if mismatch:
                 pending.append("protocol")
 
@@ -1626,7 +1705,8 @@ class MainWindow(Gtk.Window):
         if pending:
             self.set_status(
                 f"{label}: settings saved - reopen the console for the new "
-                f"{' and '.join(pending)} setting to take effect")
+                f"{' and '.join(pending)} setting to take effect"
+            )
         else:
             self.set_status(f"{label}: settings saved")
 
@@ -1652,16 +1732,22 @@ class MainWindow(Gtk.Window):
 
         def worker():
             try:
-                api.clone_guest(guest.node, guest.vmid, vmid, name=name,
-                                target=target, full=full, storage=storage,
-                                kind=guest.kind)
+                api.clone_guest(
+                    guest.node,
+                    guest.vmid,
+                    vmid,
+                    name=name,
+                    target=target,
+                    full=full,
+                    storage=storage,
+                    kind=guest.kind,
+                )
             except Exception as exc:
                 GLib.idle_add(self._clone_failed, guest, str(exc))
                 return
             GLib.idle_add(self._clone_started, guest, vmid, name, full)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"clone-{guest.vmid}").start()
+        threading.Thread(target=worker, daemon=True, name=f"clone-{guest.vmid}").start()
 
     def _clone_started(self, guest, vmid, name, full):
         kind = "Full" if full else "Linked"
@@ -1695,14 +1781,16 @@ class MainWindow(Gtk.Window):
         def worker():
             try:
                 config = self.api_for(guest).guest_config(
-                    guest.node, guest.vmid, guest.kind)
+                    guest.node, guest.vmid, guest.kind
+                )
             except Exception as exc:
                 GLib.idle_add(self.set_status, f"{guest.label}: {exc}")
                 return
             GLib.idle_add(self._confirm_delete, key, config)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"delete-check-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"delete-check-{guest.vmid}"
+        ).start()
 
     def _confirm_delete(self, key, config):
         guest = self.sidebar.guests.get(key)
@@ -1714,17 +1802,24 @@ class MainWindow(Gtk.Window):
             self._error_dialog(
                 "Guest is protected",
                 f"{guest.label} has Proxmox's protection flag set.\n\n"
-                "Clear it in the guest's options before deleting.")
+                "Clear it in the guest's options before deleting.",
+            )
             self.sidebar.rebuild()
             return False
 
-        kind = "template" if guest.template else (
-            "container" if guest.is_container else "VM")
+        kind = (
+            "template"
+            if guest.template
+            else ("container" if guest.is_container else "VM")
+        )
         purge = self._confirm_destroy(
             title=f"Delete {kind}",
-            message=(f"Permanently delete {guest.label} and every disk it "
-                     f"owns?\n\nThis cannot be undone."),
-            expected=str(guest.vmid))
+            message=(
+                f"Permanently delete {guest.label} and every disk it "
+                f"owns?\n\nThis cannot be undone."
+            ),
+            expected=str(guest.vmid),
+        )
         if purge is None:
             self.set_status("")
             return False
@@ -1736,14 +1831,16 @@ class MainWindow(Gtk.Window):
         def worker():
             try:
                 self.api_for(guest).delete_guest(
-                    guest.node, guest.vmid, guest.kind, purge=purge)
+                    guest.node, guest.vmid, guest.kind, purge=purge
+                )
             except Exception as exc:
                 GLib.idle_add(self._delete_failed, guest, str(exc))
                 return
             GLib.idle_add(self._delete_started, guest)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"delete-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"delete-{guest.vmid}"
+        ).start()
         return False
 
     def _delete_started(self, guest):
@@ -1774,8 +1871,7 @@ class MainWindow(Gtk.Window):
             return
         self._burst_until = time.monotonic() + seconds
         if self._burst_source is None:
-            self._burst_source = GLib.timeout_add_seconds(
-                interval, self._burst_tick)
+            self._burst_source = GLib.timeout_add_seconds(interval, self._burst_tick)
         self.refresh()
 
     def _burst_tick(self):
@@ -1822,8 +1918,7 @@ class MainWindow(Gtk.Window):
                     # connection; the tree keeps its last known guests.
                     failures.append(f"{connection.label}: {exc}")
                 except Exception as exc:
-                    failures.append(
-                        f"{connection.label}: {type(exc).__name__}: {exc}")
+                    failures.append(f"{connection.label}: {type(exc).__name__}: {exc}")
             GLib.idle_add(self._on_polled, failures, initial)
 
         threading.Thread(target=worker, daemon=True, name="proxmox-poll").start()
@@ -1855,9 +1950,9 @@ class MainWindow(Gtk.Window):
             self.summary.show_guest(guest, self.api_for(guest))
         return False
 
-    PENDING_TIMEOUT = 45        # give up waiting for a status change
+    PENDING_TIMEOUT = 45  # give up waiting for a status change
     RENAME_TIMEOUT = 30
-    REBOOT_ACK = 8              # an action with no status to wait for
+    REBOOT_ACK = 8  # an action with no status to wait for
 
     # -- changes the cluster has not caught up with ---------------------
 
@@ -1874,8 +1969,8 @@ class MainWindow(Gtk.Window):
         if target is not None and getattr(guest, field, None) == target:
             return
         self._busy[key] = _PendingChange(
-            field, was, target, label,
-            time.monotonic() + timeout, name)
+            field, was, target, label, time.monotonic() + timeout, name
+        )
         self._push_busy()
 
     def _clear_busy(self, key):
@@ -1884,8 +1979,8 @@ class MainWindow(Gtk.Window):
 
     def _push_busy(self):
         self.sidebar.set_busy(
-            {key: (change.label, change.name)
-             for key, change in self._busy.items()})
+            {key: (change.label, change.name) for key, change in self._busy.items()}
+        )
 
     def _resolve_busy(self):
         """Drop every wait the freshly polled inventory has answered.
@@ -1897,8 +1992,11 @@ class MainWindow(Gtk.Window):
         if not self._busy:
             return
         now = time.monotonic()
-        done = [key for key, change in self._busy.items()
-                if change.resolved_by(self._polled_guest(key), now)]
+        done = [
+            key
+            for key, change in self._busy.items()
+            if change.resolved_by(self._polled_guest(key), now)
+        ]
         renamed = any(self._busy[key].field == "name" for key in done)
         for key in done:
             del self._busy[key]
@@ -1964,8 +2062,8 @@ class MainWindow(Gtk.Window):
                 del self._console_offline[key]
                 self.set_status(f"{guest.label}: reconnecting")
                 GLib.idle_add(
-                    lambda k=key: (self.reconnect_console(k, automatic=True),
-                                   False)[1])
+                    lambda k=key: (self.reconnect_console(k, automatic=True), False)[1]
+                )
 
     def _on_view_changed(self, _sidebar):
         """Folder view needs each guest's notes, which node view never reads."""
@@ -1983,9 +2081,10 @@ class MainWindow(Gtk.Window):
         connections = self.connections.all
         for connection in connections:
             item = Gtk.MenuItem(label=connection.label)
-            item.connect("activate",
-                         lambda _i, cid=connection.id:
-                         self.disconnect_connection(cid))
+            item.connect(
+                "activate",
+                lambda _i, cid=connection.id: self.disconnect_connection(cid),
+            )
             self.disconnect_menu.append(item)
         self.disconnect_menu.show_all()
         self.disconnect_item.set_sensitive(bool(connections))
@@ -2046,9 +2145,11 @@ class MainWindow(Gtk.Window):
 
         if action_defs.ACTIONS_BY_NAME.get(action_name) is None:
             return
-        targets = [g for g in guests
-                   if action_defs.enabled_for(
-                       action_defs.resolve(action_name, g), g)]
+        targets = [
+            g
+            for g in guests
+            if action_defs.enabled_for(action_defs.resolve(action_name, g), g)
+        ]
         if not targets:
             return
         action = action_defs.resolve(action_name, targets[0])
@@ -2057,8 +2158,8 @@ class MainWindow(Gtk.Window):
         if len(targets) > 6:
             names += f", and {len(targets) - 6} more"
         if not self._confirm(
-                action.label,
-                f"{action.label} {len(targets)} guests?\n{names}"):
+            action.label, f"{action.label} {len(targets)} guests?\n{names}"
+        ):
             return
 
         for guest in targets:
@@ -2072,14 +2173,18 @@ class MainWindow(Gtk.Window):
         name = self._prompt(
             "Take Snapshot",
             f"Snapshot name for {len(targets)} guests:",
-            placeholder="before-maintenance")
+            placeholder="before-maintenance",
+        )
         if not name:
             return
         for guest in targets:
             self._run_snapshot(
-                guest, f"Snapshot {name}",
+                guest,
+                f"Snapshot {name}",
                 lambda g=guest: self.api_for(g).create_snapshot(
-                    g.node, g.vmid, name, "", False, g.kind))
+                    g.node, g.vmid, name, "", False, g.kind
+                ),
+            )
 
     def context_guest(self, console=_CURRENT):
         """The guest the toolbar and VM menu act on.
@@ -2118,14 +2223,16 @@ class MainWindow(Gtk.Window):
 
         def worker():
             try:
-                config = self.api_for(guest).guest_config(guest.node, guest.vmid,
-                                               guest.kind)
+                config = self.api_for(guest).guest_config(
+                    guest.node, guest.vmid, guest.kind
+                )
             except Exception:
                 config = None
             GLib.idle_add(self._apply_config, key, config)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"config-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"config-{guest.vmid}"
+        ).start()
 
     @staticmethod
     def absorb_config(guest, config):
@@ -2191,8 +2298,11 @@ class MainWindow(Gtk.Window):
             return
         action_name = action.name
 
-        text = (action_defs.confirmation_text(action, guest, self.config)
-                if confirm else None)
+        text = (
+            action_defs.confirmation_text(action, guest, self.config)
+            if confirm
+            else None
+        )
         if text and not self._confirm(action.label, text):
             return
 
@@ -2200,7 +2310,9 @@ class MainWindow(Gtk.Window):
 
         def worker():
             try:
-                self.api_for(guest).power(guest.node, guest.vmid, action_name, guest.kind)
+                self.api_for(guest).power(
+                    guest.node, guest.vmid, action_name, guest.kind
+                )
             except ProxmoxError as exc:
                 GLib.idle_add(self._action_failed, action, guest, str(exc))
                 return
@@ -2223,7 +2335,9 @@ class MainWindow(Gtk.Window):
         console = self.consoles.get(guest.key)
         if verb and console is not None:
             self._pending_actions[guest.key] = (
-                guest.status, time.monotonic() + self.PENDING_TIMEOUT)
+                guest.status,
+                time.monotonic() + self.PENDING_TIMEOUT,
+            )
             console.show_pending_state(f"{verb}...")
 
         # And on the row, whether or not a console is open: the task can
@@ -2232,13 +2346,17 @@ class MainWindow(Gtk.Window):
         # after everything else said otherwise.
         expected = action_defs.EXPECTED_STATUS.get(action.name)
         self._mark_busy(
-            guest.key, "status", guest.status, expected,
+            guest.key,
+            "status",
+            guest.status,
+            expected,
             f"{verb or action.label}...",
             # A reboot ends where it started, so nothing in the inventory
             # will ever confirm it. Acknowledge the click briefly rather
             # than spinning for the full timeout waiting for a change that
             # is not coming.
-            self.PENDING_TIMEOUT if expected else self.REBOOT_ACK)
+            self.PENDING_TIMEOUT if expected else self.REBOOT_ACK,
+        )
 
         self.burst_poll()
         return False
@@ -2254,8 +2372,7 @@ class MainWindow(Gtk.Window):
     # ------------------------------------------------------------------
 
     def _snapshot_action(self, which, key=None):
-        guest = (self.sidebar.guests.get(key) if key
-                 else self.context_guest())
+        guest = self.sidebar.guests.get(key) if key else self.context_guest()
         if guest is None or guest.template:
             return
 
@@ -2445,7 +2562,9 @@ class MainWindow(Gtk.Window):
         argv = command.split()
         self._agent_call(
             "Run command",
-            lambda guest: self.api_for(guest).agent_exec_wait(guest.node, guest.vmid, argv),
+            lambda guest: self.api_for(guest).agent_exec_wait(
+                guest.node, guest.vmid, argv
+            ),
             render,
         )
 
@@ -2458,7 +2577,9 @@ class MainWindow(Gtk.Window):
 
         def worker():
             try:
-                interfaces = self.api_for(guest).guest_interfaces(guest.node, guest.vmid)
+                interfaces = self.api_for(guest).guest_interfaces(
+                    guest.node, guest.vmid
+                )
             except Exception as exc:
                 GLib.idle_add(self.set_status, f"{guest.label}: {exc}")
                 return
@@ -2502,8 +2623,7 @@ class MainWindow(Gtk.Window):
         if guest is not None:
             self.open_console(guest.key)
 
-    def open_console(self, key, replace=False, takeover=False,
-                     automatic=False):
+    def open_console(self, key, replace=False, takeover=False, automatic=False):
         """Open, or rebuild, a guest's console.
 
         'takeover' means the user has already been told somebody else is on
@@ -2544,8 +2664,11 @@ class MainWindow(Gtk.Window):
             self._install_console(
                 guest,
                 PlaceholderConsole(
-                    title=guest.name, status=guest.status,
-                    on_reconnect=lambda k=guest.key: self.reconnect_console(k)))
+                    title=guest.name,
+                    status=guest.status,
+                    on_reconnect=lambda k=guest.key: self.reconnect_console(k),
+                ),
+            )
             self._console_offline[guest.key] = guest.status
             self.set_status(f"{guest.label} is {guest.status}")
             return
@@ -2557,8 +2680,11 @@ class MainWindow(Gtk.Window):
         self._install_console(
             guest,
             PlaceholderConsole(
-                title=guest.name, status="connecting",
-                on_reconnect=lambda k=guest.key: self.reconnect_console(k)))
+                title=guest.name,
+                status="connecting",
+                on_reconnect=lambda k=guest.key: self.reconnect_console(k),
+            ),
+        )
         self.set_status(f"{guest.label}: connecting...")
 
         def worker():
@@ -2630,9 +2756,11 @@ class MainWindow(Gtk.Window):
         like somebody else was on it, and every reconnect would stop to ask.
         """
         console = self.consoles.get(key)
-        return bool(console is not None
-                    and getattr(console, "protocol", "") == "spice"
-                    and getattr(console, "connected", False))
+        return bool(
+            console is not None
+            and getattr(console, "protocol", "") == "spice"
+            and getattr(console, "connected", False)
+        )
 
     def _spice_occupancy(self, guest):
         """How many *other* clients hold this guest's SPICE session.
@@ -2655,18 +2783,21 @@ class MainWindow(Gtk.Window):
         try:
             count, addresses = api.spice_clients(guest.node, guest.vmid)
         except ProxmoxError as exc:
-            print(f"[console] {guest.label}: could not check for other SPICE "
-                  f"clients ({exc})")
+            print(
+                f"[console] {guest.label}: could not check for other SPICE "
+                f"clients ({exc})"
+            )
             return None
         except Exception as exc:
-            print(f"[console] {guest.label}: SPICE client check failed "
-                  f"({type(exc).__name__}: {exc})")
+            print(
+                f"[console] {guest.label}: SPICE client check failed "
+                f"({type(exc).__name__}: {exc})"
+            )
             return None
         ours = 1 if self._holds_spice_session(guest.key) else 0
         if not ours:
             dropped = self._recent_spice.get(guest.key)
-            if dropped is not None and (time.monotonic() - dropped
-                                        < self.SPICE_LINGER):
+            if dropped is not None and (time.monotonic() - dropped < self.SPICE_LINGER):
                 # We pulled our own session down a moment ago -- rebuilding
                 # this very console is the usual reason we are here -- and
                 # QEMU may not have finished noticing. Claim it as ours.
@@ -2692,7 +2823,8 @@ class MainWindow(Gtk.Window):
                 config = guest.config
             else:
                 config = self.api_for(guest).guest_config(
-                    guest.node, guest.vmid, guest.kind)
+                    guest.node, guest.vmid, guest.kind
+                )
                 self.absorb_config(guest, config)
         except ProxmoxError as exc:
             config = {}
@@ -2700,8 +2832,9 @@ class MainWindow(Gtk.Window):
 
         forced_vnc = guest.key in self._force_vnc
         forced_spice = guest.key in self._force_spice
-        settings_vnc = (self.guest_settings(guest).get("protocol") == "vnc"
-                        and not forced_spice)
+        settings_vnc = (
+            self.guest_settings(guest).get("protocol") == "vnc" and not forced_spice
+        )
         prefer_vnc = bool(self.config.get("prefer_vnc")) and not forced_spice
 
         spice_possible = (
@@ -2727,11 +2860,15 @@ class MainWindow(Gtk.Window):
                 if not takeover:
                     occupancy = self._spice_occupancy(guest)
                     if occupancy is not None and occupancy[0] > 0:
-                        return {"protocol": "occupied",
-                                "clients": occupancy[0],
-                                "addresses": occupancy[1]}
+                        return {
+                            "protocol": "occupied",
+                            "clients": occupancy[0],
+                            "addresses": occupancy[1],
+                        }
                 try:
-                    params = self.api_for(guest).spice_config(guest.node, guest.vmid, guest.kind)
+                    params = self.api_for(guest).spice_config(
+                        guest.node, guest.vmid, guest.kind
+                    )
                     guest.console_note = ""
                     return {"protocol": "spice", "params": params}
                 except ProxmoxError as exc:
@@ -2772,10 +2909,12 @@ class MainWindow(Gtk.Window):
         """Console settings for one guest, falling back to the globals."""
         stored = (self.config.get("guest_prefs") or {}).get(key, {})
         return {
-            "scaling": stored.get("scale_to_fit",
-                                  self.config.get("scale_to_fit", False)),
-            "auto_resize": stored.get("auto_resize",
-                                      self.config.get("auto_resize", True)),
+            "scaling": stored.get(
+                "scale_to_fit", self.config.get("scale_to_fit", False)
+            ),
+            "auto_resize": stored.get(
+                "auto_resize", self.config.get("auto_resize", True)
+            ),
             "codec_index": stored.get("codec_index", 0),
             "compression_index": stored.get("compression_index", 0),
             # Clipboard sharing, audio and the console protocol are NOT
@@ -2845,6 +2984,7 @@ class MainWindow(Gtk.Window):
         if plan["protocol"] == "spice" and (
             prefs["codec_index"] or prefs["compression_index"]
         ):
+
             def apply_prefs():
                 # Only meaningful once the display channel exists.
                 console.set_codec_index(prefs["codec_index"])
@@ -2858,15 +2998,18 @@ class MainWindow(Gtk.Window):
         if plan["protocol"] == "vnc" and not guest.is_container:
             reason = plan.get("reason") or "no SPICE display configured"
             self.set_status(f"{guest.label}: VNC - {reason}")
-        elif (plan["protocol"] == "spice"
-                and self.config.get("enable_audio", True)
-                and guest.config
-                and not audio_is_spice(guest.config.get("audio0"))):
+        elif (
+            plan["protocol"] == "spice"
+            and self.config.get("enable_audio", True)
+            and guest.config
+            and not audio_is_spice(guest.config.get("audio0"))
+        ):
             # Nothing client-side can produce sound for a VM that has no
             # audio device, and that is the Proxmox default.
             self.set_status(
                 f"{guest.label}: no SPICE audio device "
-                "(add audio0: device=ich9-intel-hda,driver=spice in Proxmox)")
+                "(add audio0: device=ich9-intel-hda,driver=spice in Proxmox)"
+            )
         return False
 
     # -- somebody else is already on it ---------------------------------
@@ -2881,13 +3024,10 @@ class MainWindow(Gtk.Window):
         described as where the connection arrives from, which is all they
         honestly say.
         """
-        subject = ("Another client is" if count == 1
-                   else f"{count} other clients are")
+        subject = "Another client is" if count == 1 else f"{count} other clients are"
         text = f"{subject} already connected to this VM's SPICE console."
-        hosts = sorted({a.rsplit(":", 1)[0].strip("[]")
-                        for a in addresses or () if a})
-        remote = [h for h in hosts
-                  if h not in ("127.0.0.1", "::1", "localhost", "")]
+        hosts = sorted({a.rsplit(":", 1)[0].strip("[]") for a in addresses or () if a})
+        remote = [h for h in hosts if h not in ("127.0.0.1", "::1", "localhost", "")]
         if remote:
             text += f"  Arriving from {', '.join(remote[:3])}."
         return text
@@ -2900,8 +3040,7 @@ class MainWindow(Gtk.Window):
         decision, never a side effect of double-clicking a VM.
         """
         key = guest.key
-        summary = self._occupancy_text(plan.get("clients", 1),
-                                       plan.get("addresses"))
+        summary = self._occupancy_text(plan.get("clients", 1), plan.get("addresses"))
         self.set_status(f"{guest.label}: {summary}")
 
         def take_over():
@@ -2923,8 +3062,8 @@ class MainWindow(Gtk.Window):
                     "Console already in use",
                     summary + "\n\nQEMU serves one SPICE client at a time, "
                     "so taking over will disconnect them. VNC can be shared.",
-                    actions=[("Take Over", take_over),
-                             ("Open with VNC", use_vnc)])
+                    actions=[("Take Over", take_over), ("Open with VNC", use_vnc)],
+                )
 
         if automatic:
             # Nothing was clicked -- a restored session, or the poll finding
@@ -2946,14 +3085,17 @@ class MainWindow(Gtk.Window):
     def _ask_takeover(self, guest, summary):
         """Ask what to do about an occupied console. Returns take/vnc/None."""
         dialog = Gtk.MessageDialog(
-            transient_for=self, modal=True,
+            transient_for=self,
+            modal=True,
             message_type=Gtk.MessageType.QUESTION,
             buttons=Gtk.ButtonsType.NONE,
-            text=f"{guest.label}: console already in use")
+            text=f"{guest.label}: console already in use",
+        )
         dialog.format_secondary_text(
             summary + "\n\nQEMU serves one SPICE client at a time, so taking "
             "over will disconnect them. VNC can be shared, at the cost of "
-            "the clipboard, audio and guest resize.")
+            "the clipboard, audio and guest resize."
+        )
         dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
         vnc = dialog.add_button("Open with VNC", 2)
         vnc.get_style_context().add_class("suggested-action")
@@ -2978,10 +3120,10 @@ class MainWindow(Gtk.Window):
         """Redraw every name after the tab or tree format changed."""
         self.sidebar.set_name_format(
             self.config.get("tree_name_format", "name"),
-            templates_last=bool(self.config.get("templates_last", True)))
+            templates_last=bool(self.config.get("templates_last", True)),
+        )
         for page in self.panes.all_pages():
-            guest = self.sidebar.guests.get(
-                getattr(page, "guest_key", None) or "")
+            guest = self.sidebar.guests.get(getattr(page, "guest_key", None) or "")
             notebook = self.panes.notebook_of(page)
             label = notebook.get_tab_label(page) if notebook else None
             if guest is not None and hasattr(label, "set_title"):
@@ -3007,13 +3149,18 @@ class MainWindow(Gtk.Window):
             return -1
 
         label = ConsoleTabLabel(
-            self.tab_title(guest), console.protocol,
-            on_close=lambda c=console: self.close_console_widget(c))
+            self.tab_title(guest),
+            console.protocol,
+            on_close=lambda c=console: self.close_console_widget(c),
+        )
 
         # Replacing in the pane the old console was in, so a reconnect
         # does not yank the tab back to pane 0.
-        notebook = (self.panes.notebook_of(old)
-                    if old is not None and old is not console else None)
+        notebook = (
+            self.panes.notebook_of(old)
+            if old is not None and old is not console
+            else None
+        )
         page = notebook.page_num(old) if notebook is not None else -1
         if page >= 0:
             self.panes.insert(console, label, notebook, page)
@@ -3046,8 +3193,11 @@ class MainWindow(Gtk.Window):
 
     def _shutdown_console(self, console):
         key = getattr(console, "guest_key", None)
-        if (key and getattr(console, "protocol", "") == "spice"
-                and getattr(console, "connected", False)):
+        if (
+            key
+            and getattr(console, "protocol", "") == "spice"
+            and getattr(console, "connected", False)
+        ):
             # Remember that the session QEMU is about to notice losing was
             # ours, so the occupancy check does not mistake it for a
             # stranger a second from now.
@@ -3146,8 +3296,9 @@ class MainWindow(Gtk.Window):
                 return
             GLib.idle_add(self._say_displaced, key, occupancy)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"displaced-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"displaced-{guest.vmid}"
+        ).start()
 
     def _say_displaced(self, key, occupancy):
         console = self.consoles.get(key)
@@ -3177,8 +3328,8 @@ class MainWindow(Gtk.Window):
             "shared.",
             icon="dialog-warning-symbolic",
             can_reconnect=False,
-            actions=[("Take It Back", take_back),
-                     ("Open with VNC", use_vnc)])
+            actions=[("Take It Back", take_back), ("Open with VNC", use_vnc)],
+        )
         self.set_status(f"{guest.label}: another client took over the console")
         return False
 
@@ -3195,10 +3346,11 @@ class MainWindow(Gtk.Window):
             return
         self._console_offline.pop(key, None)
         if getattr(self, "_reconnecting", None) == key:
-            return                      # a reconnect is already in flight
+            return  # a reconnect is already in flight
         self._reconnecting = key
         GLib.timeout_add_seconds(
-            8, lambda: (setattr(self, "_reconnecting", None), False)[1])
+            8, lambda: (setattr(self, "_reconnecting", None), False)[1]
+        )
         self.open_console(key, replace=True, automatic=automatic)
 
     # -- pop out -------------------------------------------------------
@@ -3238,14 +3390,14 @@ class MainWindow(Gtk.Window):
         if self._closing:
             return
         guest = self.sidebar.guests.get(key)
-        title = (self.tab_title(guest) if guest
-                 else getattr(console, "title", "console"))
+        title = self.tab_title(guest) if guest else getattr(console, "title", "console")
 
         label = ConsoleTabLabel(
             title, console.protocol, on_close=lambda: self.close_console(key)
         )
-        self.panes.insert(console, label, self.panes.primary,
-                          self._popout_pages.pop(key, -1))
+        self.panes.insert(
+            console, label, self.panes.primary, self._popout_pages.pop(key, -1)
+        )
         self.panes.focus_page(console)
         self.consoles[key] = console
         self._sync_view_menu()
@@ -3385,13 +3537,13 @@ class MainWindow(Gtk.Window):
             # is pointless when it is the only tab in a pane -- that would
             # just move an empty gap around.
             panes = self.panes.pane_count()
-            holder = (self.panes.notebook_of(console)
-                      if console is not None else None)
+            holder = self.panes.notebook_of(console) if console is not None else None
             can_split = bool(
                 console is not None
                 and panes < MAX_PANES
                 and holder is not None
-                and holder.get_n_pages() > 1)
+                and holder.get_n_pages() > 1
+            )
             self.split_item.set_sensitive(can_split)
             self.split_item_tb.set_sensitive(can_split)
             self.gather_item.set_sensitive(panes > 1)
@@ -3399,12 +3551,12 @@ class MainWindow(Gtk.Window):
             self.fullscreen_item.set_sensitive(console is not None)
             self.fullscreen_item_tb.set_sensitive(console is not None)
             self.popout_item.set_sensitive(console is not None)
-            self.ctrl_alt_del_item.set_sensitive(
-                bool(supports.get("ctrl_alt_del")))
+            self.ctrl_alt_del_item.set_sensitive(bool(supports.get("ctrl_alt_del")))
             self.screenshot_item.set_sensitive(
                 console is not None
                 and hasattr(console, "screenshot")
-                and getattr(console, "connected", False))
+                and getattr(console, "connected", False)
+            )
             self.close_console_item.set_sensitive(console is not None)
             self._sync_protocol_switch(console)
 
@@ -3424,8 +3576,11 @@ class MainWindow(Gtk.Window):
     def _sync_protocol_switch(self, console):
         """Point the reopen entry at whichever protocol is not in use."""
         item = self.switch_protocol_item
-        guest = self.sidebar.guests.get(
-            getattr(console, "guest_key", None) or "") if console else None
+        guest = (
+            self.sidebar.guests.get(getattr(console, "guest_key", None) or "")
+            if console
+            else None
+        )
         if console is None or guest is None:
             item.set_label("Reopen Console with VNC")
             item.set_sensitive(False)
@@ -3437,14 +3592,15 @@ class MainWindow(Gtk.Window):
             item.set_sensitive(True)
             item.set_tooltip_text(
                 "Reconnect this console over VNC. It stays on VNC until the "
-                "tab is closed.")
+                "tab is closed."
+            )
         else:
             item.set_label("Reopen Console with SPICE")
             usable = self._can_use_spice(guest)
             item.set_sensitive(usable)
             item.set_tooltip_text(
-                "" if usable
-                else guest.console_note or "SPICE is not available here")
+                "" if usable else guest.console_note or "SPICE is not available here"
+            )
 
     def _on_auto_resize_toggled(self, item):
         if self._updating_view_menu:
@@ -3491,8 +3647,7 @@ class MainWindow(Gtk.Window):
         if self.panes.split(console) is None:
             self.set_status("Could not split this console out")
             return
-        self.set_status(
-            f"{self.panes.pane_count()} panes - drag tabs between them")
+        self.set_status(f"{self.panes.pane_count()} panes - drag tabs between them")
 
     def _gather_consoles(self):
         if self.panes.pane_count() <= 1:
@@ -3526,13 +3681,15 @@ class MainWindow(Gtk.Window):
         """
         try:
             chooser = Gtk.FileChooserNative.new(
-                title, self, Gtk.FileChooserAction.SAVE, "_Save", "_Cancel")
+                title, self, Gtk.FileChooserAction.SAVE, "_Save", "_Cancel"
+            )
         except (AttributeError, TypeError):
             chooser = Gtk.FileChooserDialog(
-                title=title, transient_for=self,
-                action=Gtk.FileChooserAction.SAVE)
-            chooser.add_buttons("Cancel", Gtk.ResponseType.CANCEL,
-                                "Save", Gtk.ResponseType.ACCEPT)
+                title=title, transient_for=self, action=Gtk.FileChooserAction.SAVE
+            )
+            chooser.add_buttons(
+                "Cancel", Gtk.ResponseType.CANCEL, "Save", Gtk.ResponseType.ACCEPT
+            )
             # Only the GTK dialog is ours to theme; the native one is the
             # system's and must be left alone.
             theme_decorate(chooser)
@@ -3555,8 +3712,7 @@ class MainWindow(Gtk.Window):
         console = self.current_console()
         if console is None:
             return
-        path = self._save_chooser("Save Console Screenshot",
-                                  f"{console.title}.png")
+        path = self._save_chooser("Save Console Screenshot", f"{console.title}.png")
         if not path:
             return
         # The native dialog does not append the filter's extension.
@@ -3567,8 +3723,9 @@ class MainWindow(Gtk.Window):
         except Exception as exc:
             self.set_status(f"Screenshot failed: {exc}")
             return
-        self.set_status(f"Screenshot saved to {path}" if ok
-                        else "Nothing to capture yet")
+        self.set_status(
+            f"Screenshot saved to {path}" if ok else "Nothing to capture yet"
+        )
 
     def _toggle_fullscreen(self):
         self.fullscreen_control.toggle()
@@ -3647,15 +3804,16 @@ class MainWindow(Gtk.Window):
         entry = Gtk.Entry()
         entry.set_activates_default(True)
         entry.connect(
-            "changed",
-            lambda e: confirm.set_sensitive(e.get_text().strip() == expected))
+            "changed", lambda e: confirm.set_sensitive(e.get_text().strip() == expected)
+        )
         content.pack_start(entry, False, False, 0)
 
         purge = Gtk.CheckButton(label="Also remove from backup jobs and HA")
         purge.set_active(True)
         purge.set_tooltip_text(
             "Without this, a nightly backup job keeps trying to back up a "
-            "guest that no longer exists")
+            "guest that no longer exists"
+        )
         content.pack_start(purge, False, False, 0)
 
         theme_decorate(dialog)

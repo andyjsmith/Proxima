@@ -10,11 +10,11 @@ and offers the way back.
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import GLib, Gtk
 
 try:
     import cairo
-except ImportError:                       # pragma: no cover
+except ImportError:  # pragma: no cover
     cairo = None
 
 
@@ -54,7 +54,8 @@ class ConsoleStatusPanel(Gtk.Box):
         self.set_no_show_all(True)
 
         self.icon = Gtk.Image.new_from_icon_name(
-            "network-offline-symbolic", Gtk.IconSize.DIALOG)
+            "network-offline-symbolic", Gtk.IconSize.DIALOG
+        )
         self.pack_start(self.icon, False, False, 0)
 
         self.title = Gtk.Label()
@@ -70,24 +71,34 @@ class ConsoleStatusPanel(Gtk.Box):
         # Reconnect sits with any extra choices the caller adds, so a panel
         # offering "take it over or use VNC" reads as one row of options
         # rather than one button and a stray afterthought.
-        self.buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL,
-                               spacing=8)
+        self.buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.buttons.set_halign(Gtk.Align.CENTER)
         self.pack_start(self.buttons, False, False, 0)
 
         self.reconnect_button = Gtk.Button(label="Reconnect")
-        self.reconnect_button.connect("clicked",
-                                      lambda *_: self.on_reconnect())
+        self.reconnect_button.connect("clicked", lambda *_: self.on_reconnect())
         self.buttons.pack_start(self.reconnect_button, False, False, 0)
 
         self._extra = []
 
-        for child in (self.icon, self.title, self.detail, self.buttons,
-                      self.reconnect_button):
+        for child in (
+            self.icon,
+            self.title,
+            self.detail,
+            self.buttons,
+            self.reconnect_button,
+        ):
             child.show()
 
-    def show_message(self, title, detail="", icon="network-offline-symbolic",
-                     can_reconnect=True, actions=None, busy=False):
+    def show_message(
+        self,
+        title,
+        detail="",
+        icon="network-offline-symbolic",
+        can_reconnect=True,
+        actions=None,
+        busy=False,
+    ):
         """Put a message over the console.
 
         'actions' is a list of (label, callback) shown beside Reconnect. The
@@ -105,8 +116,9 @@ class ConsoleStatusPanel(Gtk.Box):
         self.detail.set_visible(bool(detail))
         self.icon.set_from_icon_name(icon, Gtk.IconSize.DIALOG)
         if busy:
-            self.icon.set_from_icon_name("content-loading-symbolic",
-                                         Gtk.IconSize.DIALOG)
+            self.icon.set_from_icon_name(
+                "content-loading-symbolic", Gtk.IconSize.DIALOG
+            )
         self.reconnect_button.set_visible(can_reconnect)
 
         for label, callback in actions or ():

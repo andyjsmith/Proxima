@@ -31,7 +31,7 @@ one, and a pane whose last tab is dragged away hides itself again.
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GObject, Gtk  # noqa: E402
+from gi.repository import GObject, Gtk
 
 MAX_PANES = 4
 
@@ -47,8 +47,7 @@ class SplitView(Gtk.Box):
     __gsignals__ = {
         # (notebook, page widget, page index) -- forwarded from whichever
         # notebook emitted it, so the window does not have to track four.
-        "page-switched": (GObject.SignalFlags.RUN_FIRST, None,
-                          (object, object, int)),
+        "page-switched": (GObject.SignalFlags.RUN_FIRST, None, (object, object, int)),
         # The number of visible panes changed.
         "panes-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
     }
@@ -152,7 +151,7 @@ class SplitView(Gtk.Box):
             return None
         target = self._first_hidden()
         if target is None:
-            return None                  # already at four
+            return None  # already at four
 
         label = source.get_tab_label(page)
         title = getattr(label, "title", None)
@@ -162,8 +161,10 @@ class SplitView(Gtk.Box):
             # A fresh label: the old one belongs to the page that was just
             # removed and carries a close callback bound to it, which is
             # still correct, so it is reused when there is one.
-            target.append_page(page, label if label is not None
-                               else Gtk.Label(label=title or "console"))
+            target.append_page(
+                page,
+                label if label is not None else Gtk.Label(label=title or "console"),
+            )
             target.set_tab_reorderable(page, True)
             target.set_tab_detachable(page, True)
         finally:
@@ -183,8 +184,8 @@ class SplitView(Gtk.Box):
                 try:
                     notebook.remove(page)
                     self.primary.append_page(
-                        page, label if label is not None
-                        else Gtk.Label(label="console"))
+                        page, label if label is not None else Gtk.Label(label="console")
+                    )
                     self.primary.set_tab_reorderable(page, True)
                     self.primary.set_tab_detachable(page, True)
                 finally:

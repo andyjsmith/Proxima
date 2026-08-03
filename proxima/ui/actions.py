@@ -7,39 +7,76 @@ selected guest are disabled rather than hidden.
 
 from collections import namedtuple
 
-Action = namedtuple(
-    "Action", "name label icon tooltip confirm states kinds")
+Action = namedtuple("Action", "name label icon tooltip confirm states kinds")
 
 
 POWER_ACTIONS = [
     # A suspended guest is resumed with start, not resume: resume is for a
     # guest paused in memory, start is what brings back one suspended to
     # disk. They never apply at the same time, so the UI shows one button.
-    Action("start", "Start", "media-playback-start-symbolic",
-           "Start", None,
-           ("stopped", "suspended"), ("qemu", "lxc")),
-    Action("shutdown", "Shutdown", "system-shutdown-symbolic",
-           "ACPI shutdown",
-           "Shut down {name}?",
-           ("running", "paused"), ("qemu", "lxc")),
-    Action("stop", "Stop", "media-playback-stop-symbolic",
-           "Immediate power off",
-           "Stop {name}? The guest OS will not shut down cleanly.",
-           ("running", "paused", "suspended"), ("qemu", "lxc")),
-    Action("reset", "Reset", "view-refresh-symbolic",
-           "Hard reset",
-           "Reset {name}? The guest OS will not shut down cleanly.",
-           ("running",), ("qemu",)),
-    Action("reboot", "Reboot", "system-reboot-symbolic",
-           "ACPI reboot", None,
-           ("running",), ("qemu", "lxc")),
-    Action("suspend", "Suspend", "media-playback-pause-symbolic",
-           "Pause, keep memory",
-           "Pause {name}? The guest stops running until it is resumed.",
-           ("running",), ("qemu", "lxc")),
-    Action("resume", "Resume", "media-playback-start-symbolic",
-           "Resume", None,
-           ("paused",), ("qemu", "lxc")),
+    Action(
+        "start",
+        "Start",
+        "media-playback-start-symbolic",
+        "Start",
+        None,
+        ("stopped", "suspended"),
+        ("qemu", "lxc"),
+    ),
+    Action(
+        "shutdown",
+        "Shutdown",
+        "system-shutdown-symbolic",
+        "ACPI shutdown",
+        "Shut down {name}?",
+        ("running", "paused"),
+        ("qemu", "lxc"),
+    ),
+    Action(
+        "stop",
+        "Stop",
+        "media-playback-stop-symbolic",
+        "Immediate power off",
+        "Stop {name}? The guest OS will not shut down cleanly.",
+        ("running", "paused", "suspended"),
+        ("qemu", "lxc"),
+    ),
+    Action(
+        "reset",
+        "Reset",
+        "view-refresh-symbolic",
+        "Hard reset",
+        "Reset {name}? The guest OS will not shut down cleanly.",
+        ("running",),
+        ("qemu",),
+    ),
+    Action(
+        "reboot",
+        "Reboot",
+        "system-reboot-symbolic",
+        "ACPI reboot",
+        None,
+        ("running",),
+        ("qemu", "lxc"),
+    ),
+    Action(
+        "suspend",
+        "Suspend",
+        "media-playback-pause-symbolic",
+        "Pause, keep memory",
+        "Pause {name}? The guest stops running until it is resumed.",
+        ("running",),
+        ("qemu", "lxc"),
+    ),
+    Action(
+        "resume",
+        "Resume",
+        "media-playback-start-symbolic",
+        "Resume",
+        None,
+        ("paused",),
+        ("qemu", "lxc"),
+    ),
 ]
 
 # The subset shown on the toolbar, in order. The rest live in the menus.
@@ -96,9 +133,8 @@ def visible_actions(guest):
     result = []
     for action in POWER_ACTIONS:
         if action.name == "resume":
-            continue                     # folded into the start entry
-        result.append(start_action_for(guest)
-                      if action.name == "start" else action)
+            continue  # folded into the start entry
+        result.append(start_action_for(guest) if action.name == "start" else action)
     return result
 
 
@@ -116,7 +152,7 @@ def enabled_for(action, guest):
     if guest.kind not in action.kinds:
         return False
     if guest.lock:
-        return False        # locked: a task is already running on it
+        return False  # locked: a task is already running on it
     return guest.status in action.states
 
 
@@ -136,7 +172,7 @@ def confirms(action_name, config=None):
     """Whether this action should stop and ask, per the user's settings."""
     key = CONFIRM_SETTINGS.get(action_name)
     if key is None:
-        return True                  # nothing configurable about it
+        return True  # nothing configurable about it
     if config is None:
         return True
     return bool(config.get(key, key != "confirm_pause"))

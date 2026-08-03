@@ -17,9 +17,7 @@ Authentication model, which is not obvious from the docs:
     as the password together with the OTP code.
 """
 
-import base64
 import json
-import socket
 import ssl
 import threading
 import time
@@ -135,7 +133,7 @@ class ProxmoxAPI:
             raise self._http_error(exc) from None
         except urllib.error.URLError as exc:
             raise ProxmoxError(f"cannot reach {self.host}: {exc.reason}") from None
-        except (socket.timeout, TimeoutError):
+        except TimeoutError:
             raise ProxmoxError(f"timed out talking to {self.host}") from None
 
         if not payload:
@@ -488,8 +486,9 @@ class ProxmoxAPI:
 
     # -- configuration -------------------------------------------------
 
-    def set_guest_config(self, node, vmid, changes=None, delete=None,
-                         kind="qemu", digest=None):
+    def set_guest_config(
+        self, node, vmid, changes=None, delete=None, kind="qemu", digest=None
+    ):
         """Change guest configuration keys, and only those keys.
 
         'digest' is the checksum that came with the config being edited.
@@ -499,8 +498,7 @@ class ProxmoxAPI:
         """
         data = {key: value for key, value in (changes or {}).items()}
         if delete:
-            data["delete"] = (delete if isinstance(delete, str)
-                              else ",".join(delete))
+            data["delete"] = delete if isinstance(delete, str) else ",".join(delete)
         if digest:
             data["digest"] = digest
         if not data:
@@ -598,8 +596,9 @@ class ProxmoxAPI:
         tell" rather than as an answer.
         """
         try:
-            result = self.post(f"/nodes/{node}/qemu/{vmid}/monitor",
-                               {"command": command})
+            result = self.post(
+                f"/nodes/{node}/qemu/{vmid}/monitor", {"command": command}
+            )
         except ProxmoxError as exc:
             # Missing privilege or an endpoint that is not there at all --
             # neither will fix itself, so stop asking. Any other failure
@@ -617,7 +616,8 @@ class ProxmoxAPI:
         # from reading an empty or unexpected payload as a real result.
         raise ProxmoxError(
             f"the monitor returned nothing usable for {command!r} "
-            f"({type(result).__name__})")
+            f"({type(result).__name__})"
+        )
 
     def spice_clients(self, node, vmid):
         """How many SPICE clients QEMU currently has on a VM.

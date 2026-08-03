@@ -1,0 +1,26 @@
+[project]
+name = "proxima"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Andy Smith", email = "andy@ajsmith.org" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+proxima = "proxima.app:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "proxima"
+module-root = ""
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.1",
+]

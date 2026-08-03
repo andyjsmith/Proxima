@@ -16,20 +16,28 @@ import time
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk
 
-HOT_ZONE = 2          # px from the top edge that re-reveals the bar
+HOT_ZONE = 2  # px from the top edge that re-reveals the bar
 POLL_MS = 120
 
 
 class FullscreenController:
-    def __init__(self, window, overlay, get_console, chrome,
-                 on_ctrl_alt_del=None, on_enter=None, on_leave=None,
-                 title=""):
+    def __init__(
+        self,
+        window,
+        overlay,
+        get_console,
+        chrome,
+        on_ctrl_alt_del=None,
+        on_enter=None,
+        on_leave=None,
+        title="",
+    ):
         self.window = window
         self.overlay = overlay
         self.get_console = get_console
-        self.chrome = chrome            # callable returning widgets to hide
+        self.chrome = chrome  # callable returning widgets to hide
         self.on_ctrl_alt_del = on_ctrl_alt_del or (lambda: None)
         self.on_enter = on_enter or (lambda: None)
         self.on_leave = on_leave or (lambda: None)
@@ -47,8 +55,7 @@ class FullscreenController:
 
     def _build_bar(self):
         self.revealer = Gtk.Revealer()
-        self.revealer.set_transition_type(
-            Gtk.RevealerTransitionType.SLIDE_DOWN)
+        self.revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
         self.revealer.set_transition_duration(150)
         self.revealer.set_halign(Gtk.Align.CENTER)
         self.revealer.set_valign(Gtk.Align.START)
@@ -63,8 +70,9 @@ class FullscreenController:
         self.title_label.set_max_width_chars(30)
         bar.pack_start(self.title_label, False, False, 4)
 
-        bar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL),
-                       False, False, 2)
+        bar.pack_start(
+            Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 2
+        )
 
         keys = Gtk.Button(label="Ctrl+Alt+Del")
         keys.set_relief(Gtk.ReliefStyle.NONE)
@@ -73,16 +81,18 @@ class FullscreenController:
 
         self.pin = Gtk.ToggleButton()
         self.pin.set_relief(Gtk.ReliefStyle.NONE)
-        self.pin.add(Gtk.Image.new_from_icon_name("view-pin-symbolic",
-                                                  Gtk.IconSize.MENU))
+        self.pin.add(
+            Gtk.Image.new_from_icon_name("view-pin-symbolic", Gtk.IconSize.MENU)
+        )
         self.pin.set_tooltip_text("Keep this bar visible")
         self.pin.connect("toggled", self._on_pin_toggled)
         bar.pack_start(self.pin, False, False, 0)
 
         leave = Gtk.Button()
         leave.set_relief(Gtk.ReliefStyle.NONE)
-        leave.add(Gtk.Image.new_from_icon_name("view-restore-symbolic",
-                                               Gtk.IconSize.MENU))
+        leave.add(
+            Gtk.Image.new_from_icon_name("view-restore-symbolic", Gtk.IconSize.MENU)
+        )
         leave.set_tooltip_text("Exit full screen (Ctrl+Alt+Enter)")
         leave.connect("clicked", lambda *_: self.leave())
         bar.pack_start(leave, False, False, 0)
@@ -194,8 +204,7 @@ class FullscreenController:
     # -- keyboard ------------------------------------------------------
 
     CTRL_KEYS = (Gdk.KEY_Control_L, Gdk.KEY_Control_R)
-    ALT_KEYS = (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R,
-                Gdk.KEY_Meta_L, Gdk.KEY_Meta_R)
+    ALT_KEYS = (Gdk.KEY_Alt_L, Gdk.KEY_Alt_R, Gdk.KEY_Meta_L, Gdk.KEY_Meta_R)
 
     def handle_key_press(self, event):
         """Ctrl+Alt+Enter toggles; anything else disarms the release check."""
@@ -206,17 +215,19 @@ class FullscreenController:
         if keyval in self.CTRL_KEYS or keyval in self.ALT_KEYS:
             # event.state describes the moment before this press, so fold in
             # the key now going down.
-            ctrl = (bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
-                    or keyval in self.CTRL_KEYS)
-            alt = (bool(modifiers & Gdk.ModifierType.MOD1_MASK)
-                   or keyval in self.ALT_KEYS)
+            ctrl = (
+                bool(modifiers & Gdk.ModifierType.CONTROL_MASK)
+                or keyval in self.CTRL_KEYS
+            )
+            alt = (
+                bool(modifiers & Gdk.ModifierType.MOD1_MASK) or keyval in self.ALT_KEYS
+            )
             if ctrl and alt:
                 self._ungrab_armed = True
         else:
             self._ungrab_armed = False
 
-        if (modifiers == wanted
-                and keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)):
+        if modifiers == wanted and keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
             self.toggle()
             return True
         return False

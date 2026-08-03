@@ -11,16 +11,16 @@ server's own answer. This prints that answer verbatim.
 Saved connections are reused, so it needs no arguments beyond the VMID.
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from proxima import secrets                                    # noqa: E402
-from proxima.api import ProxmoxError                           # noqa: E402
-from proxima.api.connection import Connection                  # noqa: E402
-from proxima.api.models import parse_spice_clients             # noqa: E402
-from proxima.config import Config                              # noqa: E402
+from proxima import secrets
+from proxima.api import ProxmoxError
+from proxima.api.connection import Connection
+from proxima.api.models import parse_spice_clients
+from proxima.config import Config
 
 
 def connect_all(config):
@@ -41,8 +41,9 @@ def connect_all(config):
 def main():
     config = Config.load()
     if not config.get("connections"):
-        print("No saved connections. Connect once in the app first, with "
-              "'Save' ticked.")
+        print(
+            "No saved connections. Connect once in the app first, with 'Save' ticked."
+        )
         return 2
 
     print("Logging in...")
@@ -62,8 +63,7 @@ def main():
             print(f"  could not list guests: {exc}")
             continue
 
-        running = [g for g in guests
-                   if g.kind == "qemu" and g.status == "running"]
+        running = [g for g in guests if g.kind == "qemu" and g.status == "running"]
         if wanted is None:
             print("  Running VMs (pass one of these VMIDs to check it):")
             for guest in running:
@@ -83,8 +83,10 @@ def main():
             print(f"  REFUSED: {exc}")
             print(f"  HTTP status: {getattr(exc, 'status', None)}")
             print("\n  => The monitor cannot be used with this login.")
-            print("     Presence detection cannot work; it needs the "
-                  "VM.Monitor privilege.")
+            print(
+                "     Presence detection cannot work; it needs the "
+                "VM.Monitor privilege."
+            )
             continue
         except Exception as exc:
             print(f"  FAILED: {type(exc).__name__}: {exc}")
@@ -96,12 +98,12 @@ def main():
 
         parsed = parse_spice_clients(text)
         if parsed is None:
-            print("\n  => The reply was not recognised as 'info spice' "
-                  "output.")
-            print("     Presence detection is reading this as 'cannot "
-                  "tell' and letting the console open.")
-            print("     Send the block above and the parser can be taught "
-                  "this format.")
+            print("\n  => The reply was not recognised as 'info spice' output.")
+            print(
+                "     Presence detection is reading this as 'cannot "
+                "tell' and letting the console open."
+            )
+            print("     Send the block above and the parser can be taught this format.")
         else:
             count, addresses = parsed
             print(f"\n  => Parsed as {count} connected client(s).")
@@ -111,8 +113,10 @@ def main():
                 print("     Presence detection would prompt before opening.")
             else:
                 print("     Presence detection would open without asking.")
-                print("     If a console IS open right now, QEMU is not "
-                      "reporting it and the feature cannot work.")
+                print(
+                    "     If a console IS open right now, QEMU is not "
+                    "reporting it and the feature cannot work."
+                )
 
     return 0
 

@@ -15,16 +15,16 @@ import time
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk
 
 try:
     import cairo
-except ImportError:                       # pragma: no cover
+except ImportError:  # pragma: no cover
     cairo = None
 
-from .rfb import RfbClient  # noqa: E402
-from .wsclient import WebSocketStream  # noqa: E402
-from .status_panel import ConsoleStatusPanel, draw_offline_effect  # noqa: E402
+from .rfb import RfbClient
+from .status_panel import ConsoleStatusPanel, draw_offline_effect
+from .wsclient import WebSocketStream
 
 AVAILABLE = cairo is not None
 
@@ -44,15 +44,31 @@ class VncConsole(Gtk.Box):
 
     # VNC has no guest-resize and no codec negotiation, so those view-menu
     # entries are disabled while a VNC tab is active.
-    supports = {"auto_resize": False, "scaling": True, "codec": False,
-                "compression": False, "refresh": True, "ctrl_alt_del": True,
-                # RFB carries no audio at all, and Proxmox's VNC proxy has
-                # no clipboard channel either.
-                "clipboard": False, "audio": False}
+    supports = {
+        "auto_resize": False,
+        "scaling": True,
+        "codec": False,
+        "compression": False,
+        "refresh": True,
+        "ctrl_alt_del": True,
+        # RFB carries no audio at all, and Proxmox's VNC proxy has
+        # no clipboard channel either.
+        "clipboard": False,
+        "audio": False,
+    }
 
-    def __init__(self, url, headers, password, title="console",
-                 on_status=None, verify_ssl=False, scale_to_fit=True,
-                 on_disconnect=None, on_reconnect=None):
+    def __init__(
+        self,
+        url,
+        headers,
+        password,
+        title="console",
+        on_status=None,
+        verify_ssl=False,
+        scale_to_fit=True,
+        on_disconnect=None,
+        on_reconnect=None,
+    ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.title = title
@@ -76,10 +92,15 @@ class VncConsole(Gtk.Box):
         self._encoding = ""
 
         if not AVAILABLE:
-            self.pack_start(Gtk.Label(
-                label="pycairo is required for the VNC console.\n"
-                      "Install mingw-w64-ucrt-x86_64-python-cairo"),
-                True, True, 0)
+            self.pack_start(
+                Gtk.Label(
+                    label="pycairo is required for the VNC console.\n"
+                    "Install mingw-w64-ucrt-x86_64-python-cairo"
+                ),
+                True,
+                True,
+                0,
+            )
             return
 
         self.area = Gtk.DrawingArea()
@@ -95,7 +116,8 @@ class VncConsole(Gtk.Box):
             | Gdk.EventMask.KEY_PRESS_MASK
             | Gdk.EventMask.KEY_RELEASE_MASK
             | Gdk.EventMask.ENTER_NOTIFY_MASK
-            | Gdk.EventMask.FOCUS_CHANGE_MASK)
+            | Gdk.EventMask.FOCUS_CHANGE_MASK
+        )
 
         self.area.connect("draw", self._on_draw)
         self.area.connect("button-press-event", self._on_button)
@@ -104,13 +126,11 @@ class VncConsole(Gtk.Box):
         self.area.connect("scroll-event", self._on_scroll)
         self.area.connect("key-press-event", self._on_key)
         self.area.connect("key-release-event", self._on_key)
-        self.area.connect("enter-notify-event",
-                          lambda w, e: (w.grab_focus(), False)[1])
+        self.area.connect("enter-notify-event", lambda w, e: (w.grab_focus(), False)[1])
 
         self.overlay = Gtk.Overlay()
         self.overlay.add(self.area)
-        self.status_panel = ConsoleStatusPanel(
-            on_reconnect=lambda: self.on_reconnect())
+        self.status_panel = ConsoleStatusPanel(on_reconnect=lambda: self.on_reconnect())
         self.overlay.add_overlay(self.status_panel)
         self.pack_start(self.overlay, True, True, 0)
 
@@ -122,28 +142,29 @@ class VncConsole(Gtk.Box):
     def _connect(self, url, headers, password, verify_ssl):
         def worker():
             try:
-                stream = WebSocketStream(url, headers=headers,
-                                         verify_ssl=verify_ssl)
+                stream = WebSocketStream(url, headers=headers, verify_ssl=verify_ssl)
             except Exception as exc:
                 GLib.idle_add(self._disconnected, f"{exc}")
                 return
             client = RfbClient(
-                stream, password=password,
+                stream,
+                password=password,
                 on_resize=lambda w, h: GLib.idle_add(self._on_resize, w, h),
                 on_damage=self._queue_damage,
                 on_status=lambda text: GLib.idle_add(self._status, text),
-                on_error=lambda text: GLib.idle_add(self._status,
-                                                    f"error: {text}"),
+                on_error=lambda text: GLib.idle_add(self._status, f"error: {text}"),
                 on_bell=lambda: GLib.idle_add(self._on_bell),
-                on_closed=lambda reason: GLib.idle_add(
-                    self._disconnected, reason),
-                name=self.title)
+                on_closed=lambda reason: GLib.idle_add(self._disconnected, reason),
+                name=self.title,
+            )
             self.client = client
             client.start()
 
         import threading
-        threading.Thread(target=worker, daemon=True,
-                         name=f"vnc-connect-{self.title}").start()
+
+        threading.Thread(
+            target=worker, daemon=True, name=f"vnc-connect-{self.title}"
+        ).start()
 
     # -- rendering -----------------------------------------------------
 
@@ -158,8 +179,7 @@ class VncConsole(Gtk.Box):
             self._surface = None
             return False
         self._buffer = self.client.framebuffer
-        stride = cairo.ImageSurface.format_stride_for_width(
-            cairo.FORMAT_RGB24, width)
+        stride = cairo.ImageSurface.format_stride_for_width(cairo.FORMAT_RGB24, width)
         if stride != width * 4:
             # A 32bpp surface is always 4-byte aligned in practice; if
             # cairo ever disagrees, fall back to a copy per frame rather
@@ -168,8 +188,8 @@ class VncConsole(Gtk.Box):
             self._status(f"unexpected cairo stride {stride} for {width}px")
             return False
         self._surface = cairo.ImageSurface.create_for_data(
-            memoryview(self._buffer), cairo.FORMAT_RGB24,
-            width, height, stride)
+            memoryview(self._buffer), cairo.FORMAT_RGB24, width, height, stride
+        )
         return True
 
     def _sync_surface(self):
@@ -191,10 +211,12 @@ class VncConsole(Gtk.Box):
         if self._closed or self.client is None or cairo is None:
             return False
         with self.client.fb_lock:
-            if (self._surface is not None
-                    and self._surface.get_width() == self.client.width
-                    and self._surface.get_height() == self.client.height
-                    and self._buffer is self.client.framebuffer):
+            if (
+                self._surface is not None
+                and self._surface.get_width() == self.client.width
+                and self._surface.get_height() == self.client.height
+                and self._buffer is self.client.framebuffer
+            ):
                 return True
             return self._rebuild_surface()
 
@@ -257,20 +279,25 @@ class VncConsole(Gtk.Box):
             elapsed = now - self._last_sample
             rate = (total - self._last_bytes) / elapsed
             fps = (frames - self._last_frames) / elapsed
-        self._last_sample, self._last_bytes, self._last_frames = (
-            now, total, frames)
+        self._last_sample, self._last_bytes, self._last_frames = (now, total, frames)
 
         # Which encoding the server chose since the last sample, which is
         # not necessarily any of the ones we asked for.
-        recent = {name: count - self._last_encodings.get(name, 0)
-                  for name, count in counts.items()}
+        recent = {
+            name: count - self._last_encodings.get(name, 0)
+            for name, count in counts.items()
+        }
         recent = {name: count for name, count in recent.items() if count > 0}
         self._last_encodings = counts
         encoding = max(recent, key=recent.get) if recent else self._encoding
         self._encoding = encoding
 
-        return {"rate": rate, "fps": fps, "codec": encoding,
-                "size": f"{self.client.width}x{self.client.height}"}
+        return {
+            "rate": rate,
+            "fps": fps,
+            "codec": encoding,
+            "size": f"{self.client.width}x{self.client.height}",
+        }
 
     def _guest_size(self):
         """The framebuffer's size, as the surface actually holds it.
@@ -305,8 +332,7 @@ class VncConsole(Gtk.Box):
             # Never enlarge, but do shrink to fit rather than letting the
             # guest screen run off the edge of the tab: the part that hangs
             # off is both invisible and unreachable with the pointer.
-            scale = min(1.0, allocation.width / guest_w,
-                        allocation.height / guest_h)
+            scale = min(1.0, allocation.width / guest_w, allocation.height / guest_h)
         offset_x = (allocation.width - guest_w * scale) / 2
         offset_y = (allocation.height - guest_h * scale) / 2
         return scale, offset_x, offset_y
@@ -327,8 +353,9 @@ class VncConsole(Gtk.Box):
             pattern = context.get_source()
             # GOOD is bilinear; at non-integer scales NEAREST turns small
             # text in the guest into noise.
-            pattern.set_filter(cairo.FILTER_GOOD if scale != 1.0
-                               else cairo.FILTER_NEAREST)
+            pattern.set_filter(
+                cairo.FILTER_GOOD if scale != 1.0 else cairo.FILTER_NEAREST
+            )
             context.paint()
             context.restore()
 
@@ -366,7 +393,7 @@ class VncConsole(Gtk.Box):
         elif event.type == Gdk.EventType.BUTTON_RELEASE:
             self._button_mask &= ~bit
         else:
-            return False    # ignore the synthetic double/triple click events
+            return False  # ignore the synthetic double/triple click events
         guest_x, guest_y = self._widget_to_guest(event.x, event.y)
         self.client.send_pointer(guest_x, guest_y, self._button_mask)
         return True
@@ -396,9 +423,12 @@ class VncConsole(Gtk.Box):
             else:
                 return True
         else:
-            button = {Gdk.ScrollDirection.UP: 4, Gdk.ScrollDirection.DOWN: 5,
-                      Gdk.ScrollDirection.LEFT: 6,
-                      Gdk.ScrollDirection.RIGHT: 7}.get(direction)
+            button = {
+                Gdk.ScrollDirection.UP: 4,
+                Gdk.ScrollDirection.DOWN: 5,
+                Gdk.ScrollDirection.LEFT: 6,
+                Gdk.ScrollDirection.RIGHT: 7,
+            }.get(direction)
             if button is None:
                 return False
 
@@ -469,8 +499,7 @@ class VncConsole(Gtk.Box):
         if self._closed or getattr(self, "status_panel", None) is None:
             return
         self.pending = True
-        self.status_panel.show_message(
-            title, detail, can_reconnect=False, busy=True)
+        self.status_panel.show_message(title, detail, can_reconnect=False, busy=True)
         if self.area is not None:
             self.area.queue_draw()
 
@@ -498,19 +527,26 @@ class VncConsole(Gtk.Box):
             self.release_input()
         except Exception:
             pass
-        titles = {"stopped": "Guest is stopped",
-                  "suspended": "Guest is suspended",
-                  "paused": "Guest is paused"}
-        details = {"stopped": "Start the guest to reconnect.",
-                   "suspended": "Resume the guest to reconnect.",
-                   "paused": "Resume the guest to reconnect."}
-        icons = {"paused": "media-playback-pause-symbolic",
-                 "suspended": "media-playback-pause-symbolic"}
+        titles = {
+            "stopped": "Guest is stopped",
+            "suspended": "Guest is suspended",
+            "paused": "Guest is paused",
+        }
+        details = {
+            "stopped": "Start the guest to reconnect.",
+            "suspended": "Resume the guest to reconnect.",
+            "paused": "Resume the guest to reconnect.",
+        }
+        icons = {
+            "paused": "media-playback-pause-symbolic",
+            "suspended": "media-playback-pause-symbolic",
+        }
         self.status_panel.show_message(
             titles.get(status, f"Guest is {status}"),
             details.get(status, ""),
             icon=icons.get(status, "media-playback-stop-symbolic"),
-            can_reconnect=False)
+            can_reconnect=False,
+        )
         if self.area is not None:
             self.area.queue_draw()
 

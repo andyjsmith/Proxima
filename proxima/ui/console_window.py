@@ -13,7 +13,7 @@ what ends it.
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib  # noqa: E402
+from gi.repository import Gtk
 
 from ..theme import decorate as theme_decorate
 from . import actions as action_defs
@@ -45,11 +45,13 @@ class ConsoleWindow(Gtk.Window):
         root.pack_start(self.overlay, True, True, 0)
 
         self.fullscreen_control = FullscreenController(
-            window=self, overlay=self.overlay,
+            window=self,
+            overlay=self.overlay,
             get_console=lambda: self.console,
             chrome=lambda: [self.toolbar],
             on_ctrl_alt_del=self._send_ctrl_alt_del,
-            title=guest.name)
+            title=guest.name,
+        )
 
         theme_decorate(self)
         self.update_sensitivity()
@@ -72,8 +74,8 @@ class ConsoleWindow(Gtk.Window):
             item.set_sensitive(False)
             item.connect(
                 "clicked",
-                lambda _b, which=name: self.main.run_action_for(
-                    self.guest_key, which))
+                lambda _b, which=name: self.main.run_action_for(self.guest_key, which),
+            )
             self._action_items[name] = item
             bar.insert(item, -1)
 
@@ -81,11 +83,15 @@ class ConsoleWindow(Gtk.Window):
 
         self._snapshot_items = {}
         for which, label, icon, tooltip in (
-                ("take", "Snapshot", "list-add-symbolic", "Take a snapshot"),
-                ("revert", "Revert", "edit-undo-symbolic",
-                 "Roll back to the most recent snapshot"),
-                ("manage", "Manage", "document-open-symbolic",
-                 "Manage snapshots")):
+            ("take", "Snapshot", "list-add-symbolic", "Take a snapshot"),
+            (
+                "revert",
+                "Revert",
+                "edit-undo-symbolic",
+                "Roll back to the most recent snapshot",
+            ),
+            ("manage", "Manage", "document-open-symbolic", "Manage snapshots"),
+        ):
             item = Gtk.ToolButton()
             item.set_label(label)
             item.set_icon_name(icon)
@@ -93,8 +99,8 @@ class ConsoleWindow(Gtk.Window):
             item.set_sensitive(False)
             item.connect(
                 "clicked",
-                lambda _b, w=which: self.main.snapshot_action_for(
-                    self.guest_key, w))
+                lambda _b, w=which: self.main.snapshot_action_for(self.guest_key, w),
+            )
             self._snapshot_items[which] = item
             bar.insert(item, -1)
 
@@ -186,7 +192,7 @@ class ConsoleWindow(Gtk.Window):
 
     def _on_delete(self, *_args):
         self.return_to_tabs()
-        return True     # return_to_tabs destroys the window itself
+        return True  # return_to_tabs destroys the window itself
 
     def shutdown(self):
         """Called when the application is closing down."""

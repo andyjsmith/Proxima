@@ -13,17 +13,16 @@ Its quirks are worth restating because none of them are guessable:
 """
 
 import os
-import time
 import tempfile
+import time
 
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GObject, GLib  # noqa: E402
+from gi.repository import Gdk, GLib, GObject, Gtk
 
-from .decoders import gstreamer_report  # noqa: E402
-from .status_panel import ConsoleStatusPanel, draw_offline_effect  # noqa: E402
-
+from .decoders import gstreamer_report
+from .status_panel import ConsoleStatusPanel, draw_offline_effect
 
 # --------------------------------------------------------------------------
 # Namespace resolution
@@ -31,6 +30,7 @@ from .status_panel import ConsoleStatusPanel, draw_offline_effect  # noqa: E402
 # The introspection namespace is spelled SpiceClientGLib in most builds but
 # SpiceClientGlib in some, so probe rather than assume.
 # --------------------------------------------------------------------------
+
 
 def _import_namespace(candidates):
     for name, version in candidates:
@@ -44,9 +44,9 @@ def _import_namespace(candidates):
 
 
 SpiceGLib, SPICE_GLIB_NS = _import_namespace(
-    [("SpiceClientGLib", "2.0"), ("SpiceClientGlib", "2.0")])
-SpiceGtk, SPICE_GTK_NS = _import_namespace(
-    [("SpiceClientGtk", "3.0")])
+    [("SpiceClientGLib", "2.0"), ("SpiceClientGlib", "2.0")]
+)
+SpiceGtk, SPICE_GTK_NS = _import_namespace([("SpiceClientGtk", "3.0")])
 
 AVAILABLE = SpiceGLib is not None and SpiceGtk is not None
 
@@ -58,6 +58,7 @@ AVAILABLE = SpiceGLib is not None and SpiceGtk is not None
 # disconnect. Which one wins depends on the PyGObject build, so call both
 # explicitly and defensively.
 # --------------------------------------------------------------------------
+
 
 def connect_signal(obj, name, handler):
     """Always attach a GObject signal, never the shadowing Spice method."""
@@ -79,8 +80,10 @@ def session_connect(session):
 
 
 def session_disconnect(session):
-    for attempt in (lambda: SpiceGLib.Session.disconnect(session),
-                    lambda: session.disconnect()):
+    for attempt in (
+        lambda: SpiceGLib.Session.disconnect(session),
+        lambda: session.disconnect(),
+    ):
         try:
             attempt()
             return True
@@ -197,9 +200,15 @@ KEY_DELETE = 0xFFFF
 KEY_CTRL_ALT_DEL = (KEY_CONTROL_L, KEY_ALT_L, KEY_DELETE)
 
 CHANNEL_EVENTS = {
-    0: "closed", 1: "error: connect", 2: "error: TLS",
-    3: "error: link", 4: "error: authentication", 5: "error: I/O",
-    6: "opened", 7: "switching", 8: "migration",
+    0: "closed",
+    1: "error: connect",
+    2: "error: TLS",
+    3: "error: link",
+    4: "error: authentication",
+    5: "error: I/O",
+    6: "opened",
+    7: "switching",
+    8: "migration",
 }
 
 _REPORTED_GSTREAMER = False
@@ -212,14 +221,31 @@ class SpiceConsole(Gtk.Box):
     pending = False
 
     # Which of the view-menu controls apply to this console type.
-    supports = {"auto_resize": True, "scaling": True, "codec": True,
-                "compression": True, "refresh": False, "ctrl_alt_del": True,
-                "clipboard": True, "audio": True}
+    supports = {
+        "auto_resize": True,
+        "scaling": True,
+        "codec": True,
+        "compression": True,
+        "refresh": False,
+        "ctrl_alt_del": True,
+        "clipboard": True,
+        "audio": True,
+    }
 
-    def __init__(self, params, title="console", on_status=None,
-                 enable_audio=True, auto_resize=True, scale_to_fit=False,
-                 on_agent=None, on_disconnect=None, on_reconnect=None,
-                 share_clipboard=True, play_audio=True):
+    def __init__(
+        self,
+        params,
+        title="console",
+        on_status=None,
+        enable_audio=True,
+        auto_resize=True,
+        scale_to_fit=False,
+        on_agent=None,
+        on_disconnect=None,
+        on_reconnect=None,
+        share_clipboard=True,
+        play_audio=True,
+    ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.title = title
@@ -261,7 +287,8 @@ class SpiceConsole(Gtk.Box):
             label.set_markup(
                 "<b>spice-gtk is not installed.</b>\n\n"
                 "MSYS2:  mingw-w64-ucrt-x86_64-spice-gtk\n"
-                "Debian: gir1.2-spiceclientgtk-3.0")
+                "Debian: gir1.2-spiceclientgtk-3.0"
+            )
             self.pack_start(label, True, True, 0)
             return
 
@@ -277,8 +304,7 @@ class SpiceConsole(Gtk.Box):
 
         self.overlay = Gtk.Overlay()
         self.overlay.add(self.stack_area)
-        self.status_panel = ConsoleStatusPanel(
-            on_reconnect=lambda: self.on_reconnect())
+        self.status_panel = ConsoleStatusPanel(on_reconnect=lambda: self.on_reconnect())
         self.overlay.add_overlay(self.status_panel)
         self.pack_start(self.overlay, True, True, 0)
 
@@ -309,8 +335,7 @@ class SpiceConsole(Gtk.Box):
 
         # Some variants take the display channel, some take the widget, and
         # some are bound as methods rather than plain functions. Try each.
-        targets = [t for t in (self._display_channel, self._display)
-                   if t is not None]
+        targets = [t for t in (self._display_channel, self._display) if t is not None]
         errors = []
         for location, func in locations:
             for target in targets:
@@ -333,7 +358,8 @@ class SpiceConsole(Gtk.Box):
         if value is None:
             return
         self._apply_channel_setting(
-            "change_preferred_video_codec_type", value, f"codec {label}")
+            "change_preferred_video_codec_type", value, f"codec {label}"
+        )
 
     def set_compression_index(self, index):
         self.compression_index = index
@@ -342,7 +368,8 @@ class SpiceConsole(Gtk.Box):
         if value is None:
             return
         self._apply_channel_setting(
-            "change_preferred_compression", value, f"compression {label}")
+            "change_preferred_compression", value, f"compression {label}"
+        )
 
     def _build_session(self):
         session = SpiceGLib.Session()
@@ -414,8 +441,7 @@ class SpiceConsole(Gtk.Box):
         if self._gtk_session is None:
             return False
         try:
-            self._gtk_session.set_property("auto-clipboard",
-                                           bool(self.share_clipboard))
+            self._gtk_session.set_property("auto-clipboard", bool(self.share_clipboard))
             return True
         except Exception as exc:
             print(f"[spice] could not set clipboard sharing: {exc}")
@@ -450,8 +476,9 @@ class SpiceConsole(Gtk.Box):
             self._display_channel = channel
             self._status(f"display channel {channel_id} appeared")
             try:
-                connect_signal(channel, "display-primary-create",
-                               self._on_primary_create)
+                connect_signal(
+                    channel, "display-primary-create", self._on_primary_create
+                )
             except Exception:
                 pass
             GLib.idle_add(self._attach_display, channel_id)
@@ -461,8 +488,7 @@ class SpiceConsole(Gtk.Box):
             self._status("main channel connected")
             # spice-vdagent presence, which is what clipboard sharing and
             # guest resize actually depend on.
-            connect_signal(channel, "notify::agent-connected",
-                           self._on_agent_notify)
+            connect_signal(channel, "notify::agent-connected", self._on_agent_notify)
             self._on_agent_notify(channel, None)
 
     def _on_channel_event(self, channel, event):
@@ -486,8 +512,7 @@ class SpiceConsole(Gtk.Box):
         e.g. 'qxl,memory=64') rather than looking for a client-side fix.
         """
         megabytes = (width * height * 4) / (1024 * 1024)
-        self._status(f"guest framebuffer {width}x{height} "
-                     f"({megabytes:.1f} MiB)")
+        self._status(f"guest framebuffer {width}x{height} ({megabytes:.1f} MiB)")
         return False
 
     def _on_agent_notify(self, channel, _pspec):
@@ -499,8 +524,9 @@ class SpiceConsole(Gtk.Box):
             return
         self.agent_connected = connected
         self.on_agent(connected)
-        self._status("spice-vdagent connected" if connected
-                     else "spice-vdagent not running")
+        self._status(
+            "spice-vdagent connected" if connected else "spice-vdagent not running"
+        )
 
     def _on_disconnected(self, _session):
         self.agent_connected = False
@@ -535,8 +561,10 @@ class SpiceConsole(Gtk.Box):
         size = ""
         if self._display_channel is not None:
             try:
-                size = (f"{self._display_channel.get_property('width')}x"
-                        f"{self._display_channel.get_property('height')}")
+                size = (
+                    f"{self._display_channel.get_property('width')}x"
+                    f"{self._display_channel.get_property('height')}"
+                )
             except Exception:
                 size = ""
 
@@ -554,7 +582,8 @@ class SpiceConsole(Gtk.Box):
         # so it cannot drift away from what the window handler advertises.
         try:
             display.set_grab_keys(
-                SpiceGtk.GrabSequence.new_from_string("Control_L+Alt_L"))
+                SpiceGtk.GrabSequence.new_from_string("Control_L+Alt_L")
+            )
         except Exception as exc:
             print(f"[spice] could not set grab keys: {exc}")
         # Never let the widget's own size request drive layout; the holder
@@ -568,8 +597,9 @@ class SpiceConsole(Gtk.Box):
         # Windows that grab is a low-level hook that keeps taking keys even
         # after another window is focused. Tie the grab to the pointer being
         # over the console, which is what people actually expect.
-        display.add_events(Gdk.EventMask.ENTER_NOTIFY_MASK
-                           | Gdk.EventMask.LEAVE_NOTIFY_MASK)
+        display.add_events(
+            Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK
+        )
         display.connect("enter-notify-event", self._on_display_enter)
         display.connect("leave-notify-event", self._on_display_leave)
 
@@ -605,8 +635,11 @@ class SpiceConsole(Gtk.Box):
         """
         if event.mode != Gdk.CrossingMode.NORMAL:
             return False
-        if self._display is not None and self._display.get_property(
-                "grab-mouse") and self._mouse_grabbed():
+        if (
+            self._display is not None
+            and self._display.get_property("grab-mouse")
+            and self._mouse_grabbed()
+        ):
             return False
         self._ungrab_keyboard()
         return False
@@ -634,8 +667,9 @@ class SpiceConsole(Gtk.Box):
 
     def _on_display_drawn(self, widget, context):
         if not self.connected or self.pending:
-            draw_offline_effect(context, widget.get_allocated_width(),
-                                widget.get_allocated_height())
+            draw_offline_effect(
+                context, widget.get_allocated_width(), widget.get_allocated_height()
+            )
         return False
 
     def set_auto_resize(self, enabled):
@@ -662,8 +696,7 @@ class SpiceConsole(Gtk.Box):
             self._status("no display yet")
             return False
         try:
-            self._display.send_keys(list(keyvals),
-                                    SpiceGtk.DisplayKeyEvent.CLICK)
+            self._display.send_keys(list(keyvals), SpiceGtk.DisplayKeyEvent.CLICK)
             return True
         except Exception as exc:
             self._status(f"could not send keys: {exc}")
@@ -708,6 +741,7 @@ class SpiceConsole(Gtk.Box):
         if window is None:
             return False
         from gi.repository import Gdk
+
         width = self._display.get_allocated_width()
         height = self._display.get_allocated_height()
         pixbuf = Gdk.pixbuf_get_from_window(window, 0, 0, width, height)
@@ -721,8 +755,7 @@ class SpiceConsole(Gtk.Box):
         if self._closed or getattr(self, "status_panel", None) is None:
             return
         self.pending = True
-        self.status_panel.show_message(
-            title, detail, can_reconnect=False, busy=True)
+        self.status_panel.show_message(title, detail, can_reconnect=False, busy=True)
         if self._display is not None:
             self._display.queue_draw()
 
@@ -750,19 +783,26 @@ class SpiceConsole(Gtk.Box):
             self.release_input()
         except Exception:
             pass
-        titles = {"stopped": "Guest is stopped",
-                  "suspended": "Guest is suspended",
-                  "paused": "Guest is paused"}
-        details = {"stopped": "Start the guest to reconnect.",
-                   "suspended": "Resume the guest to reconnect.",
-                   "paused": "Resume the guest to reconnect."}
-        icons = {"paused": "media-playback-pause-symbolic",
-                 "suspended": "media-playback-pause-symbolic"}
+        titles = {
+            "stopped": "Guest is stopped",
+            "suspended": "Guest is suspended",
+            "paused": "Guest is paused",
+        }
+        details = {
+            "stopped": "Start the guest to reconnect.",
+            "suspended": "Resume the guest to reconnect.",
+            "paused": "Resume the guest to reconnect.",
+        }
+        icons = {
+            "paused": "media-playback-pause-symbolic",
+            "suspended": "media-playback-pause-symbolic",
+        }
         self.status_panel.show_message(
             titles.get(status, f"Guest is {status}"),
             details.get(status, ""),
             icon=icons.get(status, "media-playback-stop-symbolic"),
-            can_reconnect=False)
+            can_reconnect=False,
+        )
         if self._display is not None:
             self._display.queue_draw()
 

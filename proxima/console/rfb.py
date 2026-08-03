@@ -19,9 +19,9 @@ The client runs on its own thread and reports damage through a callback; it
 knows nothing about GTK.
 """
 
-import zlib
 import struct
 import threading
+import zlib
 
 from . import des
 
@@ -46,8 +46,13 @@ ENC_ZLIB = 6
 ENC_DESKTOP_SIZE = -223
 ENC_LAST_RECT = -224
 
-REQUESTED_ENCODINGS = [ENC_ZLIB, ENC_COPY_RECT, ENC_RAW,
-                       ENC_DESKTOP_SIZE, ENC_LAST_RECT]
+REQUESTED_ENCODINGS = [
+    ENC_ZLIB,
+    ENC_COPY_RECT,
+    ENC_RAW,
+    ENC_DESKTOP_SIZE,
+    ENC_LAST_RECT,
+]
 
 SEC_NONE = 1
 SEC_VNC_AUTH = 2
@@ -93,10 +98,19 @@ class RfbClient(threading.Thread):
 
     daemon = True
 
-    def __init__(self, stream, password=None, on_resize=None, on_damage=None,
-                 on_status=None, on_error=None, on_bell=None,
-                 on_closed=None,
-                 shared=True, name="vnc"):
+    def __init__(
+        self,
+        stream,
+        password=None,
+        on_resize=None,
+        on_damage=None,
+        on_status=None,
+        on_error=None,
+        on_bell=None,
+        on_closed=None,
+        shared=True,
+        name="vnc",
+    ):
         super().__init__(name=f"rfb-{name}", daemon=True)
         self.stream = stream
         self.password = password
@@ -173,8 +187,8 @@ class RfbClient(threading.Thread):
                 raise RfbError("server wants a VNC password but none was given")
             else:
                 raise RfbError(
-                    "no supported security type "
-                    f"(server offered {sorted(offered)})")
+                    f"no supported security type (server offered {sorted(offered)})"
+                )
             self._send(bytes([security]))
 
         if security == SEC_VNC_AUTH:
@@ -187,8 +201,11 @@ class RfbClient(threading.Thread):
         if version == (3, 8) or security == SEC_VNC_AUTH:
             result = struct.unpack(">I", self._read(4))[0]
             if result != 0:
-                reason = (self._read_failure_reason() if version == (3, 8)
-                          else "authentication failed")
+                reason = (
+                    self._read_failure_reason()
+                    if version == (3, 8)
+                    else "authentication failed"
+                )
                 raise RfbError(reason)
 
         # ClientInit: 1 means allow other clients to stay connected.
@@ -197,12 +214,14 @@ class RfbClient(threading.Thread):
         header = self._read(24)
         width, height = struct.unpack(">HH", header[:4])
         name_length = struct.unpack(">I", header[20:24])[0]
-        self.desktop_name = self._read(name_length).decode("utf-8", "replace") \
-            if name_length else ""
+        self.desktop_name = (
+            self._read(name_length).decode("utf-8", "replace") if name_length else ""
+        )
 
         self._resize(width, height)
-        self.on_status(f"connected to {self.desktop_name or 'guest'} "
-                       f"({width}x{height})")
+        self.on_status(
+            f"connected to {self.desktop_name or 'guest'} ({width}x{height})"
+        )
 
     def _read_failure_reason(self):
         try:
@@ -220,12 +239,16 @@ class RfbClient(threading.Thread):
         message = struct.pack(
             ">BxxxBBBBHHHBBBxxx",
             SET_PIXEL_FORMAT,
-            32,        # bits-per-pixel
-            24,        # depth
-            0,         # big-endian-flag
-            1,         # true-colour-flag
-            255, 255, 255,   # red/green/blue max
-            16, 8, 0,        # red/green/blue shift
+            32,  # bits-per-pixel
+            24,  # depth
+            0,  # big-endian-flag
+            1,  # true-colour-flag
+            255,
+            255,
+            255,  # red/green/blue max
+            16,
+            8,
+            0,  # red/green/blue shift
         )
         self._send(message)
 
@@ -242,9 +265,17 @@ class RfbClient(threading.Thread):
         if width <= 0 or height <= 0:
             return
         try:
-            self._send(struct.pack(">BBHHHH", FRAMEBUFFER_UPDATE_REQUEST,
-                                   1 if incremental else 0,
-                                   x, y, width, height))
+            self._send(
+                struct.pack(
+                    ">BBHHHH",
+                    FRAMEBUFFER_UPDATE_REQUEST,
+                    1 if incremental else 0,
+                    x,
+                    y,
+                    width,
+                    height,
+                )
+            )
         except Exception:
             pass
 
@@ -278,7 +309,7 @@ class RfbClient(threading.Thread):
             if self._running:
                 self.on_error(reason)
         finally:
-            stopped = not self._running      # stop() was called: intentional
+            stopped = not self._running  # stop() was called: intentional
             self._connected = False
             self._running = False
             try:
@@ -312,7 +343,7 @@ class RfbClient(threading.Thread):
 
     def _read_framebuffer_update(self):
         self.frames += 1
-        self._read(1)   # padding
+        self._read(1)  # padding
         count = struct.unpack(">H", self._read(2))[0]
 
         for _ in range(count):
@@ -337,7 +368,8 @@ class RfbClient(threading.Thread):
             else:
                 raise RfbError(
                     f"server used encoding {encoding}, which was never "
-                    "requested -- refusing to guess at the byte stream")
+                    "requested -- refusing to guess at the byte stream"
+                )
 
             self.on_damage(x, y, width, height)
 
@@ -359,7 +391,7 @@ class RfbClient(threading.Thread):
                     break
                 start = target_y * stride + x * BYTES_PER_PIXEL
                 source = row * row_bytes
-                fb[start:start + row_bytes] = pixels[source:source + row_bytes]
+                fb[start : start + row_bytes] = pixels[source : source + row_bytes]
 
     def _decode_raw(self, x, y, width, height):
         pixels = self._read(width * height * BYTES_PER_PIXEL)
@@ -379,7 +411,8 @@ class RfbClient(threading.Thread):
         expected = width * height * BYTES_PER_PIXEL
         if len(pixels) != expected:
             raise RfbError(
-                f"zlib rect decoded to {len(pixels)} bytes, expected {expected}")
+                f"zlib rect decoded to {len(pixels)} bytes, expected {expected}"
+            )
         self._blit(x, y, width, height, pixels)
 
     def _decode_copy_rect(self, x, y, width, height):
@@ -396,7 +429,7 @@ class RfbClient(threading.Thread):
             for row in rows:
                 src = (source_y + row) * stride + source_x * BYTES_PER_PIXEL
                 dst = (y + row) * stride + x * BYTES_PER_PIXEL
-                fb[dst:dst + row_bytes] = fb[src:src + row_bytes]
+                fb[dst : dst + row_bytes] = fb[src : src + row_bytes]
 
     # -- input ---------------------------------------------------------
 
@@ -404,8 +437,11 @@ class RfbClient(threading.Thread):
         if not self._connected:
             return
         try:
-            self._send(struct.pack(">BBxxI", KEY_EVENT,
-                                   1 if pressed else 0, keysym & 0xFFFFFFFF))
+            self._send(
+                struct.pack(
+                    ">BBxxI", KEY_EVENT, 1 if pressed else 0, keysym & 0xFFFFFFFF
+                )
+            )
         except Exception:
             pass
 
@@ -423,8 +459,7 @@ class RfbClient(threading.Thread):
         x = max(0, min(int(x), max(0, self.width - 1)))
         y = max(0, min(int(y), max(0, self.height - 1)))
         try:
-            self._send(struct.pack(">BBHH", POINTER_EVENT, button_mask & 0xFF,
-                                   x, y))
+            self._send(struct.pack(">BBHH", POINTER_EVENT, button_mask & 0xFF, x, y))
         except Exception:
             pass
 
@@ -433,8 +468,7 @@ class RfbClient(threading.Thread):
             return
         payload = text.encode("latin-1", "replace")
         try:
-            self._send(struct.pack(">BxxxI", CLIENT_CUT_TEXT, len(payload))
-                       + payload)
+            self._send(struct.pack(">BxxxI", CLIENT_CUT_TEXT, len(payload)) + payload)
         except Exception:
             pass
 

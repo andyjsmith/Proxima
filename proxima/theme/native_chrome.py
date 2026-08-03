@@ -10,8 +10,8 @@ tried.
 Everything here is a no-op off Windows.
 """
 
-import os
 import ctypes
+import os
 
 DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
@@ -57,7 +57,9 @@ def _gobject_pointer(obj):
         capsule = obj.__gpointer__
         ctypes.pythonapi.PyCapsule_GetPointer.restype = ctypes.c_void_p
         ctypes.pythonapi.PyCapsule_GetPointer.argtypes = [
-            ctypes.py_object, ctypes.c_char_p]
+            ctypes.py_object,
+            ctypes.c_char_p,
+        ]
         return ctypes.pythonapi.PyCapsule_GetPointer(capsule, None)
     except Exception:
         return None
@@ -66,7 +68,7 @@ def _gobject_pointer(obj):
 def _colorref(hex_colour):
     """#RRGGBB -> the 0x00BBGGRR integer DWM wants."""
     value = hex_colour.lstrip("#")
-    red, green, blue = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    red, green, blue = (int(value[i : i + 2], 16) for i in (0, 2, 4))
     return (blue << 16) | (green << 8) | red
 
 
@@ -77,13 +79,15 @@ def _set_attribute(hwnd, attribute, value, size=4):
         return False
     buffer = ctypes.c_int(value)
     result = dwm.DwmSetWindowAttribute(
-        ctypes.c_void_p(hwnd), ctypes.c_uint(attribute),
-        ctypes.byref(buffer), ctypes.c_uint(size))
+        ctypes.c_void_p(hwnd),
+        ctypes.c_uint(attribute),
+        ctypes.byref(buffer),
+        ctypes.c_uint(size),
+    )
     return result == 0
 
 
-def apply_dark_titlebar(window, dark=True, caption=None, text=None,
-                        border=None):
+def apply_dark_titlebar(window, dark=True, caption=None, text=None, border=None):
     """Set the titlebar appearance. Returns a dict describing what happened."""
     result = {"hwnd": None, "dark": False, "caption": False}
     if not IS_WINDOWS:
@@ -96,16 +100,16 @@ def apply_dark_titlebar(window, dark=True, caption=None, text=None,
 
     # Attribute 20 on current builds, 19 on 1809-1903. Setting the wrong one
     # simply fails, so try the modern number first.
-    for attribute in (DWMWA_USE_IMMERSIVE_DARK_MODE,
-                      DWMWA_USE_IMMERSIVE_DARK_MODE_OLD):
+    for attribute in (DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD):
         if _set_attribute(hwnd, attribute, 1 if dark else 0):
             result["dark"] = True
             break
 
     # Explicit caption colours need Windows 11; failure here is harmless.
     if caption:
-        result["caption"] = _set_attribute(hwnd, DWMWA_CAPTION_COLOR,
-                                           _colorref(caption))
+        result["caption"] = _set_attribute(
+            hwnd, DWMWA_CAPTION_COLOR, _colorref(caption)
+        )
     if text:
         _set_attribute(hwnd, DWMWA_TEXT_COLOR, _colorref(text))
     if border:
@@ -115,7 +119,9 @@ def apply_dark_titlebar(window, dark=True, caption=None, text=None,
     # the next activation.
     try:
         user32 = ctypes.windll.user32
-        SWP_FLAGS = 0x0002 | 0x0001 | 0x0004 | 0x0020  # NOMOVE|NOSIZE|NOZORDER|FRAMECHANGED
+        SWP_FLAGS = (
+            0x0002 | 0x0001 | 0x0004 | 0x0020
+        )  # NOMOVE|NOSIZE|NOZORDER|FRAMECHANGED
         user32.SetWindowPos(ctypes.c_void_p(hwnd), None, 0, 0, 0, 0, SWP_FLAGS)
     except Exception:
         pass

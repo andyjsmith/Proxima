@@ -10,7 +10,7 @@ import threading
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib  # noqa: E402
+from gi.repository import GLib, Gtk
 
 from ..api.models import audio_is_spice, vga_is_spice
 
@@ -73,8 +73,7 @@ class SummaryPage(Gtk.ScrolledWindow):
 
         self.console_button = Gtk.Button(label="Open Console")
         self.console_button.set_sensitive(False)
-        self.console_button.connect("clicked",
-                                    lambda *_: self.on_open_console())
+        self.console_button.connect("clicked", lambda *_: self.on_open_console())
         buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         buttons.pack_start(self.console_button, False, False, 0)
         outer.pack_start(buttons, False, False, 0)
@@ -108,14 +107,16 @@ class SummaryPage(Gtk.ScrolledWindow):
         self.title.set_markup(f"<b>{GLib.markup_escape_text(guest.name)}</b>")
         self.subtitle.set_text(
             f"{'Container' if guest.is_container else 'Virtual machine'} "
-            f"{guest.vmid} on {guest.node}")
+            f"{guest.vmid} on {guest.node}"
+        )
 
         self._set("name", guest.name)
         self._set("status", "template" if guest.template else guest.status)
         self._set("node", guest.node)
         self._set("vmid", str(guest.vmid))
-        self._set("kind", "LXC container" if guest.is_container
-                  else "QEMU virtual machine")
+        self._set(
+            "kind", "LXC container" if guest.is_container else "QEMU virtual machine"
+        )
         self._set("cpu", guest.cpu_text)
         self._set("memory", guest.memory_text)
         self._set("disk", guest.disk_text)
@@ -192,15 +193,18 @@ class SummaryPage(Gtk.ScrolledWindow):
                     osinfo = None
                 try:
                     address = self._first_address(
-                        api.guest_interfaces(guest.node, guest.vmid))
+                        api.guest_interfaces(guest.node, guest.vmid)
+                    )
                 except Exception:
                     address = ""
 
-            GLib.idle_add(self._apply_details, guest, generation, config,
-                          osinfo, address)
+            GLib.idle_add(
+                self._apply_details, guest, generation, config, osinfo, address
+            )
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"summary-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"summary-{guest.vmid}"
+        ).start()
 
     @staticmethod
     def _first_address(interfaces):
@@ -219,9 +223,11 @@ class SummaryPage(Gtk.ScrolledWindow):
     def _apply_details(self, guest, generation, config, osinfo, address):
         # A different guest was selected while this was in flight. Compare
         # keys rather than object identity so a rebuilt Guest still counts.
-        if (generation != self._detail_generation
-                or self.guest is None
-                or self.guest.key != guest.key):
+        if (
+            generation != self._detail_generation
+            or self.guest is None
+            or self.guest.key != guest.key
+        ):
             return False
 
         if not config:
@@ -239,9 +245,8 @@ class SummaryPage(Gtk.ScrolledWindow):
         self._describe_console(guest)
 
         if osinfo:
-            result = osinfo.get("result", osinfo) if isinstance(osinfo, dict) \
-                else {}
-            pretty = (result.get("pretty-name") or result.get("name") or "")
+            result = osinfo.get("result", osinfo) if isinstance(osinfo, dict) else {}
+            pretty = result.get("pretty-name") or result.get("name") or ""
             self._set("os", pretty or "-")
             self._set("agent", "running")
         elif guest.running and config.get("agent"):

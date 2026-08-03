@@ -3,9 +3,9 @@
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, Gdk, GLib  # noqa: E402
+from gi.repository import Gdk, GLib, Gtk
 
-from . import css, fonts, discovery, native_chrome, system  # noqa: E402
+from . import css, discovery, fonts, native_chrome, system
 
 _providers = []
 _dark = False
@@ -20,7 +20,8 @@ def _load(screen, stylesheet, label):
         print(f"[theme] {label} CSS not applied: {exc.message}")
         return False
     Gtk.StyleContext.add_provider_for_screen(
-        screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
     _providers.append(provider)
     return True
 
@@ -91,6 +92,7 @@ def decorate(window):
     decorated as it is created. Windows that are not realised yet are
     handled on realize, since the HWND does not exist before then.
     """
+
     def apply_now(*_args):
         native_chrome.apply_dark_titlebar(window, dark=_dark)
         return False
@@ -123,7 +125,8 @@ def apply(config, root_widget=None):
     dark = system.resolve_dark(config.get("color_mode", "system"))
     _dark = dark
     theme_name, available = discovery.resolve_theme(
-        config.get("theme", "Adwaita"), dark)
+        config.get("theme", "Adwaita"), dark
+    )
 
     settings.set_property("gtk-theme-name", theme_name)
     settings.set_property("gtk-application-prefer-dark-theme", dark)
@@ -140,10 +143,18 @@ def apply(config, root_widget=None):
     decorate_all()
 
     if not available:
-        print(f"[theme] {config.get('theme')} is not installed; "
-              f"using {theme_name}")
+        print(f"[theme] {config.get('theme')} is not installed; using {theme_name}")
     return theme_name, dark
 
 
-__all__ = ["apply", "decorate", "decorate_all", "keep_active",
-           "css", "fonts", "discovery", "native_chrome", "system"]
+__all__ = [
+    "apply",
+    "css",
+    "decorate",
+    "decorate_all",
+    "discovery",
+    "fonts",
+    "keep_active",
+    "native_chrome",
+    "system",
+]

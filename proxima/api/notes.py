@@ -119,9 +119,13 @@ SETTINGS_DEFAULTS = {
     "protocol": "default",
 }
 
-_CLIPBOARD_ALIASES = {"bidirectional": "enabled", "on": "enabled",
-                      "off": "disabled", "true": "enabled",
-                      "false": "disabled"}
+_CLIPBOARD_ALIASES = {
+    "bidirectional": "enabled",
+    "on": "enabled",
+    "off": "disabled",
+    "true": "enabled",
+    "false": "disabled",
+}
 
 
 def settings_of(notes):
@@ -156,8 +160,11 @@ def with_settings(notes, settings):
     """
     metadata, _ = parse(notes)
     settings = normalise_settings(settings)
-    trimmed = {name: value for name, value in settings.items()
-               if value != SETTINGS_DEFAULTS[name]}
+    trimmed = {
+        name: value
+        for name, value in settings.items()
+        if value != SETTINGS_DEFAULTS[name]
+    }
     if trimmed:
         metadata["settings"] = trimmed
     else:

@@ -10,7 +10,7 @@ import threading
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib  # noqa: E402
+from gi.repository import GLib, Gtk
 
 from ..api import ProxmoxError
 from ..api.models import human_age
@@ -30,16 +30,15 @@ def _timestamp(value):
     if not value:
         return "-"
     import datetime
-    return datetime.datetime.fromtimestamp(int(value)).strftime(
-        "%Y-%m-%d %H:%M:%S")
+
+    return datetime.datetime.fromtimestamp(int(value)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 class TakeSnapshotDialog(Gtk.Dialog):
     """Name, description, and whether to include guest RAM."""
 
     def __init__(self, parent, guest):
-        super().__init__(title="Take Snapshot", transient_for=parent,
-                         modal=True)
+        super().__init__(title="Take Snapshot", transient_for=parent, modal=True)
         self.guest = guest
         self.add_button("Cancel", Gtk.ResponseType.CANCEL)
         take = self.add_button("Take Snapshot", Gtk.ResponseType.OK)
@@ -61,7 +60,8 @@ class TakeSnapshotDialog(Gtk.Dialog):
         self.name_entry.set_text(self._default_name())
         # Proxmox only accepts [A-Za-z0-9_-] starting with a letter.
         self.name_entry.set_tooltip_text(
-            "Letters, digits, hyphen and underscore; must start with a letter")
+            "Letters, digits, hyphen and underscore; must start with a letter"
+        )
         grid.attach(self.name_entry, 1, 0, 1, 1)
 
         grid.attach(self._label("Description"), 0, 1, 1, 1)
@@ -73,7 +73,8 @@ class TakeSnapshotDialog(Gtk.Dialog):
         self.vmstate.set_active(False)
         self.vmstate.set_tooltip_text(
             "Saves memory so the snapshot restores to a running guest. "
-            "Slower, and needs free space equal to the guest's RAM.")
+            "Slower, and needs free space equal to the guest's RAM."
+        )
         # Only meaningful for a running QEMU guest.
         self.vmstate.set_sensitive(guest.running and not guest.is_container)
         content.pack_start(self.vmstate, False, False, 0)
@@ -96,12 +97,15 @@ class TakeSnapshotDialog(Gtk.Dialog):
     @staticmethod
     def _default_name():
         import datetime
+
         return datetime.datetime.now().strftime("snap%Y%m%d-%H%M%S")
 
     def values(self):
-        return (self.name_entry.get_text().strip(),
-                self.description.get_text().strip(),
-                self.vmstate.get_active())
+        return (
+            self.name_entry.get_text().strip(),
+            self.description.get_text().strip(),
+            self.vmstate.get_active(),
+        )
 
 
 def build_snapshot_tree(rows):
@@ -127,15 +131,16 @@ def build_snapshot_tree(rows):
             roots.append(row)
 
     def order(items):
-        return sorted(items, key=lambda r: (r.get("snaptime") or 0,
-                                            r.get("name") or ""))
+        return sorted(
+            items, key=lambda r: (r.get("snaptime") or 0, r.get("name") or "")
+        )
 
     def build(items, seen):
         result = []
         for row in order(items):
             name = row.get("name")
             if name in seen:
-                continue            # a parent cycle; never loop on one
+                continue  # a parent cycle; never loop on one
             seen.add(name)
             result.append((row, build(children.get(name, []), seen)))
         return result
@@ -149,8 +154,9 @@ class SnapshotManager(Gtk.Dialog):
     COL_NAME, COL_TIME, COL_DESC, COL_REAL = 0, 1, 2, 3
 
     def __init__(self, parent, api, guest, on_changed=None):
-        super().__init__(title=f"Snapshots - {guest.name}",
-                         transient_for=parent, modal=True)
+        super().__init__(
+            title=f"Snapshots - {guest.name}", transient_for=parent, modal=True
+        )
         self.api = api
         self.guest = guest
         self.on_changed = on_changed or (lambda: None)
@@ -169,16 +175,17 @@ class SnapshotManager(Gtk.Dialog):
         self.store = Gtk.TreeStore(str, str, str, bool)
         self.view = Gtk.TreeView(model=self.store)
         self.view.set_enable_tree_lines(True)
-        for title, index in (("Name", self.COL_NAME),
-                             ("Taken", self.COL_TIME),
-                             ("Description", self.COL_DESC)):
+        for title, index in (
+            ("Name", self.COL_NAME),
+            ("Taken", self.COL_TIME),
+            ("Description", self.COL_DESC),
+        ):
             renderer = Gtk.CellRendererText()
             renderer.set_property("ypad", 1)
             column = Gtk.TreeViewColumn(title, renderer, text=index)
             column.set_resizable(True)
             self.view.append_column(column)
-        self.view.get_selection().connect("changed",
-                                          lambda *_: self._update_buttons())
+        self.view.get_selection().connect("changed", lambda *_: self._update_buttons())
 
         scroll = Gtk.ScrolledWindow()
         scroll.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
@@ -216,16 +223,18 @@ class SnapshotManager(Gtk.Dialog):
 
         def worker():
             try:
-                rows = self.api.snapshots(self.guest.node, self.guest.vmid,
-                                          self.guest.kind,
-                                          include_current=True)
+                rows = self.api.snapshots(
+                    self.guest.node,
+                    self.guest.vmid,
+                    self.guest.kind,
+                    include_current=True,
+                )
             except ProxmoxError as exc:
                 GLib.idle_add(self._failed, str(exc))
                 return
             GLib.idle_add(self._populate, rows)
 
-        threading.Thread(target=worker, daemon=True,
-                         name="snapshot-list").start()
+        threading.Thread(target=worker, daemon=True, name="snapshot-list").start()
 
     def _populate(self, rows):
         self.store.clear()
@@ -234,20 +243,25 @@ class SnapshotManager(Gtk.Dialog):
             for row, children in nodes:
                 name = row.get("name", "?")
                 current = name == "current"
-                node = self.store.append(parent, [
-                    "NOW" if current else name,
-                    "" if current else _timestamp(row.get("snaptime")),
-                    ("You are here" if current
-                     else row.get("description", "") or ""),
-                    not current,
-                ])
+                node = self.store.append(
+                    parent,
+                    [
+                        "NOW" if current else name,
+                        "" if current else _timestamp(row.get("snaptime")),
+                        (
+                            "You are here"
+                            if current
+                            else row.get("description", "") or ""
+                        ),
+                        not current,
+                    ],
+                )
                 add(node, children)
 
         add(None, build_snapshot_tree(rows))
         self.view.expand_all()
         real = sum(1 for row in rows if row.get("name") != "current")
-        self._set_busy(False,
-                       f"{real} snapshot(s)" if real else "No snapshots")
+        self._set_busy(False, f"{real} snapshot(s)" if real else "No snapshots")
         self._update_buttons()
         self.on_changed()
         return False
@@ -283,33 +297,50 @@ class SnapshotManager(Gtk.Dialog):
         dialog.destroy()
         if response != Gtk.ResponseType.OK or not name:
             return
-        self._run("Creating snapshot",
-                  lambda: self.api.create_snapshot(
-                      self.guest.node, self.guest.vmid, name, description,
-                      vmstate, self.guest.kind))
+        self._run(
+            "Creating snapshot",
+            lambda: self.api.create_snapshot(
+                self.guest.node,
+                self.guest.vmid,
+                name,
+                description,
+                vmstate,
+                self.guest.kind,
+            ),
+        )
 
     def rollback(self):
         name = self.selected()
         if name is None:
             return
-        if not confirm(self, "Roll Back",
-                       f"Roll {self.guest.label} back to '{name}'?\n"
-                       "Changes made since the snapshot will be lost."):
+        if not confirm(
+            self,
+            "Roll Back",
+            f"Roll {self.guest.label} back to '{name}'?\n"
+            "Changes made since the snapshot will be lost.",
+        ):
             return
-        self._run(f"Rolling back to {name}",
-                  lambda: self.api.rollback_snapshot(
-                      self.guest.node, self.guest.vmid, name, self.guest.kind))
+        self._run(
+            f"Rolling back to {name}",
+            lambda: self.api.rollback_snapshot(
+                self.guest.node, self.guest.vmid, name, self.guest.kind
+            ),
+        )
 
     def delete(self):
         name = self.selected()
         if name is None:
             return
-        if not confirm(self, "Delete",
-                       f"Delete snapshot '{name}'? This cannot be undone."):
+        if not confirm(
+            self, "Delete", f"Delete snapshot '{name}'? This cannot be undone."
+        ):
             return
-        self._run(f"Deleting {name}",
-                  lambda: self.api.delete_snapshot(
-                      self.guest.node, self.guest.vmid, name, self.guest.kind))
+        self._run(
+            f"Deleting {name}",
+            lambda: self.api.delete_snapshot(
+                self.guest.node, self.guest.vmid, name, self.guest.kind
+            ),
+        )
 
     def _run(self, label, call):
         self._set_busy(True, f"{label}...")
@@ -323,15 +354,17 @@ class SnapshotManager(Gtk.Dialog):
             # The task runs server side; reloading picks it up once it lands.
             GLib.idle_add(self.reload)
 
-        threading.Thread(target=worker, daemon=True,
-                         name="snapshot-action").start()
+        threading.Thread(target=worker, daemon=True, name="snapshot-action").start()
 
 
 def confirm(parent, title, message):
     dialog = Gtk.MessageDialog(
-        transient_for=parent, modal=True,
+        transient_for=parent,
+        modal=True,
         message_type=Gtk.MessageType.QUESTION,
-        buttons=Gtk.ButtonsType.NONE, text=title)
+        buttons=Gtk.ButtonsType.NONE,
+        text=title,
+    )
     dialog.format_secondary_text(message)
     dialog.add_button("Cancel", Gtk.ResponseType.CANCEL)
     ok = dialog.add_button(title, Gtk.ResponseType.OK)

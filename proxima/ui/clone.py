@@ -12,7 +12,7 @@ import threading
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import GLib, Gtk
 
 from ..api.models import valid_guest_name
 from ..theme import decorate as theme_decorate
@@ -31,8 +31,7 @@ class CloneDialog(Gtk.Dialog):
     """Collects the parameters for one clone. Read them back with values()."""
 
     def __init__(self, parent, api, guest):
-        super().__init__(title=f"Clone {guest.name}", transient_for=parent,
-                         modal=True)
+        super().__init__(title=f"Clone {guest.name}", transient_for=parent, modal=True)
         self.api = api
         self.guest = guest
         self._closed = False
@@ -56,7 +55,8 @@ class CloneDialog(Gtk.Dialog):
         self.name_entry.set_activates_default(True)
         self.name_entry.set_text(self._default_name())
         self.name_entry.set_tooltip_text(
-            "Letters, digits, hyphens and dots; no leading or trailing hyphen")
+            "Letters, digits, hyphens and dots; no leading or trailing hyphen"
+        )
         self.name_entry.connect("changed", lambda *_: self._validate())
         grid.attach(self.name_entry, 1, 0, 1, 1)
 
@@ -83,7 +83,8 @@ class CloneDialog(Gtk.Dialog):
         self.mode_combo.set_active_id("linked")
         self.mode_combo.set_tooltip_text(
             "A linked clone shares the template's disks and cannot outlive "
-            "it. A full clone is an independent copy.")
+            "it. A full clone is an independent copy."
+        )
         self.mode_combo.connect("changed", lambda *_: self._sync_mode())
         grid.attach(self.mode_combo, 1, 3, 1, 1)
 
@@ -93,7 +94,8 @@ class CloneDialog(Gtk.Dialog):
         self.storage_combo.append(SAME_STORAGE, "Same as source")
         self.storage_combo.set_active_id(SAME_STORAGE)
         self.storage_combo.set_tooltip_text(
-            "Full clones only. Leave as the source to copy in place.")
+            "Full clones only. Leave as the source to copy in place."
+        )
         grid.attach(self.storage_combo, 1, 4, 1, 1)
 
         self.message = Gtk.Label(xalign=0.0)
@@ -126,6 +128,7 @@ class CloneDialog(Gtk.Dialog):
 
     def _background(self, name, work, apply_result):
         """Run one API call off the main loop and apply it if we are still up."""
+
         def worker():
             try:
                 result = work()
@@ -133,8 +136,7 @@ class CloneDialog(Gtk.Dialog):
                 # A list that will not load costs the user a typed value at
                 # worst; it is not worth an error dialog over a dialog.
                 return
-            GLib.idle_add(lambda: (self._closed or apply_result(result),
-                                   False)[1])
+            GLib.idle_add(lambda: (self._closed or apply_result(result), False)[1])
 
         threading.Thread(target=worker, daemon=True, name=name).start()
 
@@ -150,8 +152,7 @@ class CloneDialog(Gtk.Dialog):
 
     def _load_nodes(self):
         def apply(nodes):
-            names = sorted(node.name for node in nodes
-                           if node.status == "online")
+            names = sorted(node.name for node in nodes if node.status == "online")
             if not names:
                 return
             current = self.node_combo.get_active_id()
@@ -159,7 +160,8 @@ class CloneDialog(Gtk.Dialog):
             for name in names:
                 self.node_combo.append(name, name)
             self.node_combo.set_active_id(
-                current if current in names else self.guest.node)
+                current if current in names else self.guest.node
+            )
 
         self._background("clone-nodes", self.api.nodes, apply)
 
@@ -168,19 +170,19 @@ class CloneDialog(Gtk.Dialog):
         content = CONTENT_FOR_KIND.get(self.guest.kind, "images")
 
         def apply(rows):
-            names = sorted(row.get("storage") for row in rows
-                           if row.get("storage"))
+            names = sorted(row.get("storage") for row in rows if row.get("storage"))
             current = self.storage_combo.get_active_id()
             self.storage_combo.remove_all()
             self.storage_combo.append(SAME_STORAGE, "Same as source")
             for name in names:
                 self.storage_combo.append(name, name)
             self.storage_combo.set_active_id(
-                current if current in names else SAME_STORAGE)
+                current if current in names else SAME_STORAGE
+            )
 
         self._background(
-            "clone-storages",
-            lambda: self.api.node_storages(node, content), apply)
+            "clone-storages", lambda: self.api.node_storages(node, content), apply
+        )
 
     # -- state ---------------------------------------------------------
 
@@ -198,8 +200,10 @@ class CloneDialog(Gtk.Dialog):
         vmid = self.vmid_entry.get_text().strip()
         problem = ""
         if not valid_guest_name(name):
-            problem = ("Names may hold letters, digits, hyphens and dots, "
-                       "and cannot start or end with a hyphen.")
+            problem = (
+                "Names may hold letters, digits, hyphens and dots, "
+                "and cannot start or end with a hyphen."
+            )
         elif vmid and not vmid.isdigit():
             problem = "The VMID must be a number."
         elif vmid and int(vmid) < 100:

@@ -21,10 +21,9 @@ def split_host(value):
     """Accept 'host', 'host:port' and a pasted 'https://host:8006/...'."""
     value = (value or "").strip()
     for prefix in ("https://", "http://"):
-        if value.startswith(prefix):
-            value = value[len(prefix):]
+        value = value.removeprefix(prefix)
     value = value.split("/")[0]
-    if value.startswith("["):                 # bracketed IPv6
+    if value.startswith("["):  # bracketed IPv6
         host, _, rest = value.partition("]")
         port = rest.lstrip(":")
         return host[1:], int(port) if port.isdigit() else DEFAULT_PORT
@@ -37,8 +36,16 @@ def split_host(value):
 class Connection:
     """A single server: credentials, client, guests, and current state."""
 
-    def __init__(self, host, port=DEFAULT_PORT, username="root", realm="pam",
-                 verify_ssl=False, password="", save=False):
+    def __init__(
+        self,
+        host,
+        port=DEFAULT_PORT,
+        username="root",
+        realm="pam",
+        verify_ssl=False,
+        password="",
+        save=False,
+    ):
         self.host = host
         self.port = port
         self.username = username
@@ -50,7 +57,7 @@ class Connection:
         self.api = ProxmoxAPI(host, port=port, verify_ssl=verify_ssl)
         self.state = DISCONNECTED
         self.error = ""
-        self.guests = {}          # key -> Guest
+        self.guests = {}  # key -> Guest
         # False until the first poll returns. The tree shows "Loading..."
         # rather than a half-populated server whose guests would briefly
         # appear with the wrong actions enabled.
@@ -62,8 +69,7 @@ class Connection:
     @property
     def id(self):
         """Stable identifier, also what the tree shows as the root label."""
-        return self.host if self.port == DEFAULT_PORT \
-            else f"{self.host}:{self.port}"
+        return self.host if self.port == DEFAULT_PORT else f"{self.host}:{self.port}"
 
     @property
     def label(self):

@@ -16,7 +16,7 @@ thing that reports the state rather than three menus away from it.
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk  # noqa: E402
+from gi.repository import Gtk
 
 
 class StatusIndicator(Gtk.Box):
@@ -32,7 +32,7 @@ class StatusIndicator(Gtk.Box):
 
     # Opacity for each state, matching what the plain indicators used.
     OPACITY_ON = 1.0
-    OPACITY_OFF = 0.75          # switched off, but by choice -- still legible
+    OPACITY_OFF = 0.75  # switched off, but by choice -- still legible
     OPACITY_UNSUPPORTED = 0.25
 
     def __init__(self, icon_name, label, on_toggle=None):
@@ -42,8 +42,7 @@ class StatusIndicator(Gtk.Box):
         self._struck = False
         self._supported = None
 
-        self.image = Gtk.Image.new_from_icon_name(icon_name,
-                                                  Gtk.IconSize.MENU)
+        self.image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
         # After the default handler, so the strike lands on top of the icon
         # rather than under it.
         self.image.connect_after("draw", self._on_draw)
@@ -116,12 +115,13 @@ class StatusIndicator(Gtk.Box):
         context.save()
         # A dark backing line under the bright one, so the strike stays
         # visible over both light and dark parts of an icon.
-        for rgba, line_width in (((0, 0, 0, 0.55), 3.0),
-                                 ((colour.red, colour.green, colour.blue,
-                                   1.0), 1.6)):
+        for rgba, line_width in (
+            ((0, 0, 0, 0.55), 3.0),
+            ((colour.red, colour.green, colour.blue, 1.0), 1.6),
+        ):
             context.set_source_rgba(*rgba)
             context.set_line_width(line_width)
-            context.set_line_cap(1)     # cairo.LINE_CAP_ROUND
+            context.set_line_cap(1)  # cairo.LINE_CAP_ROUND
             context.move_to(inset, height - inset)
             context.line_to(width - inset, inset)
             context.stroke()

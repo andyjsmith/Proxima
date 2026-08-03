@@ -21,7 +21,7 @@ import threading
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk  # noqa: E402
+from gi.repository import GLib, Gtk
 
 from ..api import devices
 from ..api import notes as notes_meta
@@ -81,8 +81,9 @@ class VMSettingsDialog(Gtk.Dialog):
     """Hardware / Options / Proxmox Manager for one guest."""
 
     def __init__(self, parent, api, guest, on_saved=None):
-        super().__init__(title=f"Settings - {guest.label}",
-                         transient_for=parent, modal=True)
+        super().__init__(
+            title=f"Settings - {guest.label}", transient_for=parent, modal=True
+        )
         self.api = api
         self.guest = guest
         self.on_saved = on_saved or (lambda settings: None)
@@ -106,18 +107,15 @@ class VMSettingsDialog(Gtk.Dialog):
         # there first.
         self.config = dict(guest.config or {})
         self.digest = self.config.get("digest")
-        self.edits = {}                 # config key -> new value
+        self.edits = {}  # config key -> new value
         self.running = bool(guest.running)
         self.nets = self._load_nets()
 
         notebook = Gtk.Notebook()
         notebook.set_border_width(8)
-        notebook.append_page(self._hardware_page(),
-                             Gtk.Label(label="Hardware"))
-        notebook.append_page(self._options_page(),
-                             Gtk.Label(label="Options"))
-        notebook.append_page(self._manager_page(),
-                             Gtk.Label(label="Proxmox Manager"))
+        notebook.append_page(self._hardware_page(), Gtk.Label(label="Hardware"))
+        notebook.append_page(self._options_page(), Gtk.Label(label="Options"))
+        notebook.append_page(self._manager_page(), Gtk.Label(label="Proxmox Manager"))
 
         content = self.get_content_area()
         content.pack_start(notebook, True, True, 0)
@@ -175,21 +173,29 @@ class VMSettingsDialog(Gtk.Dialog):
         except (TypeError, ValueError):
             return default
 
-    def _spin(self, grid, row, label, key, lower, upper, default,
-              tooltip=None, live=False):
+    def _spin(
+        self, grid, row, label, key, lower, upper, default, tooltip=None, live=False
+    ):
         grid.attach(self._caption(label), 0, row, 1, 1)
         adjustment = Gtk.Adjustment(
             value=float(self._config_int(key, default)),
-            lower=lower, upper=upper, step_increment=1, page_increment=8)
+            lower=lower,
+            upper=upper,
+            step_increment=1,
+            page_increment=8,
+        )
         spin = Gtk.SpinButton(adjustment=adjustment, digits=0)
         spin.set_hexpand(True)
         spin.set_numeric(True)
         if tooltip:
             spin.set_tooltip_text(tooltip)
         self._gate(spin, key, live)
-        spin.connect("value-changed",
-                     lambda w: self._edit(key, str(int(w.get_value())),
-                                          str(self._config_int(key, default))))
+        spin.connect(
+            "value-changed",
+            lambda w: self._edit(
+                key, str(int(w.get_value())), str(self._config_int(key, default))
+            ),
+        )
         grid.attach(spin, 1, row, 1, 1)
         return spin
 
@@ -200,7 +206,8 @@ class VMSettingsDialog(Gtk.Dialog):
         widget.set_sensitive(False)
         widget.set_tooltip_text(
             "Stop the VM to change this. Proxmox would otherwise hold it as "
-            "a pending change until the next boot.")
+            "a pending change until the next boot."
+        )
 
     def _hardware_page(self):
         grid = self._page()
@@ -212,7 +219,8 @@ class VMSettingsDialog(Gtk.Dialog):
             warning.set_markup(
                 "<span foreground='#e0913a'>The VM is running. Processors, "
                 "memory and display can only be changed while it is stopped."
-                "</span>")
+                "</span>"
+            )
             grid.attach(warning, 0, row, 2, 1)
             row += 1
 
@@ -228,9 +236,16 @@ class VMSettingsDialog(Gtk.Dialog):
         self._spin(grid, row, "Memory (MiB)", "memory", 16, 4194304, 512)
         row += 1
         self._spin(
-            grid, row, "Minimum (MiB)", "balloon", 0, 4194304, 0,
+            grid,
+            row,
+            "Minimum (MiB)",
+            "balloon",
+            0,
+            4194304,
+            0,
             tooltip="Ballooning floor. 0 turns the balloon driver off, so "
-                    "the guest keeps all of its memory.")
+            "the guest keeps all of its memory.",
+        )
         row += 1
 
         grid.attach(self._heading("Display"), 0, row, 2, 1)
@@ -248,7 +263,8 @@ class VMSettingsDialog(Gtk.Dialog):
             combo.set_active_id(current)
         combo.set_hexpand(True)
         combo.set_tooltip_text(
-            "SPICE needs QXL or VirtIO-GPU. Anything else opens on VNC.")
+            "SPICE needs QXL or VirtIO-GPU. Anything else opens on VNC."
+        )
         self._gate(combo, "vga", live=False)
         combo.connect("changed", self._on_vga_changed)
         grid.attach(combo, 1, row, 1, 1)
@@ -273,10 +289,12 @@ class VMSettingsDialog(Gtk.Dialog):
             self.net_note.set_markup(
                 "<span foreground='#e0913a'>This VM does not hot-plug "
                 "network changes (see its 'hotplug' setting), so they will "
-                "wait for the next boot.</span>")
+                "wait for the next boot.</span>"
+            )
         else:
             self.net_note.set_text(
-                "Bridge, VLAN and firewall changes apply to a running VM.")
+                "Bridge, VLAN and firewall changes apply to a running VM."
+            )
         grid.attach(self.net_note, 0, row, 2, 1)
 
         self._rebuild_nets()
@@ -289,9 +307,9 @@ class VMSettingsDialog(Gtk.Dialog):
         """(type, remaining pairs) for a vga line."""
         for index, (key, value) in enumerate(pairs):
             if key is None:
-                return value, pairs[:index] + pairs[index + 1:]
+                return value, pairs[:index] + pairs[index + 1 :]
             if key == "type":
-                return value, pairs[:index] + pairs[index + 1:]
+                return value, pairs[:index] + pairs[index + 1 :]
         return "", list(pairs)
 
     def _on_vga_changed(self, combo):
@@ -304,17 +322,20 @@ class VMSettingsDialog(Gtk.Dialog):
         # Everything else on the line -- a QXL memory size, most likely --
         # is carried over rather than dropped on the floor.
         pairs = ([(None, chosen)] if chosen else []) + rest
-        self._edit("vga", devices.render_pairs(pairs),
-                   str(self.config.get("vga", "")))
+        self._edit("vga", devices.render_pairs(pairs), str(self.config.get("vga", "")))
 
     # -- network devices -----------------------------------------------
 
     def _load_nets(self):
         rows = []
         for slot in devices.nic_slots(self.config):
-            rows.append({"slot": slot,
-                         "pairs": devices.parse_pairs(self.config[slot]),
-                         "new": False})
+            rows.append(
+                {
+                    "slot": slot,
+                    "pairs": devices.parse_pairs(self.config[slot]),
+                    "new": False,
+                }
+            )
         return rows
 
     def _rebuild_nets(self):
@@ -369,7 +390,8 @@ class VMSettingsDialog(Gtk.Dialog):
 
         firewall = Gtk.CheckButton(label="Firewall")
         firewall.set_active(
-            str(devices.get_pair(entry["pairs"], "firewall", "0")) == "1")
+            str(devices.get_pair(entry["pairs"], "firewall", "0")) == "1"
+        )
         firewall.connect("toggled", self._on_net_firewall, entry)
         box.pack_start(firewall, False, False, 0)
 
@@ -381,15 +403,17 @@ class VMSettingsDialog(Gtk.Dialog):
         address.set_tooltip_text(
             "MAC address, as AA:BB:CC:DD:EE:FF. Changing it changes what the "
             "guest OS sees, which can move its network configuration to a "
-            "new interface.")
+            "new interface."
+        )
         address.connect("changed", self._on_net_mac, entry)
         entry["mac_widget"] = address
         box.pack_start(address, False, False, 0)
 
         remove = Gtk.Button()
         remove.set_relief(Gtk.ReliefStyle.NONE)
-        remove.add(Gtk.Image.new_from_icon_name("list-remove-symbolic",
-                                                Gtk.IconSize.MENU))
+        remove.add(
+            Gtk.Image.new_from_icon_name("list-remove-symbolic", Gtk.IconSize.MENU)
+        )
         remove.set_tooltip_text("Remove this network device")
         remove.connect("clicked", lambda *_: self._remove_net(entry))
         box.pack_end(remove, False, False, 0)
@@ -405,8 +429,12 @@ class VMSettingsDialog(Gtk.Dialog):
         if chosen == model:
             return
         # Replace the model token in place, keeping the MAC with it.
-        pairs = [(chosen, mac) if key == model or (key is None and value == model)
-                 else (key, value) for key, value in entry["pairs"]]
+        pairs = [
+            (chosen, mac)
+            if key == model or (key is None and value == model)
+            else (key, value)
+            for key, value in entry["pairs"]
+        ]
         entry["pairs"] = pairs
         self._sync_buttons()
 
@@ -422,23 +450,23 @@ class VMSettingsDialog(Gtk.Dialog):
             return
         text = editable.get_text().strip()
         if devices.valid_mac(text):
-            editable.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY,
-                                             None)
+            editable.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, None)
             entry["pairs"] = devices.set_nic_mac(entry["pairs"], text.upper())
             self._sync_buttons()
             return
-        editable.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY,
-                                         "dialog-warning-symbolic")
+        editable.set_icon_from_icon_name(
+            Gtk.EntryIconPosition.SECONDARY, "dialog-warning-symbolic"
+        )
         editable.set_icon_tooltip_text(
             Gtk.EntryIconPosition.SECONDARY,
-            "Not a complete MAC address (AA:BB:CC:DD:EE:FF)")
+            "Not a complete MAC address (AA:BB:CC:DD:EE:FF)",
+        )
 
     def _on_net_bridge(self, editable, entry):
         if self._loading:
             return
         value = editable.get_text().strip()
-        entry["pairs"] = devices.set_pair(entry["pairs"], "bridge",
-                                          value or None)
+        entry["pairs"] = devices.set_pair(entry["pairs"], "bridge", value or None)
         self._sync_buttons()
 
     def _on_net_vlan(self, entry_widget, entry):
@@ -457,20 +485,25 @@ class VMSettingsDialog(Gtk.Dialog):
         if self._loading:
             return
         entry["pairs"] = devices.set_pair(
-            entry["pairs"], "firewall", "1" if check.get_active() else "0")
+            entry["pairs"], "firewall", "1" if check.get_active() else "0"
+        )
         self._sync_buttons()
 
     def _add_net(self):
         slot = devices.free_nic_slot(
-            self.config, [e["slot"] for e in self.nets if e["slot"]])
+            self.config, [e["slot"] for e in self.nets if e["slot"]]
+        )
         if slot is None:
             self.message.set_text("All 32 network slots are in use.")
             return
         bridge = self._bridges[0] if self._bridges else "vmbr0"
-        self.nets.append({"slot": slot,
-                          "pairs": devices.parse_pairs(
-                              devices.new_nic(bridge=bridge)),
-                          "new": True})
+        self.nets.append(
+            {
+                "slot": slot,
+                "pairs": devices.parse_pairs(devices.new_nic(bridge=bridge)),
+                "new": True,
+            }
+        )
         self._rebuild_nets()
         self._sync_buttons()
 
@@ -490,8 +523,9 @@ class VMSettingsDialog(Gtk.Dialog):
                 names = []
             GLib.idle_add(self._apply_bridges, names)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"bridges-{guest.node}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"bridges-{guest.node}"
+        ).start()
 
     def _apply_bridges(self, names):
         if not getattr(self, "_alive", True):
@@ -511,8 +545,7 @@ class VMSettingsDialog(Gtk.Dialog):
 
     # -- options -------------------------------------------------------
 
-    def _flag(self, grid, row, label, key, tooltip, truth=None, live=True,
-              encode=None):
+    def _flag(self, grid, row, label, key, tooltip, truth=None, live=True, encode=None):
         check = Gtk.CheckButton(label=label)
         raw = str(self.config.get(key, "0")).strip()
         current = truth(raw) if truth else raw not in ("0", "", "none")
@@ -520,9 +553,7 @@ class VMSettingsDialog(Gtk.Dialog):
         check.set_tooltip_text(tooltip)
         self._gate(check, key, live)
         write = encode or (lambda active: "1" if active else "0")
-        check.connect(
-            "toggled",
-            lambda w: self._edit(key, write(w.get_active()), raw))
+        check.connect("toggled", lambda w: self._edit(key, write(w.get_active()), raw))
         grid.attach(check, 0, row, 2, 1)
         return check
 
@@ -537,25 +568,36 @@ class VMSettingsDialog(Gtk.Dialog):
         if len(pairs) <= 1 and all(key is None for key, _ in pairs):
             return "1" if active else "0"
         return devices.render_pairs(
-            devices.set_pair(pairs, "enabled", "1" if active else "0"))
+            devices.set_pair(pairs, "enabled", "1" if active else "0")
+        )
 
     def _options_page(self):
         grid = self._page()
         row = 0
 
-        self._flag(grid, row, "Start at boot", "onboot",
-                   "Start this VM when the node boots.")
+        self._flag(
+            grid, row, "Start at boot", "onboot", "Start this VM when the node boots."
+        )
         row += 1
         self._flag(
-            grid, row, "QEMU Guest Agent", "agent",
+            grid,
+            row,
+            "QEMU Guest Agent",
+            "agent",
             "Lets Proxmox read the guest's IP addresses, run commands in it "
             "and shut it down cleanly. The agent must also be installed "
             "inside the guest.",
             truth=lambda raw: raw.split(",")[0] in ("1", "enabled=1"),
-            encode=self._encode_agent)
+            encode=self._encode_agent,
+        )
         row += 1
-        self._flag(grid, row, "Protection", "protection",
-                   "Refuse to delete this VM or its disks.")
+        self._flag(
+            grid,
+            row,
+            "Protection",
+            "protection",
+            "Refuse to delete this VM or its disks.",
+        )
         row += 1
 
         note = Gtk.Label(xalign=0.0)
@@ -565,7 +607,8 @@ class VMSettingsDialog(Gtk.Dialog):
         note.set_text(
             "Start at boot and protection apply straight away. The guest "
             "agent setting is part of the VM's hardware, so it needs the VM "
-            "stopped.")
+            "stopped."
+        )
         grid.attach(note, 0, row, 2, 1)
         return grid
 
@@ -601,40 +644,64 @@ class VMSettingsDialog(Gtk.Dialog):
         container = self.guest.is_container
 
         self._combo(
-            grid, 0, "Clipboard", CLIPBOARD_CHOICES, "clipboard",
-            tooltip=("Share the clipboard between the host and the guest. "
-                     "Needs a SPICE console and spice-vdagent running in "
-                     "the guest."),
-            sensitive=not container)
+            grid,
+            0,
+            "Clipboard",
+            CLIPBOARD_CHOICES,
+            "clipboard",
+            tooltip=(
+                "Share the clipboard between the host and the guest. "
+                "Needs a SPICE console and spice-vdagent running in "
+                "the guest."
+            ),
+            sensitive=not container,
+        )
         self._combo(
-            grid, 1, "Audio", AUDIO_CHOICES, "audio",
-            tooltip=("Play the guest's sound on this machine. Needs a SPICE "
-                     "console and a SPICE audio device on the VM."),
-            sensitive=not container)
+            grid,
+            1,
+            "Audio",
+            AUDIO_CHOICES,
+            "audio",
+            tooltip=(
+                "Play the guest's sound on this machine. Needs a SPICE "
+                "console and a SPICE audio device on the VM."
+            ),
+            sensitive=not container,
+        )
         self._combo(
-            grid, 2, "Protocol", PROTOCOL_CHOICES, "protocol",
-            tooltip=("Which console protocol to open. VNC only is worth "
-                     "setting for a guest whose SPICE display misbehaves."))
+            grid,
+            2,
+            "Protocol",
+            PROTOCOL_CHOICES,
+            "protocol",
+            tooltip=(
+                "Which console protocol to open. VNC only is worth "
+                "setting for a guest whose SPICE display misbehaves."
+            ),
+        )
 
         note = Gtk.Label(xalign=0.0)
         note.get_style_context().add_class("dim")
         note.set_line_wrap(True)
         note.set_margin_top(8)
-        text = ("Stored in this guest's notes on the server, so every "
-                "machine running Proxmox Manager sees the same settings.\n\n"
-                "The clipboard and audio buttons in the status bar, and "
-                "Reopen Console with VNC, only change the console in front "
-                "of you for as long as it is open. They never change what "
-                "is set here.")
+        text = (
+            "Stored in this guest's notes on the server, so every "
+            "machine running Proxmox Manager sees the same settings.\n\n"
+            "The clipboard and audio buttons in the status bar, and "
+            "Reopen Console with VNC, only change the console in front "
+            "of you for as long as it is open. They never change what "
+            "is set here."
+        )
         if container:
-            text = ("Containers have no SPICE console, so clipboard and "
-                    "audio do not apply to them.\n\n" + text)
+            text = (
+                "Containers have no SPICE console, so clipboard and "
+                "audio do not apply to them.\n\n" + text
+            )
         note.set_text(text)
         grid.attach(note, 0, 3, 2, 1)
         return grid
 
-    def _combo(self, grid, row, label, choices, name, tooltip=None,
-               sensitive=True):
+    def _combo(self, grid, row, label, choices, name, tooltip=None, sensitive=True):
         caption = Gtk.Label(label=label, xalign=1.0)
         caption.get_style_context().add_class("dim")
         grid.attach(caption, 0, row, 1, 1)
@@ -724,8 +791,13 @@ class VMSettingsDialog(Gtk.Dialog):
             try:
                 if changes or deletes:
                     self.api.set_guest_config(
-                        guest.node, guest.vmid, changes, deletes,
-                        guest.kind, digest=self.digest)
+                        guest.node,
+                        guest.vmid,
+                        changes,
+                        deletes,
+                        guest.kind,
+                        digest=self.digest,
+                    )
             except Exception as exc:
                 GLib.idle_add(self._save_failed, f"{exc}")
                 return
@@ -733,28 +805,27 @@ class VMSettingsDialog(Gtk.Dialog):
             updated = None
             if notes_changed:
                 try:
-                    current = self.api.guest_notes(guest.node, guest.vmid,
-                                                   guest.kind)
+                    current = self.api.guest_notes(guest.node, guest.vmid, guest.kind)
                     updated = notes_meta.with_settings(current, wanted)
-                    self.api.set_guest_notes(guest.node, guest.vmid, updated,
-                                             guest.kind)
+                    self.api.set_guest_notes(
+                        guest.node, guest.vmid, updated, guest.kind
+                    )
                 except Exception as exc:
-                    GLib.idle_add(self._save_failed, f"{exc}",
-                                  bool(changes or deletes))
+                    GLib.idle_add(self._save_failed, f"{exc}", bool(changes or deletes))
                     return
 
             # Re-read so the dialog's idea of the guest -- and its digest --
             # match what is now on the server, rather than what we believe
             # we sent.
             try:
-                config = self.api.guest_config(guest.node, guest.vmid,
-                                               guest.kind)
+                config = self.api.guest_config(guest.node, guest.vmid, guest.kind)
             except Exception:
                 config = None
             GLib.idle_add(self._save_done, wanted, updated, config, close)
 
-        threading.Thread(target=worker, daemon=True,
-                         name=f"vm-settings-{guest.vmid}").start()
+        threading.Thread(
+            target=worker, daemon=True, name=f"vm-settings-{guest.vmid}"
+        ).start()
 
     def _save_done(self, wanted, updated, config, close):
         if not getattr(self, "_alive", True):
@@ -793,10 +864,13 @@ class VMSettingsDialog(Gtk.Dialog):
             # Say which half landed. "Could not save" over a hardware change
             # that did go through would send somebody looking for a problem
             # that is not there.
-            prefix = ("The hardware changes were saved, but the Proxmox "
-                      "Manager settings could not be")
+            prefix = (
+                "The hardware changes were saved, but the Proxmox "
+                "Manager settings could not be"
+            )
         self.message.set_markup(
             f"<span foreground='#e01b24'>{prefix}: "
-            f"{GLib.markup_escape_text(error)}</span>")
+            f"{GLib.markup_escape_text(error)}</span>"
+        )
         self._sync_buttons()
         return False

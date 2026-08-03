@@ -19,8 +19,17 @@ import re
 # Values that appear on their own, without a key, are the device model. The
 # shorthand "virtio=<mac>" means model virtio with that MAC address.
 NIC_MODELS = (
-    "virtio", "e1000", "e1000e", "rtl8139", "vmxnet3", "pcnet",
-    "i82551", "i82557b", "i82559er", "ne2k_isa", "ne2k_pci",
+    "virtio",
+    "e1000",
+    "e1000e",
+    "rtl8139",
+    "vmxnet3",
+    "pcnet",
+    "i82551",
+    "i82557b",
+    "i82559er",
+    "ne2k_isa",
+    "ne2k_pci",
 )
 
 # PVE 8 hands out addresses from this prefix. Matching it keeps a NIC added
@@ -53,8 +62,7 @@ def parse_pairs(value):
 
 
 def render_pairs(pairs):
-    return ",".join(part if key is None else f"{key}={part}"
-                    for key, part in pairs)
+    return ",".join(part if key is None else f"{key}={part}" for key, part in pairs)
 
 
 def get_pair(pairs, key, default=None):
@@ -122,14 +130,15 @@ def set_nic_mac(pairs, mac):
     model, _ = nic_model(pairs)
     for index, (key, value) in enumerate(pairs):
         if key == model and key in NIC_MODELS:
-            return pairs[:index] + [(key, mac)] + pairs[index + 1:]
+            return pairs[:index] + [(key, mac)] + pairs[index + 1 :]
     return set_pair(pairs, "macaddr", mac)
 
 
 def random_mac():
-    return ":".join(f"{part:02X}" for part in
-                    MAC_PREFIX + tuple(random.randint(0, 255)
-                                       for _ in range(3)))
+    return ":".join(
+        f"{part:02X}"
+        for part in MAC_PREFIX + tuple(random.randint(0, 255) for _ in range(3))
+    )
 
 
 def new_nic(bridge="vmbr0", model="virtio", firewall=True):
@@ -173,10 +182,10 @@ def network_hotplug(config):
     """
     raw = (config or {}).get("hotplug")
     if raw is None:
-        return True                      # the default set includes network
+        return True  # the default set includes network
     text = str(raw).strip().lower()
     if text in ("0", "", "none"):
         return False
     if text == "1":
-        return True                      # 1 means the default set
+        return True  # 1 means the default set
     return "network" in [part.strip() for part in text.split(",")]

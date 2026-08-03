@@ -15,12 +15,12 @@ for binary and transparently handle base64 if the server insists, because
 older PVE releases only speak the latter.
 """
 
-import os
-import ssl
 import base64
-import socket
-import struct
 import hashlib
+import os
+import socket
+import ssl
+import struct
 import urllib.parse
 
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -45,8 +45,9 @@ class WebSocketStream:
     knows nothing about framing.
     """
 
-    def __init__(self, url, headers=None, verify_ssl=False, timeout=20,
-                 subprotocols=("binary",)):
+    def __init__(
+        self, url, headers=None, verify_ssl=False, timeout=20, subprotocols=("binary",)
+    ):
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme not in ("ws", "wss"):
             raise WebSocketError(f"not a websocket URL: {url}")
@@ -109,7 +110,8 @@ class WebSocketStream:
                 fields[key.strip().lower()] = value.strip()
 
         expected = base64.b64encode(
-            hashlib.sha1((nonce + GUID).encode("ascii")).digest()).decode("ascii")
+            hashlib.sha1((nonce + GUID).encode("ascii")).digest()
+        ).decode("ascii")
         if fields.get("sec-websocket-accept") != expected:
             raise WebSocketError("websocket accept token did not match")
 
@@ -135,7 +137,7 @@ class WebSocketStream:
     def _recv_raw(self, count):
         if self._recv_leftover:
             chunk = self._recv_leftover[:count]
-            self._recv_leftover = self._recv_leftover[len(chunk):]
+            self._recv_leftover = self._recv_leftover[len(chunk) :]
             return chunk
         return self.sock.recv(count)
 
@@ -243,7 +245,7 @@ class WebSocketStream:
         if self._closed:
             return
         try:
-            self._send_frame(OP_CLOSE, b"\x03\xe8")   # 1000, normal closure
+            self._send_frame(OP_CLOSE, b"\x03\xe8")  # 1000, normal closure
         except Exception:
             pass
         self._closed = True

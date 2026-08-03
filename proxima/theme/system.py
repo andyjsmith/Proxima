@@ -16,7 +16,6 @@ loop integration that may not exist on Windows at all.
 """
 
 import os
-import subprocess
 
 _POLL_SECONDS = 5
 
@@ -29,7 +28,8 @@ def _windows_dark():
     try:
         key = winreg.OpenKey(
             winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        )
         with key:
             value, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
         return value == 0
@@ -41,21 +41,28 @@ def _portal_dark():
     """org.freedesktop.appearance color-scheme: 1 means prefer dark."""
     try:
         import gi
+
         gi.require_version("Gio", "2.0")
         from gi.repository import Gio, GLib
     except Exception:
         return None
     try:
         proxy = Gio.DBusProxy.new_for_bus_sync(
-            Gio.BusType.SESSION, Gio.DBusProxyFlags.NONE, None,
+            Gio.BusType.SESSION,
+            Gio.DBusProxyFlags.NONE,
+            None,
             "org.freedesktop.portal.Desktop",
             "/org/freedesktop/portal/desktop",
-            "org.freedesktop.portal.Settings", None)
+            "org.freedesktop.portal.Settings",
+            None,
+        )
         result = proxy.call_sync(
             "Read",
-            GLib.Variant("(ss)", ("org.freedesktop.appearance",
-                                  "color-scheme")),
-            Gio.DBusCallFlags.NONE, 1000, None)
+            GLib.Variant("(ss)", ("org.freedesktop.appearance", "color-scheme")),
+            Gio.DBusCallFlags.NONE,
+            1000,
+            None,
+        )
         value = result.unpack()[0]
         # Nested variants are common here depending on portal version.
         while isinstance(value, tuple) and value:
@@ -68,6 +75,7 @@ def _portal_dark():
 def _gsettings_dark():
     try:
         import gi
+
         gi.require_version("Gio", "2.0")
         from gi.repository import Gio
     except Exception:
@@ -127,6 +135,7 @@ class DarkModeWatcher:
 
     def __init__(self, on_change, interval=_POLL_SECONDS):
         from gi.repository import GLib
+
         self._glib = GLib
         self._on_change = on_change
         self._state = system_prefers_dark()
@@ -137,7 +146,7 @@ class DarkModeWatcher:
         if current is not None and current != self._state:
             self._state = current
             self._on_change(current)
-        return True     # keep the timeout alive
+        return True  # keep the timeout alive
 
     def stop(self):
         if self._source:
