@@ -77,13 +77,22 @@ jobs:
           # find the GObject typelibs. openbox is needed because the
           # fullscreen tests wait on real window-state changes, which only a
           # window manager delivers.
+          #
+          # librsvg2-common is the gdk-pixbuf SVG loader. Adwaita's symbolic
+          # icons are SVG only, so without it every load_symbolic() returns
+          # nothing and the sidebar's status icons come back as None -- which
+          # is a real missing icon on a user's machine too, not a test-only
+          # concern. It is only a Recommends, so --no-install-recommends drops
+          # it unless it is asked for by name.
           sudo apt-get install -y --no-install-recommends \
             python3-gi \
             python3-gi-cairo \
             python3-pytest \
+            python3-pytest-xdist \
             gir1.2-gtk-3.0 \
             libgtk-3-0 \
             adwaita-icon-theme \
+            librsvg2-common \
             fonts-dejavu-core \
             dbus-x11 \
             openbox \
@@ -102,9 +111,15 @@ jobs:
           python3 --version
           xvfb-run -a python3 -c 'import gi; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk; print("GTK", Gtk.get_major_version(), Gtk.get_minor_version())'
           xvfb-run -a python3 -c 'from proxima.console import SPICE_AVAILABLE; print("SPICE available:", SPICE_AVAILABLE)'
+          # A missing SVG loader shows up here as an empty list, rather than
+          # as three puzzling icon assertions further down.
+          python3 -c 'from gi.repository import GdkPixbuf; print("pixbuf formats:", sorted(f.get_name() for f in GdkPixbuf.Pixbuf.get_formats()))'
 
       - name: pytest
         run: |
           mkdir -p "$PROXIMA_CONFIG_DIR"
+          # -n: one worker per runner core, each with its own windows on the
+          # shared display. --dist loadfile keeps a file on one worker, which
+          # is what the module-scoped window fixture needs.
           xvfb-run -a --server-args="-screen 0 1600x1200x24" \
-            dbus-run-session -- bash -c 'openbox & sleep 3; exec python3 -m pytest -q'
+            dbus-run-session -- bash -c 'openbox & sleep 3; exec python3 -m pytest -q -n "$(nproc)" --dist loadfile'

@@ -23,6 +23,7 @@ module-root = ""
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-xdist>=3.6",
     "ruff>=0.16.1",
 ]
 
@@ -44,5 +45,10 @@ ignore = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers --strict-config"
+# --dist loadfile, not the default: a window is module-scoped and the tests in
+# a file run in order against it, so a file has to stay on one worker. Four is
+# where the wall clock stops improving -- past that the run is bounded by the
+# slowest single file, not by the number of workers. Override with `-n0` for a
+# serial run when a failure needs a readable traceback.
+addopts = "-ra --strict-markers --strict-config -n 4 --dist loadfile"
 xfail_strict = true

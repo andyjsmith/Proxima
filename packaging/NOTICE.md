@@ -2,12 +2,12 @@
 
 Proxima is distributed as a self-contained bundle so that it needs nothing
 installed alongside it. That means this package carries copies of other
-people's software, and their terms travel with it. The full licence text of
+people's software, and their terms travel with it. The full license text of
 every component is in the `licenses/` directory beside the program.
 
 The main components, and the terms they are under:
 
-| Component | Licence |
+| Component | License |
 | --- | --- |
 | GTK 3, GLib, GdkPixbuf, Pango, ATK | LGPL-2.1-or-later |
 | spice-gtk | LGPL-2.1-or-later |
@@ -32,4 +32,4 @@ libraries in this bundle, so they can be replaced with your own build: drop a
 compatible `.so`/`.dll` in over ours and the program will use it.
 
 Proxima's own source code is at the repository this was built from; the
-licence for that is in the repository root.
+license for that is in the repository root.

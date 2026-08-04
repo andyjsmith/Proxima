@@ -16,11 +16,16 @@ import sys
 import time
 
 # Never touch the real user settings: this suite opens the preferences
-# dialog, which saves on close.
-os.environ.setdefault(
-    "PROXIMA_CONFIG_DIR",
-    os.path.join(os.environ.get("TEMP", "/tmp"), "proxima-tests"),
+# dialog, which saves on close. Under xdist every worker gets its own
+# directory, so two of them cannot write the same settings file at once.
+os.environ["PROXIMA_CONFIG_DIR"] = os.path.join(
+    os.environ.get(
+        "PROXIMA_CONFIG_DIR",
+        os.path.join(os.environ.get("TEMP", "/tmp"), "proxima-tests"),
+    ),
+    os.environ.get("PYTEST_XDIST_WORKER", "master"),
 )
+os.makedirs(os.environ["PROXIMA_CONFIG_DIR"], exist_ok=True)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

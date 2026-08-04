@@ -21,7 +21,7 @@ pip-installed copy cannot find the GObject typelibs.
 | | Linux | Windows (MSYS2 UCRT64) |
 | --- | --- | --- |
 | GTK stack | `apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-spiceclientgtk-3.0` | `pacman -S mingw-w64-ucrt-x86_64-{python-gobject,gtk3,spice-gtk}` |
-| pytest | `apt install python3-pytest` | `pacman -S mingw-w64-ucrt-x86_64-python-pytest` |
+| pytest | `apt install python3-pytest python3-pytest-xdist` | `pacman -S mingw-w64-ucrt-x86_64-python-pytest{,-xdist}` |
 
 ### Tests
 
@@ -32,13 +32,18 @@ mismatches -- without needing a server. The fakes and the main-loop pump live
 in `tests/conftest.py`.
 
 ```
-python3 -m pytest                  everything (~2 minutes)
+python3 -m pytest                  everything (~1 minute, four at a time)
 python3 -m pytest -k console       one area
+python3 -m pytest -n0              serially, for a readable failure
 python3 tools/smoke_test.py        same thing, the old entry point
 ```
 
 Windows are module-scoped: the tests in a file run in order against one
-window, each putting back whatever it changed.
+window, each putting back whatever it changed. That is why the run is split
+by file (`--dist loadfile` in `pyproject.toml`) rather than by test -- a file
+has to stay on one worker, and several windows opening and closing at once is
+the suite working as intended, not a fault. The wall clock is bounded by the
+slowest single file, so more than four workers buys nothing.
 
 ### Formatting and linting
 
@@ -78,7 +83,10 @@ theme, which is what the toolbar and the status bar rely on.
   window-state changes.
 * `.github/workflows/build.yml` -- standalone Nuitka builds for Linux and
   Windows, uploaded as artifacts. The Windows job builds inside MSYS2 UCRT64
-  for the same reason the app runs there.
+  for the same reason the app runs there. It takes the better part of an hour,
+  so it does not run on a push: start one from **Actions -> Build -> Run
+  workflow**, or put a `build-please` label on a pull request to build that
+  branch. The release workflow calls it regardless.
 * `.github/workflows/release.yml` -- everything below.
 
 ## Releasing

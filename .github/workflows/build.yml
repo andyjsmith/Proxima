@@ -1,10 +1,14 @@
 name: Build
 
+# Deliberately not on push or pull_request: a Nuitka standalone build takes
+# the better part of an hour and nothing downstream of a commit waits on it.
+# Start one by hand from Actions -> Build -> "Run workflow" (the branch picker
+# there chooses what gets built), or push a `build-please` label onto a pull
+# request to have that PR's head built.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
+  pull_request:
+    types: [labeled]
   # Called by release.yml, which packages what these jobs produce.
   workflow_call:
 
@@ -21,6 +25,10 @@ env:
 jobs:
   linux:
     name: Linux (Nuitka, standalone)
+    # `labeled` fires for every label, so the one that means "build this" has
+    # to be checked here. Dispatched and release-called runs have no label and
+    # fall through the first clause.
+    if: github.event_name != 'pull_request' || github.event.label.name == 'build-please'
     # Deliberately the oldest supported runner: the bundle is built against
     # this glibc and will not start on anything older.
     runs-on: ubuntu-22.04
@@ -33,7 +41,10 @@ jobs:
           sudo apt-get update
           # PyGObject and spice-gtk come from apt: Nuitka compiles against the
           # interpreter that can already import them. GStreamer is what
-          # decodes SPICE video.
+          # decodes SPICE video. librsvg2-common is the gdk-pixbuf SVG loader,
+          # which is what draws Adwaita's symbolic icons -- it is bundled from
+          # lib/gdk-pixbuf-2.0 below, and without it installed the bundle
+          # ships a loader directory with no way to read an SVG.
           sudo apt-get install -y --no-install-recommends \
             build-essential \
             ccache \
@@ -55,6 +66,7 @@ jobs:
             libcairo2-dev \
             adwaita-icon-theme \
             hicolor-icon-theme \
+            librsvg2-common \
             xvfb
 
       - name: Install Nuitka
@@ -120,7 +132,7 @@ jobs:
         # are missing until this runs.
         run: python3 tools/bundle_deps.py build/proxima.dist --prefix /usr
 
-      - name: Collect the licences
+      - name: Collect the licenses
         # The bundle redistributes GTK, spice-gtk, GStreamer and their
         # dependencies, all of which come with terms that have to travel with
         # them. Every library in the bundle is traced back to the package it
@@ -130,19 +142,25 @@ jobs:
           libdir="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
           out=build/proxima.dist/licenses
           mkdir -p "$out"
+          # `|| true` twice, deliberately: dpkg -S exits non-zero for any
+          # library that came from Nuitka rather than from a package, and
+          # under `set -o pipefail` that one failure is the exit status of
+          # the whole substitution.
           packages=$(
             find build/proxima.dist -name '*.so*' -printf '%f\n' \
             | while read -r name; do
-                dpkg -S "$libdir/$name" 2>/dev/null | cut -d: -f1
-              done | tr ',' '\n' | sort -u
+                dpkg -S "$libdir/$name" 2>/dev/null | cut -d: -f1 || true
+              done | tr ',' '\n' | sed '/^$/d' | sort -u || true
           )
           for package in $packages; do
             file="/usr/share/doc/$package/copyright"
-            [ -f "$file" ] && cp "$file" "$out/$package.txt"
+            if [ -f "$file" ]; then
+              cp "$file" "$out/$package.txt"
+            fi
           done
           printf '%s\n' "$packages" > "$out/PACKAGES.txt"
           cp packaging/NOTICE.md build/proxima.dist/NOTICE.md
-          echo "collected $(ls "$out" | wc -l) licence file(s)"
+          echo "collected $(ls "$out" | wc -l) license file(s)"
 
       - name: Smoke test the bundle
         run: |
@@ -175,6 +193,7 @@ jobs:
 
   windows:
     name: Windows (Nuitka, standalone)
+    if: github.event_name != 'pull_request' || github.event.label.name == 'build-please'
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -292,13 +311,17 @@ jobs:
           $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot"
           $out = & .\build\proxima.dist\proxima.exe --diagnose 2>&1 | Out-String
           $out
-          if ($out -notmatch "SPICE widget available: True") {
+          if ($out -cnotmatch "SPICE widget available: True") {
             Write-Output "::error::the build has no working SPICE widget"; exit 1
           }
-          if ($out -match "\[MISSING\]") {
+          # -cmatch, not -match: PowerShell's -match is case-insensitive, so
+          # the plain one also matches the lower-case "[missing]" the theme
+          # section prints for every search root it did not find -- which is
+          # normal, and which failed this step for a healthy bundle.
+          if ($out -cmatch "\[MISSING\]") {
             Write-Output "::error::the bundle is missing GTK runtime data"; exit 1
           }
-          if ($out -notmatch "H\.264\s+\S+\s+available") {
+          if ($out -cnotmatch "H\.264\s+\S+\s+available") {
             Write-Output "::warning::no H.264 decoder in the bundle; SPICE video will fall back"
           }
 

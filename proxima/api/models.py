@@ -302,7 +302,7 @@ def parse_spice_clients(text):
     Output with no channel section at all returns None -- "cannot tell" --
     and never zero. The difference decides whether somebody gets thrown off
     their session, so a reply this function does not recognise is a reason
-    to ask the user rather than a licence to assume the console is free.
+    to ask the user rather than a license to assume the console is free.
     Only QEMU actually saying "none" counts as empty.
     """
     sessions = []
