@@ -1,0 +1,57 @@
+# The GStreamer plugins a packaged build carries.
+#
+# Bundling the lot costs about 200 MB, nearly all of it encoders: shipping
+# every plugin drags in ffmpeg, and ffmpeg drags in x265, AOM, SVT-AV1,
+# whisper.cpp and SDL. A SPICE client only ever decodes, so the list is
+# spelled out instead.
+#
+# One plugin per line, named as GStreamer names it -- "vpx" is
+# libgstvpx.so/libgstvpx.dll. Names that do not exist on a platform are
+# skipped, which is how the same list works for both.
+
+# -- the pipeline itself --------------------------------------------------
+coreelements
+app
+typefindfunctions
+playback
+autodetect
+videoconvertscale
+videoconvert
+videoscale
+videofilter
+audioconvert
+audioresample
+volume
+
+# -- decoders -------------------------------------------------------------
+# What spice-gtk asks for: VP8/VP9, MJPEG and H.264. h264parse lives in
+# videoparsersbad and the H.264 decoder cannot be fed without it.
+vpx
+jpeg
+openh264
+videoparsersbad
+
+# gst-libav gives avdec_h264, which is the decoder spice-gtk prefers. It is
+# left out on purpose: it links ffmpeg, which is GPL-3.0-or-later as MSYS2
+# and Debian build it, and it takes the Windows bundle from ~90 MB to about
+# 290 MB. openh264 above decodes H.264 as well. Uncomment to have both, and
+# read the licence note in the README first.
+# libav
+
+# -- hardware decoding ----------------------------------------------------
+# Missing on the other platform, so both sets are simply listed. The app can
+# demote all of these at run time (Preferences -> software decoding only).
+d3d11
+d3d12
+nvcodec
+qsv
+mediafoundation
+va
+
+# -- audio out ------------------------------------------------------------
+wasapi2
+wasapi
+directsound
+pulseaudio
+alsa
+pipewire

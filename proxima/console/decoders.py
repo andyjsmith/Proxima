@@ -63,28 +63,39 @@ def gstreamer_report():
     except Exception as exc:
         return [
             f"GStreamer unavailable: {exc}",
-            "  -> pacman -S mingw-w64-ucrt-x86_64-gstreamer "
-            "mingw-w64-ucrt-x86_64-gst-plugins-good "
-            "mingw-w64-ucrt-x86_64-gst-libav",
+            (
+                "  -> pacman -S mingw-w64-ucrt-x86_64-gstreamer "
+                "mingw-w64-ucrt-x86_64-gst-plugins-good "
+                "mingw-w64-ucrt-x86_64-gst-libav"
+            ),
         ]
 
+    # Several elements can decode the same thing, and which one is present
+    # depends on how the build was put together -- a packaged build carries
+    # openh264 rather than ffmpeg, for size and licensing. Any of them
+    # answering means the codec works, so the first one found is reported.
     wanted = [
-        ("vp8dec", "VP8"),
-        ("vp9dec", "VP9"),
-        ("avdec_h264", "H.264"),
-        ("jpegdec", "MJPEG"),
-        ("autoaudiosink", "audio out"),
-        ("autoaudiosrc", "audio in"),
+        ("VP8", ["vp8dec"]),
+        ("VP9", ["vp9dec"]),
+        ("H.264", ["avdec_h264", "openh264dec", "d3d11h264dec", "nvh264dec"]),
+        ("MJPEG", ["jpegdec"]),
+        ("audio out", ["autoaudiosink"]),
+        ("audio in", ["autoaudiosrc"]),
     ]
 
     packages = set()
-    for element, label in wanted:
-        found = Gst.ElementFactory.find(element) is not None
-        lines.append(
-            f"  {label:<9} {element:<14} {'available' if found else 'MISSING'}"
+    for label, elements in wanted:
+        found = next(
+            (e for e in elements if Gst.ElementFactory.find(e) is not None), None
         )
-        if not found and element in GST_ELEMENT_PACKAGES:
-            packages.add(GST_ELEMENT_PACKAGES[element])
+        lines.append(
+            f"  {label:<9} {found or elements[0]:<14} "
+            f"{'available' if found else 'MISSING'}"
+        )
+        if found is None:
+            packages.update(
+                GST_ELEMENT_PACKAGES[e] for e in elements if e in GST_ELEMENT_PACKAGES
+            )
 
     for package in sorted(packages):
         lines.append(f"  -> pacman -S mingw-w64-ucrt-x86_64-{package}")

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Proxima
+GenericName=Proxmox VE Client
+Comment=A VMware Workstation style client for Proxmox VE
+Exec=proxima %U
+Icon=proxima
+Terminal=false
+Categories=Network;RemoteAccess;System;
+Keywords=Proxmox;VM;SPICE;VNC;virtualisation;
+StartupWMClass=proxima

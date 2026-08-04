@@ -16,6 +16,7 @@ older PVE releases only speak the latter.
 """
 
 import base64
+import contextlib
 import hashlib
 import os
 import socket
@@ -244,12 +245,9 @@ class WebSocketStream:
     def close(self):
         if self._closed:
             return
-        try:
-            self._send_frame(OP_CLOSE, b"\x03\xe8")  # 1000, normal closure
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            # 1000, normal closure.
+            self._send_frame(OP_CLOSE, b"\x03\xe8")
         self._closed = True
-        try:
+        with contextlib.suppress(Exception):
             self.sock.close()
-        except Exception:
-            pass

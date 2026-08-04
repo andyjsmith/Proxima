@@ -16,6 +16,7 @@ from . import APP_NAME
 from .config import Config
 from .theme import apply as apply_theme
 from .ui import MainWindow
+from .ui.appicon import apply_default_icon
 
 
 class Application:
@@ -28,6 +29,9 @@ class Application:
         GLib.set_prgname("proxima")
 
         apply_theme(self.config)
+        # Before any window is built: GTK reads the default icon when a
+        # window is realised, not afterwards.
+        apply_default_icon()
 
         self.window = MainWindow(self.config)
         self.window.show_all()
@@ -42,11 +46,15 @@ def main(argv=None):
     config = Config.load()
 
     if "--diagnose" in argv:
+        from . import bundle
         from .console import SPICE_AVAILABLE, VNC_AVAILABLE
         from .console.decoders import gstreamer_report
         from .theme import discovery
 
         discovery.diagnose()
+        for line in bundle.report():
+            print(line)
+        print()
         print("--- GStreamer ---")
         for line in gstreamer_report():
             print(line)

@@ -22,5 +22,27 @@ module-root = ""
 
 [dependency-groups]
 dev = [
+    "pytest>=8.0",
     "ruff>=0.16.1",
 ]
+
+# PyGObject, pycairo and spice-gtk are deliberately not dependencies: they
+# come from the system (python3-gi on Linux, the MSYS2 UCRT64 packages on
+# Windows), and a pip-installed copy would not find the GObject typelibs.
+
+[tool.ruff]
+target-version = "py312"
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "SIM"]
+# A couple of settings are read by the libraries exactly once, when they
+# first initialise, so they have to be in the environment before `gi` is
+# imported anywhere -- which means imports below code, on purpose. See
+# proxima/__main__.py.
+ignore = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+xfail_strict = true

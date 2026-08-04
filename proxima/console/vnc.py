@@ -10,6 +10,7 @@ storage followed by mark_dirty_rectangle. No conversion, no reallocation per
 frame.
 """
 
+import contextlib
 import time
 
 import gi
@@ -523,10 +524,8 @@ class VncConsole(Gtk.Box):
         if self._closed or getattr(self, "status_panel", None) is None:
             return
         self.connected = False
-        try:
+        with contextlib.suppress(Exception):
             self.release_input()
-        except Exception:
-            pass
         titles = {
             "stopped": "Guest is stopped",
             "suspended": "Guest is suspended",

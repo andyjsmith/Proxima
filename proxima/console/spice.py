@@ -12,6 +12,7 @@ Its quirks are worth restating because none of them are guessable:
   * The ticket in 'password' is short lived, so connect promptly.
 """
 
+import contextlib
 import os
 import tempfile
 import time
@@ -19,6 +20,7 @@ import time
 import gi
 
 gi.require_version("Gtk", "3.0")
+
 from gi.repository import Gdk, GLib, GObject, Gtk
 
 from .decoders import gstreamer_report
@@ -76,7 +78,7 @@ def session_connect(session):
     try:
         return bool(session.connect())
     except TypeError as exc:
-        raise RuntimeError(f"could not call spice_session_connect: {exc}")
+        raise RuntimeError(f"could not call spice_session_connect: {exc}") from exc
 
 
 def session_disconnect(session):
@@ -475,12 +477,10 @@ class SpiceConsole(Gtk.Box):
             channel_id = channel.get_property("channel-id")
             self._display_channel = channel
             self._status(f"display channel {channel_id} appeared")
-            try:
+            with contextlib.suppress(Exception):
                 connect_signal(
                     channel, "display-primary-create", self._on_primary_create
                 )
-            except Exception:
-                pass
             GLib.idle_add(self._attach_display, channel_id)
 
         elif isinstance(channel, SpiceGLib.MainChannel):
@@ -779,10 +779,8 @@ class SpiceConsole(Gtk.Box):
         if self._closed or getattr(self, "status_panel", None) is None:
             return
         self.connected = False
-        try:
+        with contextlib.suppress(Exception):
             self.release_input()
-        except Exception:
-            pass
         titles = {
             "stopped": "Guest is stopped",
             "suspended": "Guest is suspended",
@@ -824,8 +822,6 @@ class SpiceConsole(Gtk.Box):
         if getattr(self, "session", None) is not None:
             session_disconnect(self.session)
         if self._ca_file and os.path.exists(self._ca_file):
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(self._ca_file)
-            except OSError:
-                pass
             self._ca_file = None

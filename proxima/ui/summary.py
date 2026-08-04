@@ -5,11 +5,13 @@ the guest agent, IP addresses) is fetched lazily on a worker thread, because
 those are per-guest calls and the poll loop deliberately does not make them.
 """
 
+import contextlib
 import threading
 
 import gi
 
 gi.require_version("Gtk", "3.0")
+
 from gi.repository import GLib, Gtk
 
 from ..api.models import audio_is_spice, vga_is_spice
@@ -181,10 +183,8 @@ class SummaryPage(Gtk.ScrolledWindow):
             config = {}
             osinfo = None
             address = ""
-            try:
+            with contextlib.suppress(Exception):
                 config = api.guest_config(guest.node, guest.vmid, guest.kind)
-            except Exception:
-                pass
 
             if guest.running:
                 try:

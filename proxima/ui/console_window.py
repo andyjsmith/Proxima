@@ -16,9 +16,8 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 from ..theme import decorate as theme_decorate
-from . import actions as action_defs
+from . import toolbar
 from .fullscreen import FullscreenController
-from .snapshots import describe_revert
 
 
 class ConsoleWindow(Gtk.Window):
@@ -63,60 +62,33 @@ class ConsoleWindow(Gtk.Window):
         bar.set_style(Gtk.ToolbarStyle.BOTH_HORIZ)
         bar.set_icon_size(Gtk.IconSize.SMALL_TOOLBAR)
 
-        self._action_items = {}
-        for name in action_defs.TOOLBAR_ACTIONS:
-            action = action_defs.ACTIONS_BY_NAME[name]
-            item = Gtk.ToolButton()
-            item.set_label(action.label)
-            item.set_icon_name(action.icon)
-            item.set_tooltip_text(action.tooltip)
-            item.set_is_important(name in ("start", "shutdown"))
-            item.set_sensitive(False)
-            item.connect(
-                "clicked",
-                lambda _b, which=name: self.main.run_action_for(self.guest_key, which),
-            )
-            self._action_items[name] = item
-            bar.insert(item, -1)
+        self._action_items = toolbar.add_power_buttons(
+            bar, lambda which: self.main.run_action_for(self.guest_key, which)
+        )
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
-        self._snapshot_items = {}
-        for which, label, icon, tooltip in (
-            ("take", "Snapshot", "list-add-symbolic", "Take a snapshot"),
-            (
-                "revert",
-                "Revert",
-                "edit-undo-symbolic",
-                "Roll back to the most recent snapshot",
-            ),
-            ("manage", "Manage", "document-open-symbolic", "Manage snapshots"),
-        ):
-            item = Gtk.ToolButton()
-            item.set_label(label)
-            item.set_icon_name(icon)
-            item.set_tooltip_text(tooltip)
-            item.set_sensitive(False)
-            item.connect(
-                "clicked",
-                lambda _b, w=which: self.main.snapshot_action_for(self.guest_key, w),
-            )
-            self._snapshot_items[which] = item
-            bar.insert(item, -1)
+        self._snapshot_items = toolbar.add_snapshot_buttons(
+            bar, lambda which: self.main.snapshot_action_for(self.guest_key, which)
+        )
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
-        keys = Gtk.ToolButton()
-        keys.set_label("Ctrl+Alt+Del")
-        keys.set_icon_name("input-keyboard-symbolic")
-        keys.set_tooltip_text("Send Ctrl+Alt+Del to the guest")
+        keys = toolbar.tool_button(
+            "Ctrl+Alt+Del",
+            "input-keyboard-symbolic",
+            "Send Ctrl+Alt+Del to the guest",
+            sensitive=True,
+        )
         keys.connect("clicked", lambda *_: self._send_ctrl_alt_del())
         bar.insert(keys, -1)
 
-        full = Gtk.ToolButton()
-        full.set_label("Full Screen")
-        full.set_icon_name("view-fullscreen-symbolic")
-        full.set_tooltip_text("Full screen (Ctrl+Alt+Enter)")
+        full = toolbar.tool_button(
+            "Full Screen",
+            "view-fullscreen-symbolic",
+            "Full screen (Ctrl+Alt+Enter)",
+            sensitive=True,
+        )
         full.connect("clicked", lambda *_: self.fullscreen_control.toggle())
         bar.insert(full, -1)
 
@@ -125,10 +97,12 @@ class ConsoleWindow(Gtk.Window):
         spacer.set_expand(True)
         bar.insert(spacer, -1)
 
-        back = Gtk.ToolButton()
-        back.set_label("Return to Tabs")
-        back.set_icon_name("view-restore-symbolic")
-        back.set_tooltip_text("Put this console back in the main window")
+        back = toolbar.tool_button(
+            "Return to Tabs",
+            "view-restore-symbolic",
+            "Put this console back in the main window",
+            sensitive=True,
+        )
         back.connect("clicked", lambda *_: self.return_to_tabs())
         bar.insert(back, -1)
 
@@ -138,19 +112,8 @@ class ConsoleWindow(Gtk.Window):
 
     def update_sensitivity(self):
         guest = self.main.sidebar.guests.get(self.guest_key)
-        for name, item in self._action_items.items():
-            action = action_defs.resolve(name, guest)
-            item.set_sensitive(action_defs.enabled_for(action, guest))
-            if name == "start":
-                item.set_label(action.label)
-                item.set_tooltip_text(action.tooltip)
-        can_snapshot = guest is not None and not guest.template
-        for which, item in self._snapshot_items.items():
-            item.set_sensitive(can_snapshot)
-        latest = guest.latest_snapshot if guest else None
-        revert = self._snapshot_items["revert"]
-        revert.set_sensitive(bool(can_snapshot and latest))
-        revert.set_tooltip_text(describe_revert(latest))
+        toolbar.apply_power_state(self._action_items, guest)
+        toolbar.apply_snapshot_state(self._snapshot_items, guest)
 
     def replace_console(self, console):
         """Swap in a rebuilt console without disturbing the window."""

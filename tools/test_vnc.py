@@ -20,6 +20,7 @@ os.environ.setdefault(
     os.path.join(os.environ.get("TEMP", "/tmp"), "proxima-tests"),
 )
 import base64
+import contextlib
 import hashlib
 import socket
 import struct
@@ -65,10 +66,8 @@ class SocketStream:
         self.sock.sendall(data)
 
     def close(self):
-        try:
+        with contextlib.suppress(OSError):
             self.sock.close()
-        except OSError:
-            pass
 
 
 # --------------------------------------------------------------------------
@@ -98,7 +97,7 @@ class FakeRfbServer(threading.Thread):
     def run(self):
         try:
             self._serve()
-        except Exception as exc:  # surfaced by the test, not swallowed
+        except Exception as exc:  # noqa: BLE001  # surfaced by the test, not swallowed
             self.error = exc
         finally:
             self.done.set()
@@ -405,7 +404,7 @@ class FakeWebSocketServer(threading.Thread):
         try:
             conn, _ = self.listener.accept()
             self._serve(conn)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self.error = exc
 
     def _serve(self, conn):
@@ -521,10 +520,8 @@ class WsServerStream:
         ws_send(self.conn, 2, bytes(data))
 
     def close(self):
-        try:
+        with contextlib.suppress(OSError):
             self.conn.close()
-        except OSError:
-            pass
 
 
 class FakeVncWebSocketServer(threading.Thread):
@@ -579,7 +576,7 @@ class FakeVncWebSocketServer(threading.Thread):
             self.rfb.received_pointer = None
             self.rfb.done = threading.Event()
             self.rfb.run()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             self.error = exc
 
 
@@ -807,7 +804,7 @@ def test_offline_effect():
     context.set_source_rgb(1, 0, 0)  # a saturated frame
     context.paint()
     surface.flush()
-    blue0, green0, red0, _ = bytes(surface.get_data()[0:4])
+    _, _, red0, _ = bytes(surface.get_data()[0:4])
 
     draw_offline_effect(context, 32, 32)
     surface.flush()

@@ -36,6 +36,7 @@ from ..theme import decorate as theme_decorate
 from ..theme import keep_active as theme_keep_active
 from ..theme.system import DarkModeWatcher
 from . import actions as action_defs
+from . import toolbar as toolbar_defs
 from .clone import CloneDialog
 from .console_tab import ConsoleTabLabel
 from .console_window import ConsoleWindow
@@ -44,7 +45,7 @@ from .indicators import StatusIndicator
 from .login_dialog import run_login
 from .settings_dialog import SettingsDialog
 from .sidebar import Sidebar
-from .snapshots import SnapshotManager, TakeSnapshotDialog, describe_revert
+from .snapshots import SnapshotManager, TakeSnapshotDialog
 from .split import MAX_PANES, SplitView
 from .summary import SummaryPage
 from .task_feed import TaskFeed
@@ -573,43 +574,16 @@ class MainWindow(Gtk.Window):
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
-        for name in action_defs.TOOLBAR_ACTIONS:
-            action = action_defs.ACTIONS_BY_NAME[name]
-            item = Gtk.ToolButton()
-            item.set_label(action.label)
-            item.set_icon_name(action.icon)
-            item.set_is_important(name in ("start", "shutdown"))
-            item.set_tooltip_text(action.tooltip)
-            item.set_sensitive(False)
-            item.connect(
-                "clicked",
-                lambda _b, action_name=name: self._run_action_on_selection(action_name),
-            )
+        for name, item in toolbar_defs.add_power_buttons(
+            bar, self._run_action_on_selection
+        ).items():
             self._action_items.setdefault(name, []).append(item)
-            bar.insert(item, -1)
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
-        self.snapshot_items = {}
-        for name, label, icon, tooltip in (
-            ("take", "Snapshot", "list-add-symbolic", "Take a snapshot"),
-            (
-                "revert",
-                "Revert",
-                "edit-undo-symbolic",
-                "Roll back to the most recent snapshot",
-            ),
-            ("manage", "Manage", "document-open-symbolic", "Manage snapshots"),
-        ):
-            item = Gtk.ToolButton()
-            item.set_label(label)
-            item.set_icon_name(icon)
-            item.set_tooltip_text(tooltip)
-            item.set_is_important(name == "take")
-            item.set_sensitive(False)
-            item.connect("clicked", lambda _b, which=name: self._snapshot_action(which))
-            self.snapshot_items[name] = item
-            bar.insert(item, -1)
+        self.snapshot_items = toolbar_defs.add_snapshot_buttons(
+            bar, self._snapshot_action, important=("take",)
+        )
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
@@ -1160,21 +1134,12 @@ class MainWindow(Gtk.Window):
     def _update_snapshot_buttons(self, console=_CURRENT):
         """Revert is only offered when there is something to revert to."""
         guest = self.context_guest(console)
-        can_snapshot = guest is not None and not guest.template
-        latest = guest.latest_snapshot if guest else None
-
-        for name in ("take", "manage"):
-            self.snapshot_items[name].set_sensitive(can_snapshot)
-            self.snapshot_menu_items[name].set_sensitive(can_snapshot)
-
-        enabled = bool(can_snapshot and latest)
-        tooltip = describe_revert(latest)
-        for widget in (
-            self.snapshot_items["revert"],
-            self.snapshot_menu_items["revert"],
-        ):
-            widget.set_sensitive(enabled)
-            widget.set_tooltip_text(tooltip)
+        # The toolbar button and the menu entry for each one, together.
+        paired = {
+            name: (self.snapshot_items[name], self.snapshot_menu_items[name])
+            for name in self.snapshot_items
+        }
+        toolbar_defs.apply_snapshot_state(paired, guest)
 
     def _apply_agent_ping(self, key, ok):
         # A ping that lands after the window has gone has nothing to update,
@@ -1677,11 +1642,13 @@ class MainWindow(Gtk.Window):
             if setter is not None:
                 setter(wanted)
 
-        if console is not None and getattr(console, "supports", {}).get("audio"):
-            if bool(getattr(console, "play_audio", True)) != (
-                settings.get("audio") != "disabled"
-            ):
-                pending.append("audio")
+        if (
+            console is not None
+            and getattr(console, "supports", {}).get("audio")
+            and bool(getattr(console, "play_audio", True))
+            != (settings.get("audio") != "disabled")
+        ):
+            pending.append("audio")
         if (
             console is not None
             and key not in self._force_vnc
@@ -2267,17 +2234,7 @@ class MainWindow(Gtk.Window):
 
     def _update_action_sensitivity(self, console=_CURRENT):
         guest = self.context_guest(console)
-        for name, widgets in self._action_items.items():
-            # "start" is the shared Start/Resume control, so it takes its
-            # label from whichever of the two currently applies.
-            action = action_defs.resolve(name, guest)
-            enabled = action_defs.enabled_for(action, guest)
-            for widget in widgets:
-                widget.set_sensitive(enabled)
-                if name == "start":
-                    widget.set_label(action.label)
-                    if hasattr(widget, "set_tooltip_text"):
-                        widget.set_tooltip_text(action.tooltip)
+        toolbar_defs.apply_power_state(self._action_items, guest)
         self.console_tool_item.set_sensitive(
             guest is not None and guest.running and not guest.template
         )
@@ -2476,7 +2433,7 @@ class MainWindow(Gtk.Window):
             and not guest.is_container
             and getattr(self, "_agent_ok", False)
         )
-        for name, item in self.agent_items.items():
+        for item in self.agent_items.values():
             item.set_sensitive(usable)
         self.agent_menu_item.set_sensitive(bool(guest and not guest.is_container))
 

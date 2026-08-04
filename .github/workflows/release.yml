@@ -1,0 +1,222 @@
+name: Release
+
+# Tag-driven: bump the version, commit it, tag the commit, push the tag.
+#
+#     python3 tools/bump_version.py 0.2.0
+#     git push origin main --follow-tags
+#
+# The tag is what a release is cut from, so every artifact traces back to one
+# commit. Nothing is published from a branch.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build a release from"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify the version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: The tag and pyproject.toml must agree
+        id: version
+        # pyproject is the only place the version is written -- the app reads
+        # it back at run time -- so this is the only comparison to make.
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          project_version=$(python3 -c "
+          import pathlib, tomllib
+          with pathlib.Path('pyproject.toml').open('rb') as fh:
+              print(tomllib.load(fh)['project']['version'])
+          ")
+          echo "tag=$version  pyproject=$project_version"
+          if [ "$version" != "$project_version" ]; then
+            echo "::error::tag $tag does not match pyproject.toml ($project_version)"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          case "$version" in
+            *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+  build:
+    name: Build
+    needs: verify
+    uses: ./.github/workflows/build.yml
+
+  package:
+    name: Package and publish
+    needs: [verify, build]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install the packaging tools
+        run: |
+          sudo apt-get update
+          # nsis cross-builds the Windows installer here rather than needing a
+          # second Windows runner just to compress a directory.
+          sudo apt-get install -y --no-install-recommends \
+            nsis \
+            rpm \
+            zip \
+            desktop-file-utils \
+            file
+          sudo gem install --no-document fpm -v 1.15.1
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-linux
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-windows
+
+      - name: Unpack the bundles
+        run: |
+          set -euo pipefail
+          mkdir -p work/linux work/windows
+          tar -C work/linux -xzf proxima-linux-x86_64-dist.tar.gz
+          tar -C work/windows -xzf proxima-windows-x86_64-dist.tar.gz
+          test -x work/linux/proxima.dist/proxima
+          test -f work/windows/proxima.dist/proxima.exe
+          mkdir -p out
+
+      # -- Linux: archive ------------------------------------------------
+      - name: Linux archive
+        # A tarball rather than a zip: zip has no place for the executable
+        # bit, so an unzipped bundle will not start until it is chmod'ed.
+        run: |
+          set -euo pipefail
+          cp -a work/linux/proxima.dist "work/proxima-${VERSION}"
+          tar -C work -czf "out/proxima-${VERSION}-linux-x86_64.tar.gz" \
+            "proxima-${VERSION}"
+
+      # -- Linux: AppImage -----------------------------------------------
+      - name: AppImage
+        run: |
+          set -euo pipefail
+          appdir=work/AppDir
+          mkdir -p "$appdir/usr/lib/proxima" \
+                   "$appdir/usr/share/applications" \
+                   "$appdir/usr/share/icons/hicolor/256x256/apps"
+          cp -a work/linux/proxima.dist/. "$appdir/usr/lib/proxima/"
+          install -m 755 packaging/AppRun "$appdir/AppRun"
+          install -m 644 packaging/proxima.desktop "$appdir/proxima.desktop"
+          cp "$appdir/proxima.desktop" "$appdir/usr/share/applications/"
+          install -m 644 packaging/proxima.png "$appdir/proxima.png"
+          cp "$appdir/proxima.png" \
+            "$appdir/usr/share/icons/hicolor/256x256/apps/proxima.png"
+          ln -sf proxima.png "$appdir/.DirIcon"
+          desktop-file-validate "$appdir/proxima.desktop"
+
+          tool=appimagetool-x86_64.AppImage
+          curl -fsSL -o "$tool" \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/$tool"
+          chmod +x "$tool"
+          # No FUSE on a runner, so the tool unpacks itself instead.
+          ARCH=x86_64 "./$tool" --appimage-extract-and-run "$appdir" \
+            "out/Proxima-${VERSION}-x86_64.AppImage"
+
+      # -- Linux: deb and rpm --------------------------------------------
+      - name: deb and rpm
+        run: |
+          set -euo pipefail
+          root=work/pkgroot
+          mkdir -p "$root/opt/proxima" \
+                   "$root/usr/bin" \
+                   "$root/usr/share/applications" \
+                   "$root/usr/share/icons/hicolor/256x256/apps"
+          cp -a work/linux/proxima.dist/. "$root/opt/proxima/"
+          ln -sf /opt/proxima/proxima "$root/usr/bin/proxima"
+          install -m 644 packaging/proxima.desktop \
+            "$root/usr/share/applications/proxima.desktop"
+          install -m 644 packaging/proxima.png \
+            "$root/usr/share/icons/hicolor/256x256/apps/proxima.png"
+
+          # No Depends: the bundle carries its own GTK, SPICE and GStreamer.
+          # Anything left to the host -- glibc, the X11/GL stack -- is already
+          # on every machine with a desktop on it.
+          common=(
+            -s dir -C "$root"
+            -n proxima
+            -v "${VERSION}"
+            --license "LGPL-2.1-or-later and others, see /opt/proxima/licenses"
+            --vendor Proxima
+            --maintainer "Proxima <noreply@github.com>"
+            --url "https://github.com/${GITHUB_REPOSITORY}"
+            --description "A VMware Workstation style client for Proxmox VE"
+            --force
+          )
+          fpm "${common[@]}" -t deb -a amd64 \
+            -p "out/proxima_${VERSION}_amd64.deb" .
+          fpm "${common[@]}" -t rpm -a x86_64 \
+            -p "out/proxima-${VERSION}-1.x86_64.rpm" .
+
+      # -- Windows: zip and installer ------------------------------------
+      - name: Windows archive
+        run: |
+          set -euo pipefail
+          (cd work/windows/proxima.dist && zip -qr9 \
+            "${GITHUB_WORKSPACE}/out/proxima-${VERSION}-windows-x86_64.zip" .)
+
+      - name: Windows installer
+        run: |
+          set -euo pipefail
+          makensis \
+            "-DVERSION=${VERSION}" \
+            "-DDIST=${GITHUB_WORKSPACE}/work/windows/proxima.dist" \
+            "-DOUTFILE=${GITHUB_WORKSPACE}/out/proxima-${VERSION}-windows-x86_64-setup.exe" \
+            packaging/proxima.nsi
+
+      - name: Checksums
+        run: |
+          set -euo pipefail
+          cd out
+          sha256sum ./* | sed 's| \./| |' > SHA256SUMS
+          cat SHA256SUMS
+          ls -lh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ env.VERSION }}
+          path: out/*
+          if-no-files-found: error
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flags=(--generate-notes --title "Proxima ${VERSION}")
+          [ "$PRERELEASE" = "true" ] && flags+=(--prerelease)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" out/* --clobber
+          else
+            gh release create "$TAG" "${flags[@]}" out/*
+          fi

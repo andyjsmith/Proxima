@@ -363,9 +363,12 @@ class VMSettingsDialog(Gtk.Dialog):
         for value, text in NIC_MODEL_CHOICES:
             model_combo.append(value, value)
             model_combo.set_tooltip_text(text)
-        if model and model_combo.get_active_id() is None:
-            if model not in [v for v, _ in NIC_MODEL_CHOICES]:
-                model_combo.append(model, model)
+        if (
+            model
+            and model_combo.get_active_id() is None
+            and model not in [v for v, _ in NIC_MODEL_CHOICES]
+        ):
+            model_combo.append(model, model)
         model_combo.set_active_id(model or "virtio")
         model_combo.connect("changed", self._on_net_model, entry)
         box.pack_start(model_combo, False, False, 0)

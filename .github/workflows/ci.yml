@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    name: Format (advisory)
+    runs-on: ubuntu-latest
+    # The tree is hand-formatted in places -- aligned trailing comments,
+    # narrower wrapping than ruff's. This job reports the difference without
+    # blocking, so the style can be adopted deliberately rather than in one
+    # sweep. Make it blocking once `ruff format .` has been run and committed.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: ruff format --check
+        run: |
+          set +e
+          uv run --only-group dev ruff format --check --diff . | tee format.diff
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "### \`ruff format\` would change these files"
+              echo
+              echo '```diff'
+              head -c 60000 format.diff
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "All files already formatted." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit $status
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: ruff check
+        run: uv run --only-group dev ruff check --output-format=github .
+
+  test:
+    name: Tests (GTK, headless)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # The suite builds real windows; keep GTK from reaching for anything
+      # that is not there on a runner.
+      GTK_A11Y: none
+      NO_AT_BRIDGE: "1"
+      GSETTINGS_BACKEND: memory
+      PROXIMA_CONFIG_DIR: /tmp/proxima-ci
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK and PyGObject
+        run: |
+          sudo apt-get update
+          # PyGObject comes from apt, not pip: a pip-installed copy would not
+          # find the GObject typelibs. openbox is needed because the
+          # fullscreen tests wait on real window-state changes, which only a
+          # window manager delivers.
+          sudo apt-get install -y --no-install-recommends \
+            python3-gi \
+            python3-gi-cairo \
+            python3-pytest \
+            gir1.2-gtk-3.0 \
+            libgtk-3-0 \
+            adwaita-icon-theme \
+            fonts-dejavu-core \
+            dbus-x11 \
+            openbox \
+            xvfb
+
+      - name: Install spice-gtk (optional)
+        # Without it the SPICE console cannot be built and the handful of
+        # tests that need a live SPICE tab skip themselves. Everything else
+        # still runs, so a missing package must not fail the job.
+        run: |
+          sudo apt-get install -y --no-install-recommends gir1.2-spiceclientgtk-3.0 \
+            || echo "::warning::spice-gtk not available; SPICE tests will skip"
+
+      - name: Show the stack under test
+        run: |
+          python3 --version
+          xvfb-run -a python3 -c 'import gi; gi.require_version("Gtk", "3.0"); from gi.repository import Gtk; print("GTK", Gtk.get_major_version(), Gtk.get_minor_version())'
+          xvfb-run -a python3 -c 'from proxima.console import SPICE_AVAILABLE; print("SPICE available:", SPICE_AVAILABLE)'
+
+      - name: pytest
+        run: |
+          mkdir -p "$PROXIMA_CONFIG_DIR"
+          xvfb-run -a --server-args="-screen 0 1600x1200x24" \
+            dbus-run-session -- bash -c 'openbox & sleep 3; exec python3 -m pytest -q'

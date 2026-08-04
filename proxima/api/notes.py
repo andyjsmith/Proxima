@@ -139,7 +139,7 @@ def normalise_settings(stored):
     settings = dict(SETTINGS_DEFAULTS)
     if not isinstance(stored, dict):
         return settings
-    for name, default in SETTINGS_DEFAULTS.items():
+    for name in SETTINGS_DEFAULTS:
         value = stored.get(name)
         if value is None:
             continue

@@ -430,7 +430,7 @@ def _subkeys(key):
 
 def _feistel(right, subkey):
     expanded = _permute(right, _E)
-    mixed = [a ^ b for a, b in zip(expanded, subkey)]
+    mixed = [a ^ b for a, b in zip(expanded, subkey, strict=True)]
     out = []
     for box in range(8):
         chunk = mixed[box * 6 : box * 6 + 6]
@@ -445,7 +445,10 @@ def _encrypt_block(block, keys):
     bits = _permute(_to_bits(block), _IP)
     left, right = bits[:32], bits[32:]
     for subkey in keys:
-        left, right = right, [a ^ b for a, b in zip(left, _feistel(right, subkey))]
+        left, right = (
+            right,
+            [a ^ b for a, b in zip(left, _feistel(right, subkey), strict=True)],
+        )
     return _to_bytes(_permute(right + left, _FP))
 
 

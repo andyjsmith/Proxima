@@ -128,7 +128,7 @@ def set_nic_mac(pairs, mac):
     somebody's line into the other spelling is a gratuitous change.
     """
     model, _ = nic_model(pairs)
-    for index, (key, value) in enumerate(pairs):
+    for index, (key, _value) in enumerate(pairs):
         if key == model and key in NIC_MODELS:
             return pairs[:index] + [(key, mac)] + pairs[index + 1 :]
     return set_pair(pairs, "macaddr", mac)

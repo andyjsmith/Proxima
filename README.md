@@ -1,0 +1,173 @@
+# Proxima
+
+A VMware Workstation style client for Proxmox VE, built on GTK 3, SPICE and
+VNC.
+
+```
+python3 proxima.py                 normal start
+python3 proxima.py --diagnose      report the theme/SPICE stack
+python3 proxima.py --fontconfig    force the FreeType font backend
+```
+
+On Windows this must run under the MSYS2 UCRT64 Python
+(`C:/msys64/ucrt64/bin/python.exe`), not a python.org install: PyGObject and
+spice-gtk come from pacman and will not load anywhere else.
+
+## Development
+
+PyGObject, pycairo and spice-gtk come from the system, never from pip -- a
+pip-installed copy cannot find the GObject typelibs.
+
+| | Linux | Windows (MSYS2 UCRT64) |
+| --- | --- | --- |
+| GTK stack | `apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-spiceclientgtk-3.0` | `pacman -S mingw-w64-ucrt-x86_64-{python-gobject,gtk3,spice-gtk}` |
+| pytest | `apt install python3-pytest` | `pacman -S mingw-w64-ucrt-x86_64-python-pytest` |
+
+### Tests
+
+The suite in `tests/` builds the real UI against a fake Proxmox and pumps the
+GTK main loop, which catches what only shows up once the widgets are realised
+-- wrong signal signatures, bad CSS, missing icons, TreeStore column
+mismatches -- without needing a server. The fakes and the main-loop pump live
+in `tests/conftest.py`.
+
+```
+python3 -m pytest                  everything (~2 minutes)
+python3 -m pytest -k console       one area
+python3 tools/smoke_test.py        same thing, the old entry point
+```
+
+Windows are module-scoped: the tests in a file run in order against one
+window, each putting back whatever it changed.
+
+### Formatting and linting
+
+```
+uv run --only-group dev ruff check .          must pass
+uv run --only-group dev ruff format --diff .  advisory, see below
+```
+
+`ruff check` is enforced in CI. The tree is `ruff format` clean as well, but
+the format job is still `continue-on-error`: it reports the diff without
+failing the build. Drop that line from `ci.yml` to make it binding.
+
+### Icons
+
+The icons on buttons and menus are not shipped with Proxima. They are
+freedesktop icon names -- `media-playback-start-symbolic`,
+`view-fullscreen-symbolic` -- looked up in whatever icon theme is live, which
+is **Adwaita**, the one GTK itself comes with. That is why a packaged build
+carries `share/icons/Adwaita`: without it the buttons come up blank.
+
+To see what is available, GTK ships a browser:
+
+```
+gtk3-icon-browser        MSYS2: it is in mingw-w64-ucrt-x86_64-gtk3
+                         Debian: apt install gtk-3-examples
+```
+
+Anything it lists can be passed to `set_icon_name()`. The names also follow
+the freedesktop icon naming specification, so most of them are portable to
+other themes. Prefer the `-symbolic` variants: they recolour to match the
+theme, which is what the toolbar and the status bar rely on.
+
+### CI
+
+* `.github/workflows/ci.yml` -- format (advisory), lint, and the test suite on
+  Linux under Xvfb with openbox, since the fullscreen tests wait on real
+  window-state changes.
+* `.github/workflows/build.yml` -- standalone Nuitka builds for Linux and
+  Windows, uploaded as artifacts. The Windows job builds inside MSYS2 UCRT64
+  for the same reason the app runs there.
+* `.github/workflows/release.yml` -- everything below.
+
+## Releasing
+
+A release is cut from a tag, so every artifact traces back to one commit.
+The version lives in `pyproject.toml` and nowhere else -- the app reads it
+back at run time -- so `uv version` is all it takes:
+
+```
+uv version 0.2.0                     or: uv version --bump minor
+git commit -am "release: v0.2.0"
+git tag -a v0.2.0 -m "Proxima 0.2.0"
+git push origin main --follow-tags   this is what starts the release
+```
+
+The workflow refuses to publish a tag whose version does not match
+`pyproject.toml`. A version with a suffix (`0.2.0-rc1`) is published as a
+pre-release.
+
+Pushing the tag builds both platforms and publishes:
+
+| Artifact | |
+| --- | --- |
+| `proxima-<v>-windows-x86_64-setup.exe` | NSIS installer, per-user or all-users |
+| `proxima-<v>-windows-x86_64.zip` | the same bundle, unpacked wherever you like |
+| `proxima-<v>-linux-x86_64.tar.gz` | tarball, not a zip: zip has nowhere to keep the executable bit |
+| `Proxima-<v>-x86_64.AppImage` | |
+| `proxima_<v>_amd64.deb` | installs to `/opt/proxima` |
+| `proxima-<v>-1.x86_64.rpm` | the same |
+| `SHA256SUMS` | |
+
+`workflow_dispatch` on the release workflow rebuilds an existing tag and
+re-uploads the files, for when a build fails for reasons that have nothing to
+do with the code.
+
+### What is in a package
+
+Everything. None of them ask the user to install GTK, spice-gtk, GStreamer or
+Python -- and they are built `--standalone`, never `--onefile`, which would
+unpack 60 MB to a temporary directory on every start.
+
+Getting there takes two steps beyond a plain Nuitka build, because Nuitka
+follows what the program *links against*, and GTK loads most of itself by hand
+later:
+
+* the build passes `--include-raw-dir` for the pixbuf loaders, the GStreamer
+  plugins and the GIO modules. Not `--include-data-dir`, which silently drops
+  shared libraries and leaves plugin directories that do nothing;
+* `tools/bundle_deps.py` then asks every bundled plugin what it needs, copies
+  the codec libraries in beside the executable, and on Linux gives the plugins
+  an RPATH back to the top of the bundle.
+
+At run time `proxima/bundle.py` points GTK at all of it -- the loader cache is
+rewritten, since the paths in it belong to the machine the build was made on
+-- before anything imports `gi`. It does nothing in a source checkout.
+`proxima --diagnose` prints what a bundle carries and what it is missing.
+
+`packaging/` holds the installer script, the desktop entry, the icon and
+`gst-plugins.txt` -- the list of GStreamer plugins a build carries. Shipping
+every plugin costs about 200 MB, nearly all of it encoders a client never
+uses.
+
+The application icon is `packaging/proxima.png`. After changing it, run
+`python3 tools/make_icon.py` to rebuild `packaging/proxima.ico`, which is
+what Windows uses for the executable, the installer and the taskbar. The PNG
+is set as the default window icon at startup, so it applies in a source
+checkout too -- no build needed to see it.
+
+### Building one locally
+
+Windows, from the MSYS2 UCRT64 tree but *not* from an MSYS2 shell -- Nuitka's
+`gi` plugin trips over its own path handling when `MSYSTEM` is set:
+
+```powershell
+$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+python -m nuitka --standalone --zig --include-package=proxima proxima.py
+```
+
+`--zig` is not optional: Nuitka cannot use MinGW with Python 3.13 or newer,
+and it refuses any gcc it did not download itself. Zig has to be on PATH.
+
+If a build starts segfaulting or dies with `init_fs_encoding: failed to get
+the Python codec of the filesystem encoding`, the Zig cache is poisoned --
+a build that is interrupted or fails part-way can leave it that way, and
+every build afterwards inherits it. Nuitka's own `--disable-cache=all` does
+not cover it:
+
+```powershell
+Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Nuitka\Nuitka\Cache\zig"
+```
+
+CI never hits this, since every run starts on a clean machine.

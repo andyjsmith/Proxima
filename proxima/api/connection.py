@@ -6,6 +6,7 @@ state -- so a server that is down shows as failed in the tree while the
 others keep working, rather than taking the whole window with it.
 """
 
+import contextlib
 import threading
 
 from .client import DEFAULT_PORT, AuthError, ProxmoxAPI, ProxmoxError
@@ -105,10 +106,8 @@ class Connection:
         return self
 
     def disconnect(self):
-        try:
+        with contextlib.suppress(Exception):
             self.api.logout()
-        except Exception:
-            pass
         self.state = DISCONNECTED
         self.loaded = False
         self.guests.clear()

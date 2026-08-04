@@ -1,0 +1,6 @@
+#!/bin/sh
+# The AppImage entry point. The bundle knows where its own GTK data is (see
+# proxima/bundle.py); all this has to do is find the binary and get out of
+# the way.
+HERE="$(dirname "$(readlink -f "$0")")"
+exec "${HERE}/usr/lib/proxima/proxima" "$@"

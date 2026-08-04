@@ -14,12 +14,14 @@ by Pango exactly once, when the default fontmap is first built, so changing
 it needs an application restart.
 """
 
+import contextlib
 import time
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("PangoCairo", "1.0")
+
 from gi.repository import Gtk, PangoCairo
 
 try:
@@ -145,10 +147,8 @@ def apply_font_options(screen, config, root_widget=None):
 
     # 3. Invalidate caches. Without this, existing widgets keep their old
     #    PangoContext and nothing visibly changes.
-    try:
+    with contextlib.suppress(TypeError, ValueError):
         settings.set_property("gtk-fontconfig-timestamp", int(time.time()))
-    except (TypeError, ValueError):
-        pass
 
     if root_widget is not None:
         refresh_pango(root_widget, options)

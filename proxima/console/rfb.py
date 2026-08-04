@@ -19,6 +19,7 @@ The client runs on its own thread and reports damage through a callback; it
 knows nothing about GTK.
 """
 
+import contextlib
 import struct
 import threading
 import zlib
@@ -162,7 +163,7 @@ class RfbClient(threading.Thread):
         try:
             major, minor = int(banner[4:7]), int(banner[8:11])
         except ValueError:
-            raise RfbError(f"unparseable RFB version {banner!r}")
+            raise RfbError(f"unparseable RFB version {banner!r}") from None
 
         # 3.8 is what QEMU and vncterm both speak; anything newer still
         # accepts a 3.8 client.
@@ -264,7 +265,7 @@ class RfbClient(threading.Thread):
         height = self.height if height is None else height
         if width <= 0 or height <= 0:
             return
-        try:
+        with contextlib.suppress(Exception):
             self._send(
                 struct.pack(
                     ">BBHHHH",
@@ -276,8 +277,6 @@ class RfbClient(threading.Thread):
                     height,
                 )
             )
-        except Exception:
-            pass
 
     # -- framebuffer ---------------------------------------------------
 
@@ -312,10 +311,8 @@ class RfbClient(threading.Thread):
             stopped = not self._running  # stop() was called: intentional
             self._connected = False
             self._running = False
-            try:
+            with contextlib.suppress(Exception):
                 self.stream.close()
-            except Exception:
-                pass
             if not stopped:
                 self.on_closed(reason)
 
@@ -436,14 +433,12 @@ class RfbClient(threading.Thread):
     def send_key(self, keysym, pressed):
         if not self._connected:
             return
-        try:
+        with contextlib.suppress(Exception):
             self._send(
                 struct.pack(
                     ">BBxxI", KEY_EVENT, 1 if pressed else 0, keysym & 0xFFFFFFFF
                 )
             )
-        except Exception:
-            pass
 
     def send_key_click(self, keysyms):
         """Press a set of keys in order, then release in reverse."""
@@ -458,26 +453,20 @@ class RfbClient(threading.Thread):
         self._button_mask = button_mask
         x = max(0, min(int(x), max(0, self.width - 1)))
         y = max(0, min(int(y), max(0, self.height - 1)))
-        try:
+        with contextlib.suppress(Exception):
             self._send(struct.pack(">BBHH", POINTER_EVENT, button_mask & 0xFF, x, y))
-        except Exception:
-            pass
 
     def send_cut_text(self, text):
         if not self._connected:
             return
         payload = text.encode("latin-1", "replace")
-        try:
+        with contextlib.suppress(Exception):
             self._send(struct.pack(">BxxxI", CLIENT_CUT_TEXT, len(payload)) + payload)
-        except Exception:
-            pass
 
     # -- lifecycle -----------------------------------------------------
 
     def stop(self):
         self._running = False
         self._connected = False
-        try:
+        with contextlib.suppress(Exception):
             self.stream.close()
-        except Exception:
-            pass

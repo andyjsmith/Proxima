@@ -10,7 +10,13 @@ import sys
 
 
 def main():
+    from . import bundle
     from .config import Config, apply_environment
+
+    # First of all, and before the settings are even read: a packaged build
+    # has to be told where its own GTK data went. Does nothing from a source
+    # checkout.
+    bundle.apply()
 
     config = Config.load()
 

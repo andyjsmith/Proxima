@@ -135,17 +135,16 @@ class Config(dict):
 
     def _migrate(self, version):
         """Rewrite settings whose default changed after they were saved."""
-        if version < 1:
-            # FreeType became the default. A stored "default" predates the
-            # choice existing, so it is not a deliberate preference.
-            if self.get("font_backend") == "default":
-                self["font_backend"] = "fontconfig"
+        # FreeType became the default in version 1. A stored "default"
+        # predates the choice existing, so it is not a deliberate preference.
+        if version < 1 and self.get("font_backend") == "default":
+            self["font_backend"] = "fontconfig"
         self["config_version"] = CONFIG_VERSION
 
     @classmethod
     def load(cls):
         try:
-            with open(config_file(), "r", encoding="utf-8") as handle:
+            with open(config_file(), encoding="utf-8") as handle:
                 return cls(json.load(handle))
         except (OSError, ValueError):
             return cls()

@@ -1,0 +1,321 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Called by release.yml, which packages what these jobs produce.
+  workflow_call:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NUITKA_VERSION: "4.1.3"
+
+jobs:
+  linux:
+    name: Linux (Nuitka, standalone)
+    # Deliberately the oldest supported runner: the bundle is built against
+    # this glibc and will not start on anything older.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the GTK stack and a C toolchain
+        run: |
+          sudo apt-get update
+          # PyGObject and spice-gtk come from apt: Nuitka compiles against the
+          # interpreter that can already import them. GStreamer is what
+          # decodes SPICE video.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            ccache \
+            patchelf \
+            python3-dev \
+            python3-gi \
+            python3-gi-cairo \
+            python3-pip \
+            gir1.2-gtk-3.0 \
+            gir1.2-spiceclientgtk-3.0 \
+            gir1.2-gstreamer-1.0 \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-pulseaudio \
+            gstreamer1.0-alsa \
+            libgtk-3-dev \
+            libgirepository1.0-dev \
+            libcairo2-dev \
+            adwaita-icon-theme \
+            hicolor-icon-theme \
+            xvfb
+
+      - name: Install Nuitka
+        # Into the system interpreter, deliberately: a venv without
+        # --system-site-packages could not see python3-gi, and Nuitka has to
+        # compile against the same interpreter that imports it.
+        run: python3 -m pip install "nuitka==${NUITKA_VERSION}" ordered-set zstandard
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-nuitka-linux-${{ github.sha }}
+          restore-keys: ccache-nuitka-linux-
+
+      - name: Compile
+        # --include-raw-dir, not --include-data-dir: the latter quietly drops
+        # the shared libraries, so the loaders and plugins would arrive as
+        # directories full of nothing that works.
+        #
+        # The 'gi' plugin is auto-enabled once Nuitka sees the import; it is
+        # what brings the typelibs and the GTK libraries themselves.
+        run: |
+          set -euo pipefail
+          libdir="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+          python3 tools/stage_gst_plugins.py \
+            "$libdir/gstreamer-1.0" build/staging/gstreamer-1.0
+          args=()
+          for raw in \
+            "$libdir/gdk-pixbuf-2.0=lib/gdk-pixbuf-2.0" \
+            "build/staging/gstreamer-1.0=lib/gstreamer-1.0" \
+            "$libdir/gio/modules=lib/gio/modules" \
+            "$libdir/gstreamer1.0/gstreamer-1.0=libexec/gstreamer-1.0"; do
+            [ -d "${raw%%=*}" ] && args+=("--include-raw-dir=$raw")
+          done
+          for data in \
+            "/usr/share/glib-2.0/schemas=share/glib-2.0/schemas" \
+            "/usr/share/icons/Adwaita=share/icons/Adwaita" \
+            "/usr/share/icons/hicolor=share/icons/hicolor"; do
+            [ -d "${data%%=*}" ] && args+=("--include-data-dir=$data")
+          done
+          # The version is read back out of pyproject at run time, and the
+          # icon has to be somewhere the icon theme will find it.
+          args+=("--include-data-files=pyproject.toml=pyproject.toml")
+          args+=("--include-data-files=packaging/proxima.png=share/icons/hicolor/256x256/apps/proxima.png")
+          printf 'bundling:\n'; printf '  %s\n' "${args[@]}"
+
+          python3 -m nuitka \
+            --standalone \
+            --assume-yes-for-downloads \
+            --include-package=proxima \
+            "${args[@]}" \
+            --output-dir=build \
+            --output-filename=proxima \
+            --company-name=Proxima \
+            --product-name=Proxima \
+            --product-version=0.1.0 \
+            --report=build/nuitka-report.xml \
+            proxima.py
+
+      - name: Close the plugin dependencies
+        # Nuitka follows what the program links against, not what GTK loads
+        # by hand later, so the codec libraries behind the GStreamer plugins
+        # are missing until this runs.
+        run: python3 tools/bundle_deps.py build/proxima.dist --prefix /usr
+
+      - name: Collect the licences
+        # The bundle redistributes GTK, spice-gtk, GStreamer and their
+        # dependencies, all of which come with terms that have to travel with
+        # them. Every library in the bundle is traced back to the package it
+        # came from, and that package's copyright file is carried along.
+        run: |
+          set -euo pipefail
+          libdir="/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)"
+          out=build/proxima.dist/licenses
+          mkdir -p "$out"
+          packages=$(
+            find build/proxima.dist -name '*.so*' -printf '%f\n' \
+            | while read -r name; do
+                dpkg -S "$libdir/$name" 2>/dev/null | cut -d: -f1
+              done | tr ',' '\n' | sort -u
+          )
+          for package in $packages; do
+            file="/usr/share/doc/$package/copyright"
+            [ -f "$file" ] && cp "$file" "$out/$package.txt"
+          done
+          printf '%s\n' "$packages" > "$out/PACKAGES.txt"
+          cp packaging/NOTICE.md build/proxima.dist/NOTICE.md
+          echo "collected $(ls "$out" | wc -l) licence file(s)"
+
+      - name: Smoke test the bundle
+        run: |
+          set -euo pipefail
+          xvfb-run -a ./build/proxima.dist/proxima --diagnose | tee diagnose.txt
+          grep -q "SPICE widget available: True" diagnose.txt \
+            || { echo "::error::the build has no working SPICE widget"; exit 1; }
+          ! grep -q "\[MISSING\]" diagnose.txt \
+            || { echo "::error::the bundle is missing GTK runtime data"; exit 1; }
+          grep -Eq "H\.264 +[^ ]+ +available" diagnose.txt \
+            || echo "::warning::no H.264 decoder in the bundle; SPICE video will fall back"
+
+      - name: Pack the bundle
+        # tar, not the artifact's own zip: the executable bit has to survive.
+        run: tar -C build -czf proxima-linux-x86_64-dist.tar.gz proxima.dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-linux
+          path: proxima-linux-x86_64-dist.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nuitka-report-linux
+          path: build/nuitka-report.xml
+          if-no-files-found: ignore
+
+  windows:
+    name: Windows (Nuitka, standalone)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      # Nuitka cannot use MinGW with Python 3.13+ ("MinGW64 is not currently
+      # supported"), and it refuses any gcc it did not download itself. Zig is
+      # the compiler it offers as the way through, and it does not ship with
+      # MSYS2, so it is fetched here.
+      ZIG_VERSION: "0.16.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSYS2 UCRT64
+        id: msys2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          # PyGObject and spice-gtk are pacman packages here; a python.org
+          # interpreter cannot load them, which is why the whole Windows
+          # build lives inside MSYS2. See the note at the top of proxima.py.
+          install: >-
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-gtk3
+            mingw-w64-ucrt-x86_64-spice-gtk
+            mingw-w64-ucrt-x86_64-gstreamer
+            mingw-w64-ucrt-x86_64-gst-plugins-base
+            mingw-w64-ucrt-x86_64-gst-plugins-good
+            mingw-w64-ucrt-x86_64-gst-plugins-bad
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-python-nuitka
+            mingw-w64-ucrt-x86_64-binutils
+            mingw-w64-ucrt-x86_64-ccache
+
+      - name: Check the stack
+        shell: msys2 {0}
+        run: |
+          python --version
+          python -m nuitka --version | head -n 1
+          python -c "import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk; print('GTK', Gtk.get_major_version(), Gtk.get_minor_version())"
+          python -c "from proxima.console import SPICE_AVAILABLE; print('SPICE available:', SPICE_AVAILABLE)"
+
+      - name: Install Zig
+        shell: pwsh
+        run: |
+          $url = "https://ziglang.org/download/$env:ZIG_VERSION/zig-x86_64-windows-$env:ZIG_VERSION.zip"
+          Invoke-WebRequest -Uri $url -OutFile zig.zip
+          Expand-Archive -Path zig.zip -DestinationPath zig -Force
+          $dir = (Get-ChildItem zig -Directory | Select-Object -First 1).FullName
+          "$dir" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & "$dir\zig.exe" version
+
+      - name: Compile
+        # Deliberately PowerShell rather than the MSYS2 shell, and with
+        # MSYSTEM unset: Nuitka 4.x's gi plugin builds a mixed-separator path
+        # ("C:/msys64/.../libgtk-3-0.dll") when it can see MSYSTEM, then trips
+        # its own path assertion. Windows-style PATH entries avoid that.
+        #
+        # --include-raw-dir, not --include-data-dir: the latter quietly drops
+        # the DLLs, leaving loader and plugin directories that do nothing.
+        shell: pwsh
+        run: |
+          Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
+          $ucrt = "${{ steps.msys2.outputs.msys2-location }}\ucrt64"
+          $env:PATH = "$ucrt\bin;" + $env:PATH
+          & "$ucrt\bin\python.exe" tools\stage_gst_plugins.py `
+            "$ucrt\lib\gstreamer-1.0" build\staging\gstreamer-1.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$ucrt\bin\python.exe" -m nuitka `
+            --standalone `
+            --assume-yes-for-downloads `
+            --zig `
+            --include-package=proxima `
+            --include-raw-dir="$ucrt\lib\gdk-pixbuf-2.0=lib/gdk-pixbuf-2.0" `
+            --include-raw-dir="build\staging\gstreamer-1.0=lib/gstreamer-1.0" `
+            --include-raw-dir="$ucrt\lib\gio\modules=lib/gio/modules" `
+            --include-data-dir="$ucrt\share\glib-2.0\schemas=share/glib-2.0/schemas" `
+            --include-data-dir="$ucrt\share\icons\Adwaita=share/icons/Adwaita" `
+            --include-data-dir="$ucrt\share\icons\hicolor=share/icons/hicolor" `
+            --include-data-dir="$ucrt\etc\fonts=etc/fonts" `
+            --include-data-dir="$ucrt\share\licenses=licenses" `
+            --include-data-files=pyproject.toml=pyproject.toml `
+            --include-data-files=packaging/proxima.png=share/icons/hicolor/256x256/apps/proxima.png `
+            --output-dir=build `
+            --output-filename=proxima `
+            --company-name=Proxima `
+            --product-name=Proxima `
+            --product-version=0.1.0 `
+            --windows-icon-from-ico=packaging/proxima.ico `
+            --windows-console-mode=disable `
+            --report=build/nuitka-report.xml `
+            proxima.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Close the plugin dependencies
+        # objdump comes from binutils, installed above; the codec DLLs behind
+        # the GStreamer plugins are not linked by the program, so Nuitka has
+        # no reason to have copied them.
+        shell: pwsh
+        run: |
+          $ucrt = "${{ steps.msys2.outputs.msys2-location }}\ucrt64"
+          $env:PATH = "$ucrt\bin;" + $env:PATH
+          & "$ucrt\bin\python.exe" tools\bundle_deps.py build\proxima.dist --prefix $ucrt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Add the third-party notice
+        shell: pwsh
+        run: Copy-Item packaging\NOTICE.md build\proxima.dist\NOTICE.md
+
+      - name: Smoke test the bundle
+        shell: pwsh
+        run: |
+          # A scrubbed PATH, so a bundle that only works because MSYS2 is on
+          # this machine fails here rather than on a user's computer.
+          $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot"
+          $out = & .\build\proxima.dist\proxima.exe --diagnose 2>&1 | Out-String
+          $out
+          if ($out -notmatch "SPICE widget available: True") {
+            Write-Output "::error::the build has no working SPICE widget"; exit 1
+          }
+          if ($out -match "\[MISSING\]") {
+            Write-Output "::error::the bundle is missing GTK runtime data"; exit 1
+          }
+          if ($out -notmatch "H\.264\s+\S+\s+available") {
+            Write-Output "::warning::no H.264 decoder in the bundle; SPICE video will fall back"
+          }
+
+      - name: Pack the bundle
+        shell: pwsh
+        run: tar -C build -czf proxima-windows-x86_64-dist.tar.gz proxima.dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: proxima-windows-x86_64-dist.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nuitka-report-windows
+          path: build/nuitka-report.xml
+          if-no-files-found: ignore

@@ -56,7 +56,7 @@ class SplitView(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.notebooks = []
-        for index in range(MAX_PANES):
+        for _pane in range(MAX_PANES):
             notebook = Gtk.Notebook()
             notebook.set_scrollable(True)
             notebook.set_group_name(GROUP_NAME)

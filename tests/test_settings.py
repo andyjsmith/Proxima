@@ -1,0 +1,359 @@
+"""Preferences, per-VM settings, and the window state that is remembered."""
+
+import pytest
+from gi.repository import Gdk, Gtk
+
+from proxima.api import devices as dev_mod
+from proxima.api import notes as notes_mod
+from proxima.ui import actions as action_defs
+from proxima.ui.settings_dialog import SettingsDialog
+from proxima.ui.vm_settings import RESPONSE_APPLY, VMSettingsDialog
+
+from .conftest import (
+    FakeAPI,
+    FakeEditable,
+    key_for,
+    plan_protocol,
+    pump,
+    pump_until,
+)
+
+RUNNING = key_for(100)
+STOPPED = key_for(102)
+
+
+def notebook_tabs(container):
+    notebook = container.get_children()[0]
+    return [notebook.get_tab_label_text(c) for c in notebook.get_children()]
+
+
+@pytest.mark.parametrize(
+    "key", ["refresh_seconds", "task_refresh_seconds", "burst_seconds"]
+)
+def test_the_polling_intervals_are_configurable(config, key):
+    assert key in config
+
+
+def test_preferences_has_a_polling_page(window, config):
+    dialog = SettingsDialog(window, config)
+    pump(0.3)
+    try:
+        titles = notebook_tabs(dialog.get_children()[0])
+    finally:
+        dialog.destroy()
+    assert "Polling" in titles, f"no Polling page in preferences: {titles}"
+
+
+def test_the_settings_dialog_builds(window, config):
+    dialog = SettingsDialog(window, config, on_change=window.apply_appearance)
+    pump(0.3)
+    dialog.destroy()
+
+
+def test_stop_shutdown_and_reset_ask_by_default_but_pause_does_not(window, config):
+    guest = window.sidebar.guests[RUNNING]
+    asks = {
+        name: bool(
+            action_defs.confirmation_text(
+                action_defs.ACTIONS_BY_NAME[name], guest, config
+            )
+        )
+        for name in ("stop", "shutdown", "reset", "suspend")
+    }
+    assert asks == {"stop": True, "shutdown": True, "reset": True, "suspend": False}
+
+
+def test_the_confirmation_toggles_are_honoured(window, config):
+    guest = window.sidebar.guests[RUNNING]
+    config["confirm_stop"] = False
+    config["confirm_pause"] = True
+    try:
+        flipped = {
+            name: bool(
+                action_defs.confirmation_text(
+                    action_defs.ACTIONS_BY_NAME[name], guest, config
+                )
+            )
+            for name in ("stop", "suspend")
+        }
+        assert flipped == {"stop": False, "suspend": True}
+    finally:
+        config["confirm_stop"] = True
+        config["confirm_pause"] = False
+
+
+# -- per-VM settings ------------------------------------------------------
+
+
+@pytest.fixture
+def settings_guest(window):
+    guest = window.sidebar.guests[RUNNING]
+    FakeAPI.NOTES = {100: "Handwritten notes about this VM."}
+    guest.settings_loaded = False
+    guest.config_loaded = False
+    yield guest
+    FakeAPI.NOTES = {}
+    guest.settings = {}
+    window._clear_session_choices(RUNNING)
+
+
+def test_settings_opens_for_a_guest_whose_config_was_never_read(window, settings_guest):
+    opened = []
+    real_show = window._show_guest_settings
+    window._show_guest_settings = lambda g, a: opened.append((g, a))
+    try:
+        window.open_guest_settings(RUNNING)
+        pump_until(lambda: bool(opened), 6)
+    finally:
+        window._show_guest_settings = real_show
+    assert opened, "Settings never opened for a guest with no config read"
+
+
+def test_saving_vm_settings_keeps_the_user_text_in_the_notes(
+    window, api, settings_guest
+):
+    dialog = VMSettingsDialog(
+        window,
+        api,
+        settings_guest,
+        on_saved=lambda s: window._guest_settings_saved(RUNNING, s),
+    )
+    pump(0.3)
+    try:
+        assert notebook_tabs(dialog.get_content_area()) == [
+            "Hardware",
+            "Options",
+            "Proxmox Manager",
+        ]
+        assert not dialog.apply_button.get_sensitive(), (
+            "Apply is offered before anything has changed"
+        )
+
+        dialog.values["protocol"] = "vnc"
+        dialog.values["audio"] = "disabled"
+        dialog._sync_buttons()
+        assert dialog.apply_button.get_sensitive(), (
+            "Apply stayed disabled after a change"
+        )
+        dialog.emit("response", RESPONSE_APPLY)
+        pump_until(lambda: not dialog._saving, 6)
+        pump(0.3)
+
+        written = FakeAPI.NOTES.get(100, "")
+        assert "Handwritten notes" in written, (
+            f"saving settings damaged the notes: {written!r}"
+        )
+        assert notes_mod.settings_of(written)["protocol"] == "vnc", (
+            f"protocol not stored: {notes_mod.settings_of(written)}"
+        )
+        assert settings_guest.settings.get("audio") == "disabled", (
+            "the guest did not take the saved settings"
+        )
+        assert not dialog.apply_button.get_sensitive(), (
+            "Apply stayed live after a successful save"
+        )
+    finally:
+        dialog.destroy()
+        pump(0.2)
+
+    # The stored protocol has to steer the next console, and the switches have
+    # to follow the stored audio value.
+    window.notebook.set_current_page(0)
+    pump(0.3)
+    assert plan_protocol(window, RUNNING) == "vnc", (
+        "a VM set to VNC only still planned SPICE"
+    )
+    assert window._guest_switch(settings_guest, "audio") is False, (
+        "the stored audio setting did not reach the switch"
+    )
+
+    # Reopen with SPICE is a temporary helper and must overrule the setting.
+    window._force_spice.add(RUNNING)
+    assert plan_protocol(window, RUNNING) == "spice", (
+        "Reopen with SPICE could not overrule the VM setting"
+    )
+
+
+def test_settings_reset_to_the_defaults_leave_the_notes_clean(
+    window, api, settings_guest
+):
+    dialog = VMSettingsDialog(window, api, settings_guest)
+    pump(0.3)
+    dialog.values.update(notes_mod.SETTINGS_DEFAULTS)
+    dialog.emit("response", Gtk.ResponseType.OK)
+    pump_until(lambda: not dialog._saving, 6)
+    pump(0.3)
+    assert "settings" not in notes_mod.parse(FakeAPI.NOTES.get(100, ""))[0], (
+        "resetting to the defaults left a settings block"
+    )
+
+
+# -- hardware and options -------------------------------------------------
+
+
+@pytest.fixture
+def hardware(window, api):
+    FakeAPI.HARDWARE = {}
+    guest = window.sidebar.guests[STOPPED]
+    guest.config = api.guest_config(guest.node, guest.vmid)
+    dialog = VMSettingsDialog(window, api, guest)
+    pump(0.4)
+    yield dialog
+    dialog.destroy()
+    pump(0.3)
+    FakeAPI.HARDWARE = {}
+
+
+def test_the_hardware_page_reads_the_config_with_no_phantom_edits(hardware):
+    assert not hardware.running, "the stopped guest was treated as running"
+    assert hardware.nets and hardware.nets[0]["slot"] == "net0", (
+        f"network devices were not read: {hardware.nets}"
+    )
+    assert not hardware.dirty, "a freshly opened settings dialog is already dirty"
+
+
+def test_editing_a_nic_keeps_the_settings_the_dialog_does_not_show(hardware):
+    # The rate limit is the one that is not on screen.
+    hardware._on_net_bridge(FakeEditable("vmbr1"), hardware.nets[0])
+    hardware._on_net_vlan(FakeEditable("42"), hardware.nets[0])
+    hardware.nets[0]["pairs"] = dev_mod.set_pair(
+        hardware.nets[0]["pairs"], "firewall", "0"
+    )
+    changes, _deletes = hardware._config_edits()
+    rendered = changes.get("net0", "")
+    assert "rate=10" in rendered, (
+        f"editing a NIC dropped its other settings: {rendered}"
+    )
+    assert "bridge=vmbr1" in rendered and "tag=42" in rendered, (
+        f"NIC edits did not take: {rendered}"
+    )
+    assert "BC:24:11:00:00:01" in rendered, f"editing a NIC lost its MAC: {rendered}"
+
+
+def test_nics_can_be_added_and_removed(hardware):
+    hardware._add_net()
+    added = [e for e in hardware.nets if e["new"]]
+    assert len(added) == 1 and added[0]["slot"] == "net1", (
+        f"adding a NIC picked the wrong slot: {hardware.nets}"
+    )
+    changes, _deletes = hardware._config_edits()
+    assert "net1" in changes, "the added NIC was not in the changes"
+
+    hardware._remove_net(added[0])
+    hardware._remove_net(hardware.nets[0])
+    changes, deletes = hardware._config_edits()
+    assert deletes == ["net0"], f"removing a NIC did not delete it: {deletes}"
+    assert "net0" not in changes, "a removed NIC was both written and deleted"
+
+
+def test_applying_hardware_changes_sends_the_digest(hardware, api):
+    # A VM changed underneath is then refused rather than silently overwritten.
+    hardware._remove_net(hardware.nets[0])
+    hardware.emit("response", RESPONSE_APPLY)
+    pump_until(lambda: not hardware._saving, 6)
+    pump(0.3)
+    written = [c for c in api.calls if c[0] == "set-config"]
+    assert written, "applying hardware changes wrote nothing"
+    assert written[-1][4] == "digest-102", (
+        f"the config digest was not sent: {written[-1]}"
+    )
+    assert "net0" in written[-1][3], f"the removed NIC was not deleted: {written[-1]}"
+
+
+def test_a_running_vm_hides_the_fields_proxmox_would_park_as_pending(window, api):
+    guest = window.sidebar.guests[RUNNING]
+    guest.config = api.guest_config(guest.node, guest.vmid)
+    dialog = VMSettingsDialog(window, api, guest)
+    pump(0.4)
+    try:
+        assert dialog.running, "the running guest was treated as stopped"
+        gated = {}
+
+        def collect(widget):
+            if isinstance(widget, Gtk.Container):
+                for child in widget.get_children():
+                    collect(child)
+            if "Stop the VM to change" in (widget.get_tooltip_text() or ""):
+                gated[widget] = widget.get_sensitive()
+
+        collect(dialog.get_content_area())
+        assert gated, "nothing was gated on a running VM"
+        assert not any(gated.values()), (
+            "a stopped-only field was editable while running"
+        )
+    finally:
+        dialog.destroy()
+        pump(0.3)
+
+
+# -- appearance and window state ------------------------------------------
+
+
+@pytest.mark.parametrize("theme", ["Adwaita", "Fluent"])
+@pytest.mark.parametrize("mode", ["light", "dark", "system"])
+def test_every_theme_and_colour_mode_applies(window, config, theme, mode):
+    config["theme"] = theme
+    config["color_mode"] = mode
+    window.apply_appearance()
+    pump(0.1)
+
+
+@pytest.mark.parametrize("antialias", ["grayscale", "subpixel", "none", "default"])
+@pytest.mark.parametrize("hint", ["slight", "full", "medium", "none"])
+def test_every_antialias_and_hinting_combination_applies(
+    window, config, antialias, hint
+):
+    config["antialias"] = antialias
+    config["hint_style"] = hint
+    window.apply_appearance()
+    pump(0.05)
+
+
+class _StateEvent:
+    def __init__(self, state):
+        self.new_window_state = state
+
+
+@pytest.fixture
+def sized(window):
+    """An ordinary window that has just been resized."""
+    window._maximized = False
+    window._fullscreen_state = False
+    window._normal_size = (1111, 777)
+    window._on_configure()
+    return window._normal_size
+
+
+def test_maximising_does_not_overwrite_the_restore_size(window, sized):
+    window._on_window_state(window, _StateEvent(Gdk.WindowState.MAXIMIZED))
+    window._on_configure()
+    assert window._maximized, "maximising was not noticed"
+    assert window._normal_size == sized, (
+        f"maximising overwrote the restore size: {window._normal_size}"
+    )
+
+
+def test_fullscreen_leaves_the_saved_window_state_alone(window, sized):
+    # Fullscreen is a console mode, never a saved window preference.
+    window._on_window_state(window, _StateEvent(Gdk.WindowState.MAXIMIZED))
+    window._on_window_state(window, _StateEvent(Gdk.WindowState.FULLSCREEN))
+    window._on_configure()
+    assert window._maximized, "fullscreen cleared the maximised flag"
+    assert window._normal_size == sized, "fullscreen overwrote the restore size"
+
+
+def test_a_maximised_window_saves_the_size_to_restore_to(window, config, sized):
+    window._on_window_state(window, _StateEvent(Gdk.WindowState.MAXIMIZED))
+    window._save_layout()
+    assert config["window_maximized"], "maximised state was not saved"
+    assert (config["window_width"], config["window_height"]) == sized
+
+
+def test_an_unmaximised_window_saves_the_size_it_has(window, config, sized):
+    window._on_window_state(window, _StateEvent(Gdk.WindowState.MAXIMIZED))
+    window._save_layout()
+    window._on_window_state(window, _StateEvent(0))
+    window._normal_size = (900, 640)
+    window._save_layout()
+    assert not config["window_maximized"], "unmaximising did not clear the saved flag"
+    assert (config["window_width"], config["window_height"]) == (900, 640)
