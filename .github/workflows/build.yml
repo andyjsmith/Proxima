@@ -69,6 +69,15 @@ jobs:
             librsvg2-common \
             xvfb
 
+      - name: Check the stack
+        # The interpreter first: this runner is pinned for its glibc, and the
+        # python that comes with it is older than the one a checkout is
+        # developed against. Anything the bundle imports has to exist here.
+        run: |
+          python3 --version
+          python3 -c 'import gi; gi.require_version("Gtk","3.0"); from gi.repository import Gtk; print("GTK", Gtk.get_major_version(), Gtk.get_minor_version())'
+          python3 -c 'import proxima; print("version", proxima.__version__)'
+
       - name: Install Nuitka
         # Into the system interpreter, deliberately: a venv without
         # --system-site-packages could not see python3-gi, and Nuitka has to
@@ -168,6 +177,11 @@ jobs:
           xvfb-run -a ./build/proxima.dist/proxima --diagnose | tee diagnose.txt
           grep -q "SPICE widget available: True" diagnose.txt \
             || { echo "::error::the build has no working SPICE widget"; exit 1; }
+          # A bundle that cannot read its own pyproject.toml still starts, and
+          # then calls itself 0.0.0+unknown in the About box and in every bug
+          # report that follows.
+          ! grep -q "0\.0\.0+unknown" diagnose.txt \
+            || { echo "::error::the bundle cannot read its own version"; exit 1; }
           ! grep -q "\[MISSING\]" diagnose.txt \
             || { echo "::error::the bundle is missing GTK runtime data"; exit 1; }
           grep -Eq "H\.264 +[^ ]+ +available" diagnose.txt \
@@ -313,6 +327,9 @@ jobs:
           $out
           if ($out -cnotmatch "SPICE widget available: True") {
             Write-Output "::error::the build has no working SPICE widget"; exit 1
+          }
+          if ($out -cmatch "0\.0\.0\+unknown") {
+            Write-Output "::error::the bundle cannot read its own version"; exit 1
           }
           # -cmatch, not -match: PowerShell's -match is case-insensitive, so
           # the plain one also matches the lower-case "[missing]" the theme

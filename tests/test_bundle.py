@@ -139,3 +139,43 @@ def test_the_report_names_what_is_missing(tmp_path):
     assert "[ok] icon themes" in text
     # Absent on Linux by design, so it must not read as a broken build.
     assert "[not bundled] fontconfig" in text
+
+
+# -- the version the bundle reports --------------------------------------
+
+
+def test_the_version_is_read_out_of_pyproject():
+    """A checkout reports the version pyproject carries, not the fallback.
+
+    The bundle carries pyproject.toml beside the executable for exactly this
+    read, so a build whose version came back "0.0.0+unknown" would be a
+    release that cannot say what it is.
+    """
+    import pathlib
+
+    import proxima
+
+    text = (pathlib.Path(proxima.__file__).parent.parent / "pyproject.toml").read_text()
+    assert proxima.__version__ == proxima._version_in(text)
+    assert proxima.__version__ != "0.0.0+unknown"
+
+
+def test_only_the_project_table_supplies_the_version():
+    """No TOML parser is involved, so the table has to be tracked by hand.
+
+    tomllib is 3.11 and newer; the Linux bundle is compiled on an older
+    interpreter than that, and importing it there is what broke the build.
+    """
+    from proxima import _version_in
+
+    assert (
+        _version_in(
+            '[tool.poetry]\nversion = "9.9.9"\n'
+            '[project]\nname = "proxima"\nversion = "1.2.3"\n'
+            '[tool.other]\nversion = "0.0.1"\n'
+        )
+        == "1.2.3"
+    )
+    # A file with no [project] table at all, which must not raise.
+    assert _version_in('[tool.ruff]\nversion = "9.9.9"\n') is None
+    assert _version_in("") is None
