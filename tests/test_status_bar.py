@@ -191,8 +191,12 @@ def test_neither_switch_is_clickable_on_a_vnc_console(window):
 
 
 def test_no_console_leaves_the_switches_dimmed_not_struck(window):
-    window.notebook.set_current_page(0)
+    # Nothing open at all: with no global summary page, "no console" means
+    # an empty tab strip rather than a tab that happens not to be one.
+    for page in window.panes.all_pages():
+        window.close_console_widget(page)
     pump(0.3)
+    assert window.notebook.get_n_pages() == 0
     assert not window.vdagent_icon.struck, "clipboard icon struck with no console open"
     assert not window.vdagent_icon.can_toggle and not window.audio_icon.can_toggle, (
         "switches are clickable with no console open"

@@ -501,8 +501,10 @@ def test_a_rename_shows_its_new_name_at_once_and_stops_spinning(window, busy):
     )
     assert "renamed-vm" in label, f"the tree still shows the old name: {label!r}"
 
-    # The poll that finally reports the new name ends the wait.
-    pump_until(lambda: STOPPED not in window.sidebar.busy, 10, step=0.3)
+    # The poll that finally reports the new name ends the wait. The fake
+    # holds the rename back for two polls, so this is several seconds even
+    # on an idle machine -- and the whole suite is not an idle machine.
+    pump_until(lambda: STOPPED not in window.sidebar.busy, 25, step=0.3)
     assert STOPPED not in window.sidebar.busy, (
         "the rename spinner outlived the server confirming it"
     )

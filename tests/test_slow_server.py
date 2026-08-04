@@ -36,13 +36,25 @@ def test_a_slow_detail_fetch_survives_the_polls_that_land_on_it():
     api = SlowAPI(delay=1.2)
     window = build_window(api, make_config(refresh_seconds=1))
     try:
-        pump(1.0)
+        # The inventory has to be in before a guest can be opened, and this
+        # server is slow enough that it does not always arrive in one pump.
+        assert wait_for_guests(window), "slow window never listed any guests"
         window.sidebar.select_key(SPICE_GUEST)
+        window.open_console(SPICE_GUEST)
+        pump_until(lambda: SPICE_GUEST in window.tabs, 8)
+        tab = window.tabs[SPICE_GUEST]
+        # Watching the summary is the situation under test: it is the poll
+        # re-rendering it that used to cancel the fetch in flight.
+        tab.show_view("summary", by_user=True)
+        window.panes.focus_page(tab)
+        summary = tab.summary
+        guest = window.sidebar.guests[SPICE_GUEST]
+        summary.show_guest(guest, window.api_for(guest))
         pump_until(
-            lambda: "checking" not in window.summary.values["console"].get_text(),
-            8,
+            lambda: "checking" not in summary.values["console"].get_text(),
+            12,
         )
-        text = window.summary.values["console"].get_text()
+        text = summary.values["console"].get_text()
         assert "checking" not in text, (
             f"summary never left 'checking...' under polling "
             f"(after {api.config_calls} config calls)"

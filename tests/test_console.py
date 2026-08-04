@@ -19,6 +19,20 @@ RUNNING = key_for(100)
 STOPPED = key_for(102)
 
 
+def open_summary(window, key, seconds=6):
+    """Open a guest's tab on its summary, and wait for the detail to land."""
+    window.open_console(key)
+    pump(0.6)
+    tab = window.tabs[key]
+    tab.show_view("summary", by_user=True)
+    guest = window.sidebar.guests[key]
+    tab.summary.show_guest(guest, window.api_for(guest))
+    pump_until(
+        lambda: "checking" not in tab.summary.values["console"].get_text(), seconds
+    )
+    return tab.summary
+
+
 @pytest.mark.parametrize(
     ("key", "expected", "vga"),
     [
@@ -58,43 +72,48 @@ def test_the_summary_reports_the_console_it_settled_on(window, key, expected):
     # 'checking...' must not survive a completed lookup: an unrecognised
     # adapter reports None for spice_capable, which used to be
     # indistinguishable from "not looked up".
-    window.sidebar.select_key(key)
-    pump(0.6)
-    text = window.summary.values["console"].get_text()
-    display = window.summary.values["display"].get_text()
-    assert "checking" not in text, f"{key}: summary stuck on 'checking...'"
-    assert text.startswith(expected), (
-        f"{key}: display {display!r} reported console {text!r}"
-    )
+    summary = open_summary(window, key)
+    try:
+        text = summary.values["console"].get_text()
+        display = summary.values["display"].get_text()
+        assert "checking" not in text, f"{key}: summary stuck on 'checking...'"
+        assert text.startswith(expected), (
+            f"{key}: display {display!r} reported console {text!r}"
+        )
+    finally:
+        window.close_console(key)
+        pump(0.3)
 
 
 def test_the_summary_holds_its_detail_across_polls(window):
     # Rebuilding the tree empties the selection for an instant. If that
     # reaches the summary it discards its detail and re-fetches, which reads
     # as agent/IP/OS blinking to "-" every refresh.
-    window.notebook.set_current_page(0)
-    window.sidebar.select_key(RUNNING)
-    watched = ("agent", "address", "os")
-    pump_until(
-        lambda: window.summary.values["agent"].get_text() not in ("-", "checking..."),
-        6,
-    )
-    populated = {f: window.summary.values[f].get_text() for f in watched}
-    assert all(v not in ("-", "") for v in populated.values()), (
-        f"summary never populated: {populated}"
-    )
+    summary = open_summary(window, RUNNING)
+    try:
+        watched = ("agent", "address", "os")
+        pump_until(
+            lambda: summary.values["agent"].get_text() not in ("-", "checking..."), 6
+        )
+        populated = {f: summary.values[f].get_text() for f in watched}
+        assert all(v not in ("-", "") for v in populated.values()), (
+            f"summary never populated: {populated}"
+        )
 
-    spurious = []
-    window.sidebar.connect("guest-selected", lambda _s, key: spurious.append(key))
-    blanks = {f: 0 for f in watched}
-    end = time.time() + 5
-    while time.time() < end:
-        pump(0.1)
-        for field in watched:
-            if window.summary.values[field].get_text() == "-":
-                blanks[field] += 1
-    assert not any(blanks.values()), f"summary blanked during polling: {blanks}"
-    assert not spurious, f"tree rebuild emitted selection changes: {spurious}"
+        spurious = []
+        window.sidebar.connect("guest-selected", lambda _s, key: spurious.append(key))
+        blanks = {f: 0 for f in watched}
+        end = time.time() + 5
+        while time.time() < end:
+            pump(0.1)
+            for field in watched:
+                if summary.values[field].get_text() == "-":
+                    blanks[field] += 1
+        assert not any(blanks.values()), f"summary blanked during polling: {blanks}"
+        assert not spurious, f"tree rebuild emitted selection changes: {spurious}"
+    finally:
+        window.close_console(RUNNING)
+        pump(0.3)
 
 
 def test_a_stopped_guest_still_gets_a_placeholder_tab(window):
@@ -276,16 +295,17 @@ def live_console(window):
 
 def test_tab_titles_follow_the_name_id_both_setting(window, config, live_console):
     assert live_console is not None, "no console tab appeared for a running guest"
-    assert window.notebook.get_tab_label(live_console) is not None
+    # The page is the guest's tab, not the console inside it: a reconnect
+    # swaps the console and the tab keeps its place and its label.
+    tab = window.tabs[RUNNING]
+    assert window.notebook.get_tab_label(tab) is not None
     titles = {}
     try:
         for style in ("name", "id", "both"):
             config["tab_title_format"] = style
             window._apply_name_formats()
             pump(0.1)
-            # Re-read: a reconnect can swap the widget behind the tab.
-            current = window.consoles.get(RUNNING)
-            label = window.notebook.get_tab_label(current) if current else None
+            label = window.notebook.get_tab_label(tab)
             if label is not None:
                 titles[style] = label.label.get_text()
     finally:

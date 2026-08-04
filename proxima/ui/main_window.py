@@ -41,13 +41,16 @@ from .clone import CloneDialog
 from .console_tab import ConsoleTabLabel
 from .console_window import ConsoleWindow
 from .fullscreen import FullscreenController
+from .guest_tab import CONSOLE as VIEW_CONSOLE
+from .guest_tab import SUMMARY as VIEW_SUMMARY
+from .guest_tab import GuestTab, console_of, tab_of
 from .indicators import StatusIndicator
 from .login_dialog import run_login
 from .settings_dialog import SettingsDialog
 from .sidebar import Sidebar
 from .snapshots import SnapshotManager, TakeSnapshotDialog
 from .split import MAX_PANES, SplitView
-from .summary import SummaryPage
+from .summary import GuestSummary
 from .task_feed import TaskFeed
 from .vm_settings import VMSettingsDialog
 
@@ -236,19 +239,12 @@ class MainWindow(Gtk.Window):
         self.panes.connect("panes-changed", lambda *_: self._sync_view_menu())
         self.notebook = self.panes.primary
 
-        self.summary = SummaryPage(on_open_console=self.open_console_selected)
+        # A tab per guest, each holding that guest's console and summary.
+        # There is no global summary page: a guest you have not opened has
+        # no tab, exactly as it has no console.
+        self.tabs = {}  # guest key -> GuestTab
         self.sidebar.folder_view = bool(config.get("folder_view", False))
         self.sidebar._update_view_button()
-        # Through the split view, so the page is actually shown: the
-        # notebooks carry no-show-all, so appending alone would leave the
-        # Summary invisible and the pane reporting no current page.
-        self.panes.append(
-            self.summary, Gtk.Label(label="Summary"), notebook=self.notebook
-        )
-        # The Summary is not a console: it belongs to the first pane and
-        # should not be draggable into one of the others.
-        self.notebook.set_tab_detachable(self.summary, False)
-        self.notebook.set_tab_reorderable(self.summary, False)
 
         # The panes sit under an overlay so the fullscreen bar can float
         # above the console without taking layout space from it.
@@ -328,13 +324,6 @@ class MainWindow(Gtk.Window):
         bar.set_title(APP_NAME)
 
         bar.pack_start(self.menubar)
-
-        refresh = Gtk.Button.new_from_icon_name(
-            "view-refresh-symbolic", Gtk.IconSize.MENU
-        )
-        refresh.set_tooltip_text("Refresh inventory (F5)")
-        refresh.connect("clicked", lambda *_: self.refresh())
-        bar.pack_start(refresh)
 
         settings = Gtk.Button.new_from_icon_name(
             "preferences-system-symbolic", Gtk.IconSize.MENU
@@ -459,6 +448,16 @@ class MainWindow(Gtk.Window):
         item = Gtk.MenuItem(label="Vie_w", use_underline=True)
         item.set_submenu(menu)
 
+        # The same flip as the toolbar's Summary button, on the tab in front.
+        self.summary_view_item = Gtk.CheckMenuItem(label="Summary")
+        self.summary_view_item.set_tooltip_text(
+            "Show this guest's summary instead of its console"
+        )
+        self.summary_view_item.set_sensitive(False)
+        self.summary_view_item.connect("toggled", self._on_summary_toggled)
+        self._add_accel(self.summary_view_item, "<Control><Alt>s")
+        menu.append(self.summary_view_item)
+
         self.fullscreen_item = self._menu_item(
             menu, "Full Screen", self._toggle_fullscreen, accel="<Control><Alt>Return"
         )
@@ -548,14 +547,17 @@ class MainWindow(Gtk.Window):
         item.connect("activate", lambda *_: callback())
         menu.append(item)
         if accel:
-            key, modifier = Gtk.accelerator_parse(accel)
-            if not hasattr(self, "_accels"):
-                self._accels = Gtk.AccelGroup()
-                self.add_accel_group(self._accels)
-            item.add_accelerator(
-                "activate", self._accels, key, modifier, Gtk.AccelFlags.VISIBLE
-            )
+            self._add_accel(item, accel)
         return item
+
+    def _add_accel(self, item, accel):
+        key, modifier = Gtk.accelerator_parse(accel)
+        if not hasattr(self, "_accels"):
+            self._accels = Gtk.AccelGroup()
+            self.add_accel_group(self._accels)
+        item.add_accelerator(
+            "activate", self._accels, key, modifier, Gtk.AccelFlags.VISIBLE
+        )
 
     def _build_toolbar(self):
         bar = Gtk.Toolbar()
@@ -572,6 +574,18 @@ class MainWindow(Gtk.Window):
         self.console_tool_item = console_item
         bar.insert(console_item, -1)
 
+        # The flip between the guest's console and its summary. Per tab, so
+        # it shows the state of whichever tab is in front.
+        self.summary_tool_item = Gtk.ToggleToolButton()
+        self.summary_tool_item.set_label("Summary")
+        self.summary_tool_item.set_icon_name("document-properties-symbolic")
+        self.summary_tool_item.set_tooltip_text(
+            "Show this guest's summary instead of its console"
+        )
+        self.summary_tool_item.set_sensitive(False)
+        self.summary_tool_item.connect("toggled", self._on_summary_toggled)
+        bar.insert(self.summary_tool_item, -1)
+
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
         for name, item in toolbar_defs.add_power_buttons(
@@ -582,7 +596,7 @@ class MainWindow(Gtk.Window):
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
         self.snapshot_items = toolbar_defs.add_snapshot_buttons(
-            bar, self._snapshot_action, important=("take",)
+            bar, self._snapshot_action, important=()
         )
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
@@ -630,13 +644,6 @@ class MainWindow(Gtk.Window):
         self.tasks_tool_item.set_tooltip_text("Show or hide the cluster task list")
         self.tasks_tool_item.connect("toggled", self._on_tasks_toggled)
         bar.insert(self.tasks_tool_item, -1)
-
-        refresh_item = Gtk.ToolButton()
-        refresh_item.set_label("Refresh")
-        refresh_item.set_icon_name("view-refresh-symbolic")
-        refresh_item.set_tooltip_text("Refresh inventory (F5)")
-        refresh_item.connect("clicked", lambda *_: self.refresh())
-        bar.insert(refresh_item, -1)
 
         spacer = Gtk.SeparatorToolItem()
         spacer.set_draw(False)
@@ -1912,10 +1919,22 @@ class MainWindow(Gtk.Window):
             self.set_status(f"{total} guests, {running} running")
         self._update_action_sensitivity()
         self._update_popouts()
-        guest = self.sidebar.selected_guest()
-        if guest is not None and self.panes.current_page() is self.summary:
-            self.summary.show_guest(guest, self.api_for(guest))
+        self._refresh_open_summaries()
         return False
+
+    def _refresh_open_summaries(self):
+        """Keep the summaries that are actually on screen up to date.
+
+        Only the visible ones: a summary behind a console redraws when its
+        tab is flipped to, and the fields it shows come from the poll that
+        has just run either way.
+        """
+        for key, tab in list(self.tabs.items()):
+            guest = self.sidebar.guests.get(key)
+            if guest is None or tab.view != VIEW_SUMMARY:
+                continue
+            if tab is self.panes.current_page():
+                tab.summary.show_guest(guest, self.api_for(guest))
 
     PENDING_TIMEOUT = 45  # give up waiting for a status change
     RENAME_TIMEOUT = 30
@@ -2019,6 +2038,8 @@ class MainWindow(Gtk.Window):
                     if report is not None:
                         report(guest.status)
                     self.set_status(f"{guest.label} is {guest.status}")
+                # There is nothing to watch, so show what there is to read.
+                self._follow_guest_state(guest)
                 continue
 
             # Running again after being stopped: the old session is dead and
@@ -2031,6 +2052,26 @@ class MainWindow(Gtk.Window):
                 GLib.idle_add(
                     lambda k=key: (self.reconnect_console(k, automatic=True), False)[1]
                 )
+            # Running again: the console is the point of the tab once more.
+            self._follow_guest_state(guest)
+
+    def _follow_guest_state(self, guest):
+        """Let a guest's power state pick the view its tab shows.
+
+        Off or suspended, there is nothing on the console worth looking at,
+        so the summary comes forward; powering back on brings the console
+        back. A view the user chose by hand stands until the guest's power
+        state actually changes.
+        """
+        tab = self.tabs.get(guest.key)
+        if tab is None:
+            return
+        before = tab.view
+        tab.follow_guest_state(guest)
+        if tab.view != before and tab is self.panes.current_page():
+            if tab.view == VIEW_SUMMARY:
+                tab.summary.show_guest(guest, self.api_for(guest))
+            self._sync_tab_view(tab)
 
     def _on_view_changed(self, _sidebar):
         """Folder view needs each guest's notes, which node view never reads."""
@@ -2079,13 +2120,15 @@ class MainWindow(Gtk.Window):
         guest = self.sidebar.guests.get(key) if key else None
         self._update_action_sensitivity()
         if guest is None:
-            self.summary.clear()
             self._set_indicator(self.qga_icon, None, "Guest agent")
             self._agent_ok = False
             self._update_agent_menu()
             return
-        if self.panes.current_page() is self.summary:
-            self.summary.show_guest(guest, self.api_for(guest))
+        # Selecting a guest that already has a tab open on its summary
+        # refreshes it; a guest with no tab is not put on screen at all.
+        tab = self.tabs.get(key)
+        if tab is not None and tab.view == VIEW_SUMMARY:
+            tab.summary.show_guest(guest, self.api_for(guest))
         self._context_changed()
 
     def _on_guest_activated(self, _sidebar, key):
@@ -2297,6 +2340,12 @@ class MainWindow(Gtk.Window):
             )
             console.show_pending_state(f"{verb}...")
 
+        # Starting a guest goes straight to its console, saying "Starting...",
+        # rather than sitting on the summary until the cluster catches up.
+        # Watching it boot is the point of having pressed the button.
+        if action_defs.EXPECTED_STATUS.get(action.name) == "running":
+            self._show_console_for_start(guest.key)
+
         # And on the row, whether or not a console is open: the task can
         # finish before the next inventory poll, which used to leave the
         # tree claiming the guest was still running for a couple of seconds
@@ -2317,6 +2366,19 @@ class MainWindow(Gtk.Window):
 
         self.burst_poll()
         return False
+
+    def _show_console_for_start(self, key):
+        """Bring a starting guest's console forward, before it is running.
+
+        Marked as chosen so the poll that still reports "stopped" for the
+        next second or two does not push the summary straight back.
+        """
+        tab = self.tabs.get(key)
+        if tab is None or tab.console is None:
+            return
+        tab.show_view(VIEW_CONSOLE, by_user=True)
+        if tab is self.panes.current_page():
+            self._sync_tab_view(tab)
 
     def _action_failed(self, action, guest, message):
         self._clear_busy(guest.key)
@@ -2540,7 +2602,7 @@ class MainWindow(Gtk.Window):
             except Exception as exc:
                 GLib.idle_add(self.set_status, f"{guest.label}: {exc}")
                 return
-            address = SummaryPage._first_address(interfaces)
+            address = GuestSummary._first_address(interfaces)
             GLib.idle_add(self._launch_remote, guest, kind, address)
 
         threading.Thread(
@@ -2603,8 +2665,21 @@ class MainWindow(Gtk.Window):
             window.present()
             return
 
+        existing_tab = self.tabs.get(key)
+        if existing_tab is not None and not replace:
+            # The guest already has a tab, so bring it forward rather than
+            # opening a second one. A tab showing its summary flips to the
+            # console, because opening the console is what was asked for.
+            self.panes.focus_page(existing_tab)
+            if existing_tab.console is not None:
+                existing_tab.show_view(VIEW_CONSOLE, by_user=True)
+                self._sync_tab_view(existing_tab)
+                return
+            if self.consoles.get(key) is not None:
+                return
+
         existing = self.consoles.get(key)
-        if existing is not None and not replace:
+        if existing is not None and not replace and existing_tab is None:
             if self.panes.focus_page(existing):
                 return
             # Orphaned: in self.consoles but in no tab and no pop-out. Drop
@@ -3086,12 +3161,114 @@ class MainWindow(Gtk.Window):
             if guest is not None and hasattr(label, "set_title"):
                 label.set_title(self.tab_title(guest))
 
-    def _install_console(self, guest, console):
-        """Put a console on screen, replacing any existing one for the guest.
+    def guest_tab(self, guest, present=False):
+        """The guest's tab, opening one if it has none.
 
-        Replacing in place keeps the tab -- or the pop-out window -- exactly
-        where it was, which is what makes a reconnect look like the picture
-        coming back rather than the tab closing and reopening.
+        The tab is what lives in the notebook, so a console arriving later,
+        or going away entirely, never disturbs it.
+        """
+        tab = self.tabs.get(guest.key)
+        if tab is None:
+            summary = GuestSummary(
+                on_open_console=lambda k=guest.key: self.open_console(k),
+                on_show_console=lambda k=guest.key: self.show_tab_view(
+                    k, VIEW_CONSOLE, by_user=True
+                ),
+                on_save_notes=lambda text, k=guest.key: self.save_guest_notes(k, text),
+            )
+            tab = GuestTab(guest.key, summary)
+            self.tabs[guest.key] = tab
+            label = ConsoleTabLabel(
+                self.tab_title(guest),
+                None,
+                on_close=lambda k=guest.key: self.close_console(k),
+            )
+            self.panes.append(tab, label)
+            tab.show_all()
+            summary.show_guest(guest, self.api_for(guest))
+            self._load_guest_notes(guest)
+            tab.follow_guest_state(guest)
+        if present:
+            self.panes.focus_page(tab)
+        return tab
+
+    # -- notes -----------------------------------------------------------
+
+    def _load_guest_notes(self, guest):
+        """Read a guest's notes for its summary, off the main thread."""
+        api = self.api_for(guest)
+        if api is None:
+            return
+        key = guest.key
+
+        def worker():
+            try:
+                raw = api.guest_notes(guest.node, guest.vmid, guest.kind)
+            except Exception as exc:
+                GLib.idle_add(self._notes_failed, key, str(exc))
+                return
+            GLib.idle_add(self._notes_loaded, key, raw)
+
+        threading.Thread(target=worker, daemon=True, name=f"notes-{guest.vmid}").start()
+
+    def _notes_loaded(self, key, raw):
+        tab = self.tabs.get(key)
+        if tab is not None:
+            tab.summary.set_notes(key, raw)
+        return False
+
+    def _notes_failed(self, key, message):
+        tab = self.tabs.get(key)
+        if tab is not None:
+            tab.summary.notes_saved(
+                ok=False, message=f"could not read notes: {message}"
+            )
+        return False
+
+    def save_guest_notes(self, key, text):
+        """Write the user's notes back, keeping Proxima's block intact.
+
+        The block is re-read immediately before writing rather than
+        remembered from the load: a folder change or a settings save in
+        between belongs in the notes too, and would otherwise be undone by
+        whatever was typed here.
+        """
+        guest = self.sidebar.guests.get(key)
+        api = self.api_for(guest) if guest else None
+        if guest is None or api is None:
+            return
+
+        def worker():
+            try:
+                current = api.guest_notes(guest.node, guest.vmid, guest.kind)
+                metadata, _user = notes_meta.parse(current or "")
+                api.set_guest_notes(
+                    guest.node,
+                    guest.vmid,
+                    notes_meta.update(text, metadata),
+                    guest.kind,
+                )
+            except Exception as exc:
+                GLib.idle_add(self._notes_failed, key, str(exc))
+                return
+            GLib.idle_add(self._notes_saved, key)
+
+        threading.Thread(
+            target=worker, daemon=True, name=f"notes-save-{guest.vmid}"
+        ).start()
+
+    def _notes_saved(self, key):
+        tab = self.tabs.get(key)
+        if tab is not None:
+            tab.summary.notes_saved(ok=True)
+        return False
+
+    def _install_console(self, guest, console):
+        """Put a console into the guest's tab, replacing any existing one.
+
+        Replacing inside the tab is what makes a reconnect look like the
+        picture coming back: the tab itself never moves, because it is the
+        tab and not the console that the notebook holds.
         """
         console.guest_key = guest.key
         old = self.consoles.get(guest.key)
@@ -3105,35 +3282,71 @@ class MainWindow(Gtk.Window):
             self._sync_view_menu()
             return -1
 
-        label = ConsoleTabLabel(
-            self.tab_title(guest),
-            console.protocol,
-            on_close=lambda c=console: self.close_console_widget(c),
-        )
-
-        # Replacing in the pane the old console was in, so a reconnect
-        # does not yank the tab back to pane 0.
-        notebook = (
-            self.panes.notebook_of(old)
-            if old is not None and old is not console
-            else None
-        )
-        page = notebook.page_num(old) if notebook is not None else -1
-        if page >= 0:
-            self.panes.insert(console, label, notebook, page)
-            # The old page has shifted along by one now.
-            notebook.remove_page(page + 1)
-        else:
-            page = self.panes.append(console, label)
-            notebook = self.panes.notebook_of(console)
-
-        notebook.set_current_page(notebook.page_num(console))
+        tab = self.guest_tab(guest)
+        replaced = tab.set_console(console)
         self.consoles[guest.key] = console
-        if old is not None and old is not console:
-            self._shutdown_console(old)
+
+        notebook = self.panes.notebook_of(tab)
+        page = notebook.page_num(tab) if notebook is not None else -1
+        label = notebook.get_tab_label(tab) if notebook is not None else None
+        if label is not None and hasattr(label, "set_protocol"):
+            label.set_protocol(console.protocol)
+        if notebook is not None:
+            notebook.set_current_page(page)
+
+        # A console arriving for a running guest is what the tab is for.
+        tab.follow_guest_state(guest)
+
+        for stale in (old, replaced):
+            if stale is not None and stale is not console:
+                self._shutdown_console(stale)
         self._sync_view_menu()
         self._refresh_console_indicators(console)
         return page
+
+    # -- flipping a tab between its console and its summary -------------
+
+    def current_tab(self):
+        return tab_of(self.panes.current_page())
+
+    def toggle_tab_view(self):
+        """The toolbar button: flip the tab in front, and only that one."""
+        tab = self.current_tab()
+        if tab is None:
+            return
+        tab.toggle(by_user=True)
+        self._sync_tab_view()
+
+    def show_tab_view(self, key, view, by_user=False):
+        tab = self.tabs.get(key)
+        if tab is not None:
+            tab.show_view(view, by_user=by_user)
+            if tab is self.current_tab():
+                self._sync_tab_view()
+
+    def _sync_tab_view(self, tab=_CURRENT):
+        """Point the Summary button at whichever tab is in front."""
+        if tab is _CURRENT:
+            tab = self.current_tab()
+        showing_summary = tab is not None and tab.view == VIEW_SUMMARY
+        self._updating_view_menu = True
+        try:
+            for widget in (self.summary_tool_item, self.summary_view_item):
+                widget.set_sensitive(tab is not None)
+                widget.set_active(showing_summary)
+        finally:
+            self._updating_view_menu = False
+
+    def _on_summary_toggled(self, widget):
+        if self._updating_view_menu:
+            return
+        tab = self.current_tab()
+        if tab is None:
+            return
+        tab.show_view(
+            VIEW_SUMMARY if widget.get_active() else VIEW_CONSOLE, by_user=True
+        )
+        self._sync_tab_view(tab)
 
     def _refresh_console_indicators(self, console):
         """Re-read the clipboard and audio state for a console just installed.
@@ -3325,15 +3538,24 @@ class MainWindow(Gtk.Window):
         if self.fullscreen_control.active:
             self.fullscreen_control.leave()
 
-        notebook = self.panes.notebook_of(console)
-        page = notebook.page_num(console) if notebook is not None else -1
+        # The tab goes with the console: a summary with nothing behind it is
+        # not worth a tab of its own while the console is in another window.
+        tab = self.tabs.get(key)
+        holder = tab if tab is not None else console
+        notebook = self.panes.notebook_of(holder)
+        page = notebook.page_num(holder) if notebook is not None else -1
         if page < 0:
             return
         # Remember where it was so returning it lands in the same place.
         self._popout_pages[key] = page
-        # detach(), not remove_page(): the widget has to survive the move,
-        # and self.consoles holds the only other reference.
-        self.panes.detach(console)
+        if tab is not None:
+            tab.take_console()
+            self.tabs.pop(key, None)
+            self.panes.remove_page(tab)
+        else:
+            # detach(), not remove_page(): the widget has to survive the
+            # move, and self.consoles holds the only other reference.
+            self.panes.detach(console)
 
         window = ConsoleWindow(self, console, guest)
         self._popouts[key] = window
@@ -3342,22 +3564,35 @@ class MainWindow(Gtk.Window):
         self.set_status(f"{guest.label}: console popped out")
 
     def reclaim_console(self, key, console):
-        """Take a console back from a pop-out window into the notebook."""
+        """Take a console back from a pop-out window into a tab."""
         self._popouts.pop(key, None)
         if self._closing:
             return
         guest = self.sidebar.guests.get(key)
-        title = self.tab_title(guest) if guest else getattr(console, "title", "console")
+        if guest is None:
+            # Its guest has gone from the inventory; there is no tab to
+            # build around it.
+            self._shutdown_console(console)
+            return
 
+        summary = GuestSummary(on_open_console=lambda k=key: self.open_console(k))
+        tab = GuestTab(key, summary)
+        self.tabs[key] = tab
         label = ConsoleTabLabel(
-            title, console.protocol, on_close=lambda: self.close_console(key)
+            self.tab_title(guest),
+            console.protocol,
+            on_close=lambda: self.close_console(key),
         )
         self.panes.insert(
-            console, label, self.panes.primary, self._popout_pages.pop(key, -1)
+            tab, label, self.panes.primary, self._popout_pages.pop(key, -1)
         )
-        self.panes.focus_page(console)
+        tab.show_all()
+        summary.show_guest(guest, self.api_for(guest))
+        tab.set_console(console)
+        tab.follow_guest_state(guest)
+        self.panes.focus_page(tab)
         self.consoles[key] = console
-        self._sync_view_menu()
+        self._after_tab_closed()
 
     def run_action_for(self, key, action_name):
         """Power action from a pop-out window's toolbar."""
@@ -3371,19 +3606,37 @@ class MainWindow(Gtk.Window):
         for window in list(self._popouts.values()):
             window.update_sensitivity()
 
-    def close_console_widget(self, console):
-        """Close a specific console widget, whoever owns its key now."""
-        self.panes.remove_page(console)
-        key = getattr(console, "guest_key", None)
+    def close_console_widget(self, page):
+        """Close a page, whether it is a guest's tab or a bare console."""
+        tab = tab_of(page)
+        console = console_of(page)
+        if tab is not None:
+            tab.take_console()
+        self.panes.remove_page(page)
+        key = getattr(page, "guest_key", None) or getattr(console, "guest_key", None)
         # Only forget the key if it still points at this widget; a reconnect
         # may already have replaced it.
-        if key and self.consoles.get(key) is console:
+        if key and (tab is not None or self.consoles.get(key) is console):
             self.consoles.pop(key, None)
+            self.tabs.pop(key, None)
             self._console_offline.pop(key, None)
             self._pending_actions.pop(key, None)
             self._clear_session_choices(key)
-        self._shutdown_console(console)
+        if console is not None:
+            self._shutdown_console(console)
+        self._after_tab_closed()
+
+    def _after_tab_closed(self):
+        """Put the chrome back in step after a tab goes.
+
+        Closing the last tab emits no page switch, so nothing else would
+        tell the status bar that the console it is describing has gone.
+        """
         self._sync_view_menu()
+        self._sync_tab_view()
+        self._context_changed()
+        self._update_audio_indicator()
+        self._update_clipboard_indicator()
 
     def _clear_session_choices(self, key):
         """Forget the temporary console choices made for one guest.
@@ -3398,30 +3651,37 @@ class MainWindow(Gtk.Window):
             self._session_switches.pop((key, name), None)
 
     def close_console(self, key):
+        """Close the guest's tab: its console and its summary together."""
         self._clear_session_choices(key)
         window = self._popouts.pop(key, None)
         if window is not None:
             window.shutdown()
             window.destroy()
         console = self.consoles.pop(key, None)
-        if console is None:
+        tab = self.tabs.pop(key, None)
+        if console is None and tab is None:
             return
         # Closing the console that is filling the screen would otherwise
         # leave the window fullscreen with no chrome and nothing in it.
         if self.fullscreen_control.active and console is self.current_console():
             self.fullscreen_control.leave()
-        self.panes.remove_page(console)
-        self._shutdown_console(console)
-        self._sync_view_menu()
+        self._console_offline.pop(key, None)
+        if tab is not None:
+            tab.take_console()
+            self.panes.remove_page(tab)
+        elif console is not None:
+            self.panes.remove_page(console)
+        if console is not None:
+            self._shutdown_console(console)
+        self._after_tab_closed()
 
     def _close_current_console(self):
-        widget = self.panes.current_page()
-        if widget is None or widget is self.summary:
+        page = self.panes.current_page()
+        if page is None:
             return
-        if widget is not None:
-            # By widget, not by key: after a reconnect the key can point at a
-            # different tab, and closing that one leaves this one stranded.
-            self.close_console_widget(widget)
+        # By widget, not by key: after a reconnect the key can point at a
+        # different tab, and closing that one leaves this one stranded.
+        self.close_console_widget(page)
 
     def _on_page_switched(self, _panes, _notebook, page_widget, _page_num):
         if not self._ready:
@@ -3430,30 +3690,32 @@ class MainWindow(Gtk.Window):
         # "switch-page" fires before the page becomes current, so the
         # incoming widget is passed in rather than read back a frame later.
         # Reading it back is what made the toolbar flash the old state.
-        # None here is deliberate: the summary page has no console, and
-        # reading it back would still return the outgoing tab's.
-        incoming = page_widget if hasattr(page_widget, "protocol") else None
+        incoming = console_of(page_widget)
         self._sync_view_menu(incoming)
         self._context_changed(incoming)
+        self._sync_tab_view(tab_of(page_widget))
 
-        if page_widget is self.summary:
-            guest = self.sidebar.selected_guest()
-            if guest is not None:
-                self.summary.show_guest(guest, self.api_for(guest))
-            return
+        tab = tab_of(page_widget)
         key = getattr(page_widget, "guest_key", None)
+        if tab is not None and tab.view == VIEW_SUMMARY:
+            guest = self.sidebar.guests.get(key)
+            if guest is not None:
+                tab.summary.show_guest(guest, self.api_for(guest))
         if key:
             self.sidebar.select_key(key)
-        # Give the console the keyboard as soon as its tab is shown.
-        if hasattr(page_widget, "grab_focus_display"):
+        # Give the console the keyboard as soon as its tab is shown, unless
+        # the tab is showing its summary, which has its own focus.
+        if tab is not None:
+            if tab.view == VIEW_CONSOLE:
+                GLib.idle_add(tab.focus_console)
+        elif hasattr(page_widget, "grab_focus_display"):
             GLib.idle_add(page_widget.grab_focus_display)
 
     # -- view menu <-> active console ----------------------------------
 
     def current_console(self):
-        """The console on the visible tab, or None on the summary page."""
-        widget = self.panes.current_page()
-        return widget if hasattr(widget, "protocol") else None
+        """The console in the tab in front, if it has one."""
+        return console_of(self.panes.current_page())
 
     def _sync_view_menu(self, console=_CURRENT):
         """Point the view menu at the active console.

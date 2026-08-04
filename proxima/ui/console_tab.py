@@ -25,24 +25,18 @@ class ConsoleTabLabel(Gtk.EventBox):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
         self.add(box)
 
-        # The same icon either way. A warning triangle on every VNC tab
-        # overstates it -- VNC is a working console, just a plainer one --
-        # and the status bar already names the protocol in the corner.
-        tooltip = (
-            "VNC: no guest resize, clipboard or audio" if protocol == "vnc" else "SPICE"
+        self.icon = Gtk.Image.new_from_icon_name(
+            "video-display-symbolic", Gtk.IconSize.MENU
         )
-
-        icon = Gtk.Image.new_from_icon_name("video-display-symbolic", Gtk.IconSize.MENU)
-        icon.set_tooltip_text(tooltip)
-        box.pack_start(icon, False, False, 0)
+        box.pack_start(self.icon, False, False, 0)
 
         # No ellipsizing. An ellipsizing label reports a minimum width of
         # roughly nothing, so the notebook happily shrinks it to "..." once
         # the icon and close button have taken their share. Sizing to the
         # text instead makes the tab as wide as its contents need.
         self.label = Gtk.Label(label=self._fit(title))
-        self.label.set_tooltip_text(tooltip)
         box.pack_start(self.label, False, False, 0)
+        self.set_protocol(protocol)
 
         close = Gtk.Button()
         close.set_relief(Gtk.ReliefStyle.NONE)
@@ -75,3 +69,19 @@ class ConsoleTabLabel(Gtk.EventBox):
 
     def set_title(self, title):
         self.label.set_text(self._fit(title))
+
+    def set_protocol(self, protocol):
+        """Say which kind of console the tab holds, once one exists.
+
+        The same icon either way. A warning triangle on every VNC tab
+        overstates it -- VNC is a working console, just a plainer one --
+        and the status bar already names the protocol in the corner.
+        """
+        if protocol == "vnc":
+            tooltip = "VNC: no guest resize, clipboard or audio"
+        elif protocol:
+            tooltip = "SPICE"
+        else:
+            tooltip = "No console open"
+        self.icon.set_tooltip_text(tooltip)
+        self.label.set_tooltip_text(tooltip)
