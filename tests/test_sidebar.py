@@ -458,9 +458,31 @@ def test_connect_is_on_the_server_row_not_on_nodes(window, right_click):
     assert node_menu == [], f"a node row opened a menu: {node_menu}"
 
 
+def has_row_of_kind(sidebar, kind):
+    """Whether any row in the tree, at any depth, is of this kind."""
+    store = sidebar.store
+    found = []
+
+    def walk(parent):
+        row = store.iter_children(parent)
+        while row is not None and not found:
+            if store.get_value(row, sidebar_mod.COL_KIND) == kind:
+                found.append(row)
+            walk(row)
+            row = store.iter_next(row)
+
+    walk(None)
+    return bool(found)
+
+
 def test_a_folder_row_opens_no_menu(window, folder_view, right_click):
     window.move_guest_to_folder(RUNNING, "Production")
-    pump_until(lambda: bool(FakeAPI.NOTES.get(100)), 5)
+    # Waits for the folder row, not for the note to be written back. An
+    # earlier test in this file empties the fake's notes and leaves every
+    # guest marked unread, so the write can be held back -- the row goes up
+    # regardless, and it is the row that is under test. Waiting on the note
+    # only ever ran out its five seconds.
+    pump_until(lambda: has_row_of_kind(window.sidebar, "folder"), 5)
     window.sidebar.rebuild()
     window.sidebar.view.expand_all()
     pump(0.3)

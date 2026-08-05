@@ -10,7 +10,7 @@ from gi.repository import Gdk
 from proxima.api import notes as notes_mod
 from proxima.ui.guest_tab import CONSOLE, SUMMARY, GuestTab
 
-from .conftest import FakeAPI, key_for, pump, pump_until, sample_row
+from .conftest import FakeAPI, key_for, open_tab, pump, pump_until, sample_row
 
 
 def press_event(button=1):
@@ -44,8 +44,7 @@ def test_there_is_no_global_summary_page(window):
 
 
 def test_opening_a_guest_gives_it_one_tab(window, closed_tabs):
-    window.open_console(RUNNING)
-    pump(1.0)
+    open_tab(window, RUNNING)
     assert RUNNING in window.tabs
     assert window.notebook.get_n_pages() == 1
     assert isinstance(window.tabs[RUNNING], GuestTab)
@@ -63,9 +62,7 @@ def test_a_running_guest_opens_on_its_console(window, closed_tabs):
 
 
 def test_a_stopped_guest_opens_on_its_summary(window, closed_tabs):
-    window.open_console(STOPPED)
-    pump(0.8)
-    tab = window.tabs[STOPPED]
+    tab = open_tab(window, STOPPED)
     assert tab.view == SUMMARY, "a stopped guest opened on a console with nothing in it"
     # The console side still exists behind it, so there is something to flip
     # to once the guest starts.
@@ -73,9 +70,7 @@ def test_a_stopped_guest_opens_on_its_summary(window, closed_tabs):
 
 
 def test_the_toolbar_button_flips_the_tab_in_front(window, closed_tabs):
-    window.open_console(RUNNING)
-    pump_until(lambda: window.tabs[RUNNING].console is not None, 8)
-    tab = window.tabs[RUNNING]
+    tab = open_tab(window, RUNNING)
     assert tab.view == CONSOLE
     assert not window.summary_tool_item.get_active()
 
@@ -89,10 +84,8 @@ def test_the_toolbar_button_flips_the_tab_in_front(window, closed_tabs):
 
 
 def test_the_button_shows_the_state_of_whichever_tab_is_in_front(window, closed_tabs):
-    window.open_console(RUNNING)
-    pump_until(lambda: window.tabs[RUNNING].console is not None, 8)
-    window.open_console(OTHER_RUNNING)
-    pump_until(lambda: window.tabs[OTHER_RUNNING].console is not None, 8)
+    open_tab(window, RUNNING)
+    open_tab(window, OTHER_RUNNING)
 
     window.tabs[RUNNING].show_view(SUMMARY, by_user=True)
     window.panes.focus_page(window.tabs[RUNNING])
@@ -109,15 +102,8 @@ def test_the_button_shows_the_state_of_whichever_tab_is_in_front(window, closed_
 
 
 def test_flipping_one_tab_leaves_the_others_alone(window, closed_tabs):
-    window.open_console(RUNNING)
-    window.open_console(OTHER_RUNNING)
-    pump_until(
-        lambda: (
-            window.tabs[RUNNING].console is not None
-            and window.tabs[OTHER_RUNNING].console is not None
-        ),
-        10,
-    )
+    open_tab(window, RUNNING)
+    open_tab(window, OTHER_RUNNING)
     for key in (RUNNING, OTHER_RUNNING):
         window.tabs[key].show_view(CONSOLE)
 
@@ -128,9 +114,7 @@ def test_flipping_one_tab_leaves_the_others_alone(window, closed_tabs):
 
 
 def test_a_guest_powering_off_brings_its_summary_forward(window, closed_tabs):
-    window.open_console(RUNNING)
-    pump_until(lambda: window.tabs[RUNNING].console is not None, 8)
-    tab = window.tabs[RUNNING]
+    tab = open_tab(window, RUNNING)
     assert tab.view == CONSOLE
 
     sample_row(100)["status"] = "stopped"
@@ -146,9 +130,7 @@ def test_a_guest_powering_off_brings_its_summary_forward(window, closed_tabs):
 
 def test_a_guest_powering_on_brings_its_console_back(window, closed_tabs):
     sample_row(102)["status"] = "stopped"
-    window.open_console(STOPPED)
-    pump(0.8)
-    tab = window.tabs[STOPPED]
+    tab = open_tab(window, STOPPED)
     assert tab.view == SUMMARY
 
     sample_row(102)["status"] = "running"
@@ -164,9 +146,7 @@ def test_a_guest_powering_on_brings_its_console_back(window, closed_tabs):
 
 def test_a_hand_picked_view_survives_a_poll(window, closed_tabs):
     """Choosing the summary on a running guest is not undone a second later."""
-    window.open_console(RUNNING)
-    pump_until(lambda: window.tabs[RUNNING].console is not None, 8)
-    tab = window.tabs[RUNNING]
+    tab = open_tab(window, RUNNING)
     tab.show_view(SUMMARY, by_user=True)
 
     window.refresh()
@@ -175,8 +155,7 @@ def test_a_hand_picked_view_survives_a_poll(window, closed_tabs):
 
 
 def test_closing_the_tab_takes_the_summary_with_it(window, closed_tabs):
-    window.open_console(RUNNING)
-    pump(1.0)
+    open_tab(window, RUNNING)
     assert window.notebook.get_n_pages() == 1
     window.close_console(RUNNING)
     pump(0.4)
@@ -186,9 +165,8 @@ def test_closing_the_tab_takes_the_summary_with_it(window, closed_tabs):
 
 
 def test_the_summary_describes_its_own_guest(window, closed_tabs):
-    window.open_console(RUNNING)
-    window.open_console(OTHER_RUNNING)
-    pump(1.5)
+    open_tab(window, RUNNING)
+    open_tab(window, OTHER_RUNNING)
     for key, vmid in ((RUNNING, "100"), (OTHER_RUNNING, "101")):
         guest = window.sidebar.guests[key]
         summary = window.tabs[key].summary
@@ -218,9 +196,7 @@ def test_a_template_has_no_tab(window, closed_tabs):
 def test_starting_a_guest_goes_to_the_console_at_once(window, api, closed_tabs):
     """Without waiting for the cluster to admit the guest is running."""
     sample_row(102)["status"] = "stopped"
-    window.open_console(STOPPED)
-    pump(0.8)
-    tab = window.tabs[STOPPED]
+    tab = open_tab(window, STOPPED)
     assert tab.view == SUMMARY
 
     try:
@@ -242,9 +218,7 @@ def test_starting_a_guest_goes_to_the_console_at_once(window, api, closed_tabs):
 
 
 def test_clicking_the_picture_goes_to_the_console(window, closed_tabs):
-    window.open_console(RUNNING)
-    pump_until(lambda: window.tabs[RUNNING].console is not None, 8)
-    tab = window.tabs[RUNNING]
+    tab = open_tab(window, RUNNING)
     tab.show_view(SUMMARY, by_user=True)
     pump(0.3)
 
@@ -255,9 +229,7 @@ def test_clicking_the_picture_goes_to_the_console(window, closed_tabs):
 
 def test_clicking_the_picture_of_a_stopped_guest_does_nothing(window, closed_tabs):
     # There is nothing to switch to, and a blank console is not an answer.
-    window.open_console(STOPPED)
-    pump(0.8)
-    tab = window.tabs[STOPPED]
+    tab = open_tab(window, STOPPED)
     assert tab.view == SUMMARY
 
     tab.summary.preview_button.emit("button-press-event", press_event())

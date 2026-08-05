@@ -636,6 +636,22 @@ def wait_for_guests(window, seconds=10):
     return pump_until(lambda: bool(window.sidebar.guests), seconds)
 
 
+def open_tab(window, key, seconds=8):
+    """Open a guest's tab and wait until its console side has been built.
+
+    Both halves of a tab are built together, so this is the point every tab
+    test starts from -- whether it goes on to read the view, the summary or
+    the console. Waiting for it beats sleeping for a fixed second: it lands
+    in a fraction of that, and a sleep that is long enough on a good day is
+    what makes a suite flaky on a loaded machine.
+    """
+    window.open_console(key)
+    assert pump_until(
+        lambda: key in window.tabs and window.tabs[key].console is not None, seconds
+    ), f"no tab appeared for {key}"
+    return window.tabs[key]
+
+
 def build_window(api, config):
     """A MainWindow with one fake connection already attached."""
 
@@ -726,6 +742,11 @@ def api():
 def window(api, config):
     """A main window, shared by every test in the module, in file order."""
     window = build_window(api, config)
-    pump(2.0)
+    # Wait for the first poll rather than for a flat two seconds. Every file
+    # pays this once, so it is on the critical path of every worker, and the
+    # tree lands in about a second. The short pump afterwards is for the
+    # detail fetches the first poll kicks off.
+    assert wait_for_guests(window), "the first poll never populated the tree"
+    pump(0.3)
     yield window
     close_window(window)

@@ -32,7 +32,7 @@ mismatches -- without needing a server. The fakes and the main-loop pump live
 in `tests/conftest.py`.
 
 ```
-python3 -m pytest                  everything (~1 minute, four at a time)
+python3 -m pytest                  everything (~30s, eight at a time)
 python3 -m pytest -k console       one area
 python3 -m pytest -n0              serially, for a readable failure
 python3 tools/smoke_test.py        same thing, the old entry point
@@ -42,8 +42,13 @@ Windows are module-scoped: the tests in a file run in order against one
 window, each putting back whatever it changed. That is why the run is split
 by file (`--dist loadfile` in `pyproject.toml`) rather than by test -- a file
 has to stay on one worker, and several windows opening and closing at once is
-the suite working as intended, not a fault. The wall clock is bounded by the
-slowest single file, so more than four workers buys nothing.
+the suite working as intended, not a fault.
+
+The wall clock is bounded by the slowest single file, so the way to make the
+suite faster is to make its longest file shorter, not to add workers. Which
+file that is comes out of `python3 -m pytest -n0 --durations=0`. Prefer
+`pump_until(...)` over `pump(n)` when adding a test: a fixed sleep is both
+slower than it needs to be on a good machine and too short on a busy one.
 
 ### Formatting and linting
 

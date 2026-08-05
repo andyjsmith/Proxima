@@ -46,9 +46,13 @@ ignore = ["E402"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # --dist loadfile, not the default: a window is module-scoped and the tests in
-# a file run in order against it, so a file has to stay on one worker. Four is
-# where the wall clock stops improving -- past that the run is bounded by the
-# slowest single file, not by the number of workers. Override with `-n0` for a
-# serial run when a failure needs a readable traceback.
-addopts = "-ra --strict-markers --strict-config -n 4 --dist loadfile"
+# a file run in order against it, so a file has to stay on one worker.
+#
+# Eight, measured, not `auto`: the floor is the slowest single file (~23s) and
+# there are only fourteen files, so more workers stop buying anything and
+# start costing -- fourteen took 38s and `auto` (20 here) took 41s, against
+# 28s for eight. Every worker is a real GTK process on a real display, and
+# they contend for it. Override with `-n0` for a serial run when a failure
+# needs a readable traceback, or when stepping through one in a debugger.
+addopts = "-ra --strict-markers --strict-config -n 8 --dist loadfile"
 xfail_strict = true
