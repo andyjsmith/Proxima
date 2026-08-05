@@ -4,7 +4,7 @@ import pytest
 from gi.repository import Gtk
 
 from proxima.ui import actions as action_defs
-from proxima.ui import sidebar as sidebar_mod
+from proxima.ui import status_icons as icons_mod
 from proxima.ui.clone import CloneDialog
 
 from .conftest import key_for, pump, pump_until, sample_row
@@ -249,11 +249,11 @@ def test_an_io_error_guest_is_not_offered_a_start(window, io_error):
 
 
 def test_an_io_error_guest_wears_a_warning_not_a_question_mark(window, io_error):
-    icon = sidebar_mod.STATUS_ICONS[io_error.status]
+    icon = icons_mod.STATUS_ICONS[io_error.status]
     assert icon == "dialog-warning-symbolic", f"io-error drew {icon}"
     for dark in (False, True):
-        colour = sidebar_mod.PALETTES[dark]["io-error"]
-        assert colour != sidebar_mod.PALETTES[dark]["unknown"], (
+        colour = icons_mod.PALETTES[dark]["io-error"]
+        assert colour != icons_mod.PALETTES[dark]["unknown"], (
             "io-error is drawn in the same grey as unknown"
         )
 

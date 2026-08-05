@@ -115,6 +115,12 @@ scrollbar slider  { min-width: 9px; min-height: 9px; }
 /* Tab labels carry their own close button; keep it from bloating the tab. */
 .tab-close        { padding: 0; min-height: 16px; min-width: 16px; }
 
+/* A button showing an icon beside a word. GTK's own image-spacing is two
+   pixels, which reads as the two being one glyph. Scoped to a class so
+   icon-only buttons -- the toolbar, the tab close buttons -- keep the
+   tight fit they are drawn for. */
+.labelled-icon image { margin-right: 6px; }
+
 /* The summary page's key column. */
 .summary-key      { opacity: 0.7; }
 .summary-value    { font-family: "JetBrains Mono", "Cascadia Mono",

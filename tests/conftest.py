@@ -207,6 +207,9 @@ class FakeAPI:
             # settings live -- so a re-read must not look like "no settings".
             "description": self.NOTES.get(vmid, ""),
             "agent": "1",
+            # Real configs always carry this, and the summary falls back to
+            # it for a guest whose agent cannot answer.
+            "ostype": "l26",
             "cores": 2,
             "sockets": 1,
             "memory": 2048,

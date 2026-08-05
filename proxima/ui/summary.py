@@ -18,38 +18,94 @@ gi.require_version("Gtk", "3.0")
 
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk
 
+from ..api import devices
 from ..api import notes as notes_meta
-from ..api.models import audio_is_spice, vga_is_spice
+from ..api.models import audio_is_spice, os_type_name, vga_is_spice
+from ..theme import current_dark
+from . import actions as action_defs
+from . import status_icons
 
 # Only until the first allocation: the picture then takes the width it is
 # given, however wide the window happens to be.
 PREVIEW_WIDTH = 320
 MIN_PREVIEW_HEIGHT = 180
 
+# Bigger than the tree's 16px: this one sits beside a bold heading.
+HEADING_ICON = 24
+
+
+class PreviewHolder(Gtk.Bin):
+    """Holds the preview picture without letting it set the layout's floor.
+
+    A GtkImage's minimum size is its pixbuf's size, so a large frame made
+    the summary's minimum wider than the window: the page scrolled instead
+    of shrinking, the allocation stopped tracking the window, and the
+    picture could only ever ratchet larger. Reporting a small minimum and
+    the picture's own natural size fixes that -- the same trick
+    DisplayHolder uses for the SPICE display next door.
+
+    A GtkScrolledWindow does this too, and is what was here first, but it
+    also swallows scroll events and paints GTK's overshoot glow when the
+    pointer is over a picture that has nothing to scroll.
+    """
+
+    __gtype_name__ = "ProximaPreviewHolder"
+
+    def do_get_preferred_width(self):
+        child = self.get_child()
+        natural = child.get_preferred_width()[1] if child is not None else 1
+        return (1, max(1, natural))
+
+    def do_get_preferred_height(self):
+        child = self.get_child()
+        natural = child.get_preferred_height()[1] if child is not None else 0
+        return (1, max(MIN_PREVIEW_HEIGHT, natural))
+
+    def do_get_preferred_width_for_height(self, _height):
+        return self.do_get_preferred_width()
+
+    def do_get_preferred_height_for_width(self, _width):
+        return self.do_get_preferred_height()
+
+    def do_size_allocate(self, allocation):
+        self.set_allocation(allocation)
+        child = self.get_child()
+        if child is not None and child.get_visible():
+            child.size_allocate(allocation)
+
 
 class GuestSummary(Gtk.ScrolledWindow):
     """Read-only overview of one guest."""
 
+    # Name, VMID, node and type are deliberately absent: the heading above
+    # this grid already says "Virtual machine 108 on violet", and repeating
+    # it four times pushed everything worth reading further down.
+    #
+    # IP address comes last because the network device rows are appended
+    # after it, and the two belong together.
     FIELDS = [
-        ("name", "Name"),
         ("status", "Status"),
-        ("node", "Node"),
-        ("vmid", "VMID"),
-        ("kind", "Type"),
-        ("console", "Console"),
-        ("display", "Display"),
-        ("audio", "Audio"),
-        ("agent", "Guest agent"),
-        ("os", "Operating system"),
+        ("uptime", "Uptime"),
         ("cpu", "Processors"),
         ("memory", "Memory"),
         ("disk", "Disk"),
-        ("address", "IP address"),
-        ("uptime", "Uptime"),
+        ("os", "Operating system"),
+        ("agent", "Guest agent"),
+        ("console", "Console"),
+        ("display", "Display"),
+        ("audio", "Audio"),
         ("tags", "Tags"),
+        ("address", "IP address"),
     ]
 
-    def __init__(self, on_open_console=None, on_show_console=None, on_save_notes=None):
+    def __init__(
+        self,
+        on_open_console=None,
+        on_show_console=None,
+        on_save_notes=None,
+        on_power_action=None,
+        on_edit_settings=None,
+    ):
         super().__init__()
         self.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         self.on_open_console = on_open_console or (lambda: None)
@@ -57,6 +113,9 @@ class GuestSummary(Gtk.ScrolledWindow):
         # the button opens one that is not.
         self.on_show_console = on_show_console or self.on_open_console
         self.on_save_notes = on_save_notes or (lambda text: None)
+        self.on_power_action = on_power_action or (lambda action_name: None)
+        self.on_edit_settings = on_edit_settings or (lambda: None)
+        self._power_action = None
         self.guest = None
         self._detail_generation = 0
         self._detailed_key = None
@@ -65,28 +124,61 @@ class GuestSummary(Gtk.ScrolledWindow):
         self._preview_budget = 0
         self._notes_key = None
         self._notes_dirty = False
+        self._net_widgets = []
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         outer.set_border_width(14)
 
-        self.title = Gtk.Label(xalign=0.0)
-        self.title.set_markup("<b>No guest selected</b>")
-        outer.pack_start(self.title, False, False, 0)
-
-        self.subtitle = Gtk.Label(xalign=0.0)
-        self.subtitle.get_style_context().add_class("dim")
-        self.subtitle.set_text("Select a guest in the sidebar.")
-        outer.pack_start(self.subtitle, False, False, 0)
-
-        # Settings on the left, the guest itself on the right. The settings
-        # are as wide as they need to be; the picture takes the rest.
+        # Two columns and nothing above them. The heading and its buttons
+        # belong to the left column rather than spanning the page: full width
+        # they pushed the picture down to start level with the Status row,
+        # wasting the tallest part of the space it had to work with.
         columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
         outer.pack_start(columns, True, True, 0)
 
         left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         columns.pack_start(left, False, False, 0)
 
-        grid = Gtk.Grid(row_spacing=3, column_spacing=20)
+        # The same icon the tree draws for this guest, in the same colour --
+        # see ui.status_icons, which both go through.
+        heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.status_icon = Gtk.Image()
+        heading.pack_start(self.status_icon, False, False, 0)
+
+        self.title = Gtk.Label(xalign=0.0)
+        self.title.set_markup("<b>No guest selected</b>")
+        heading.pack_start(self.title, False, False, 0)
+        left.pack_start(heading, False, False, 0)
+
+        self.subtitle = Gtk.Label(xalign=0.0)
+        self.subtitle.get_style_context().add_class("dim")
+        self.subtitle.set_text("Select a guest in the sidebar.")
+        left.pack_start(self.subtitle, False, False, 0)
+
+        # What you came here to do, directly under the guest's name rather
+        # than buried under a screenful of read-only detail.
+        self._actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self._actions.set_halign(Gtk.Align.START)
+
+        self.console_button = Gtk.Button()
+        self.console_button.set_always_show_image(True)
+        self.console_button.get_style_context().add_class("labelled-icon")
+        self.console_button.set_sensitive(False)
+        self.console_button.connect("clicked", self._on_primary_clicked)
+        self._actions.pack_start(self.console_button, False, False, 0)
+
+        self.settings_button = Gtk.Button(label="Edit settings")
+        self.settings_button.set_always_show_image(True)
+        self.settings_button.get_style_context().add_class("labelled-icon")
+        self.settings_button.set_image(
+            Gtk.Image.new_from_icon_name("emblem-system-symbolic", Gtk.IconSize.BUTTON)
+        )
+        self.settings_button.set_sensitive(False)
+        self.settings_button.connect("clicked", lambda *_: self.on_edit_settings())
+        self._actions.pack_start(self.settings_button, False, False, 0)
+        left.pack_start(self._actions, False, False, 0)
+
+        grid = self._details_grid = Gtk.Grid(row_spacing=3, column_spacing=20)
         self.values = {}
         for row, (key, label) in enumerate(self.FIELDS):
             name = Gtk.Label(label=label, xalign=0.0)
@@ -99,12 +191,6 @@ class GuestSummary(Gtk.ScrolledWindow):
             grid.attach(value, 1, row, 1, 1)
             self.values[key] = value
         left.pack_start(grid, False, False, 0)
-
-        self.console_button = Gtk.Button(label="Open Console")
-        self.console_button.set_halign(Gtk.Align.START)
-        self.console_button.set_sensitive(False)
-        self.console_button.connect("clicked", lambda *_: self.on_open_console())
-        left.pack_start(self.console_button, False, False, 0)
         # The notes live under the details rather than along the bottom: full
         # width they pushed the page taller than the window, and a picture
         # that grows with the window would then always be scrolling something
@@ -114,15 +200,6 @@ class GuestSummary(Gtk.ScrolledWindow):
 
         self._preview_box = self._build_preview()
         columns.pack_start(self._preview_box, True, True, 0)
-
-        # What changes while you are looking at it, along the bottom.
-        self._separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-        outer.pack_start(self._separator, False, False, 0)
-        self.footer = Gtk.Label(xalign=0.0)
-        self.footer.get_style_context().add_class("dim")
-        self.footer.set_line_wrap(True)
-        self.footer.set_text("No guest selected.")
-        outer.pack_start(self.footer, False, False, 0)
 
         self._outer = outer
         self.add(outer)
@@ -147,16 +224,27 @@ class GuestSummary(Gtk.ScrolledWindow):
         self.notes_status.get_style_context().add_class("dim")
         header.pack_start(self.notes_status, False, False, 0)
 
+        # Hidden rather than greyed out when there is nothing to save: with
+        # no edit in progress there is no decision to explain, and two dead
+        # buttons sitting over every guest's notes is just noise.
+        # no-show-all, or the show_all() that puts a tab on screen would
+        # bring them straight back.
         self.notes_save = Gtk.Button(label="Save")
-        self.notes_save.set_sensitive(False)
+        self.notes_save.set_no_show_all(True)
         self.notes_save.connect("clicked", lambda *_: self.save_notes())
         header.pack_end(self.notes_save, False, False, 0)
 
         self.notes_revert = Gtk.Button(label="Revert")
-        self.notes_revert.set_sensitive(False)
+        self.notes_revert.set_no_show_all(True)
         self.notes_revert.connect("clicked", lambda *_: self._reset_notes())
         header.pack_end(self.notes_revert, False, False, 0)
 
+        # The row keeps the height it has with the buttons in it, whether or
+        # not they are showing. A button is taller than the "Notes" label, so
+        # without this the label and the box below it were nudged down a few
+        # pixels the moment an edit began.
+        self._notes_header = header
+        header.set_size_request(-1, self.notes_save.get_preferred_height()[1])
         box.pack_start(header, False, False, 0)
 
         scroller = Gtk.ScrolledWindow()
@@ -178,13 +266,25 @@ class GuestSummary(Gtk.ScrolledWindow):
 
     # -- notes ---------------------------------------------------------
 
+    def _show_notes_buttons(self, showing):
+        """Save and Revert exist only while there is an edit to act on."""
+        self.notes_save.set_visible(bool(showing))
+        self.notes_revert.set_visible(bool(showing))
+        if showing:
+            # Now that they are up and styled, their real height is known.
+            # Only ever grows, so hiding them cannot shrink the row back.
+            wanted = self.notes_save.get_preferred_height()[1]
+            if wanted > self._notes_header.get_size_request().height:
+                self._notes_header.set_size_request(-1, wanted)
+
     def _on_notes_changed(self, _buffer):
         if self._notes_key is None:
             return
         self._notes_dirty = self.notes_text() != self._notes_original
-        self.notes_save.set_sensitive(self._notes_dirty)
-        self.notes_revert.set_sensitive(self._notes_dirty)
-        self.notes_status.set_text("unsaved changes" if self._notes_dirty else "")
+        self._show_notes_buttons(self._notes_dirty)
+        # No "unsaved changes" caption: the buttons appearing is that. This
+        # only clears a stale "saved" from the previous edit.
+        self.notes_status.set_text("")
 
     def notes_text(self):
         start, end = self.notes_buffer.get_bounds()
@@ -204,8 +304,7 @@ class GuestSummary(Gtk.ScrolledWindow):
         self.notes_view.set_sensitive(True)
         self.notes_buffer.set_text(text)
         self._notes_dirty = False
-        self.notes_save.set_sensitive(False)
-        self.notes_revert.set_sensitive(False)
+        self._show_notes_buttons(False)
         self.notes_status.set_text("")
 
     def _reset_notes(self):
@@ -217,8 +316,7 @@ class GuestSummary(Gtk.ScrolledWindow):
         text = self.notes_text()
         self._notes_original = text
         self._notes_dirty = False
-        self.notes_save.set_sensitive(False)
-        self.notes_revert.set_sensitive(False)
+        self._show_notes_buttons(False)
         self.notes_status.set_text("saving...")
         self.on_save_notes(text)
 
@@ -226,8 +324,7 @@ class GuestSummary(Gtk.ScrolledWindow):
         self.notes_status.set_text(message or ("saved" if ok else "could not save"))
         if not ok:
             self._notes_dirty = True
-            self.notes_save.set_sensitive(True)
-            self.notes_revert.set_sensitive(True)
+            self._show_notes_buttons(True)
 
     def _build_preview(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -243,27 +340,13 @@ class GuestSummary(Gtk.ScrolledWindow):
         frame = Gtk.Frame()
         frame.get_style_context().add_class("summary-preview")
 
-        # A GtkImage asks for exactly its pixbuf's size and will not go
-        # below it, so once a big frame had been set the page's minimum size
-        # grew with it: the outer scroller then scrolled instead of shrinking,
-        # size-allocate kept reporting the content size rather than the
-        # window's, and the picture could only ever ratchet larger. This
-        # scroller is here for its minimum size, not for scrolling -- EXTERNAL
-        # means no scrollbars, and a scroller's minimum does not depend on its
-        # child, so the frame is free to be made smaller and the rescale below
-        # actually fires.
-        shrinker = Gtk.ScrolledWindow()
-        shrinker.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
-        shrinker.set_size_request(-1, MIN_PREVIEW_HEIGHT)
-        # ...but a scroller's natural size does not follow its child either,
-        # which would leave the frame stuck at the request above whatever the
-        # picture inside it was doing. Propagating the natural height gives
-        # the frame back its grip on the picture while leaving the minimum
-        # small, which is the half that lets it shrink.
-        shrinker.set_propagate_natural_height(True)
+        # See PreviewHolder: small minimum so the picture can be made
+        # smaller, natural size taken from the picture so the frame still
+        # hugs it.
+        holder = PreviewHolder()
         self.preview_image = Gtk.Image()
-        shrinker.add(self.preview_image)
-        frame.add(shrinker)
+        holder.add(self.preview_image)
+        frame.add(holder)
         self.preview_button.add(frame)
         box.pack_start(self.preview_button, False, False, 0)
         # Rescale to whatever width the window leaves us.
@@ -314,12 +397,11 @@ class GuestSummary(Gtk.ScrolledWindow):
         visible = self.get_allocated_height()
         if visible <= 1:  # not allocated yet; the width alone decides
             return 0
+        # The border, and whatever is under the picture in its own column.
+        # Nothing else is above or below it any more: the heading and its
+        # buttons are beside it, and the status line along the bottom is
+        # gone -- every figure on it was already a row in the grid.
         chrome = 2 * self._outer.get_border_width()
-        stacked = (self.title, self.subtitle, self._separator, self.footer)
-        for widget in stacked:
-            if widget.get_visible():
-                chrome += widget.get_preferred_height()[1]
-        chrome += len(stacked) * self._outer.get_spacing()
         if self.preview_note.get_visible():
             chrome += self.preview_note.get_preferred_height()[1]
             chrome += self._preview_box.get_spacing()
@@ -359,12 +441,133 @@ class GuestSummary(Gtk.ScrolledWindow):
         )
         return False
 
+    # -- the two buttons under the heading ------------------------------
+
+    def _on_primary_clicked(self, _button):
+        if self._power_action is None:
+            self.on_open_console()
+        else:
+            # Same call the toolbar's Start makes, so it brings the console
+            # forward on the way past exactly as that does.
+            self.on_power_action(self._power_action)
+
+    def _update_buttons(self, guest):
+        """One button: open the console, or turn the guest on to get one."""
+        self.settings_button.set_sensitive(guest is not None)
+        if guest is None:
+            self._power_action = None
+            self.console_button.set_sensitive(False)
+            self._set_button("Open Console", "video-display-symbolic")
+            return
+
+        if guest.has_console and not guest.template:
+            self._power_action = None
+            self.console_button.set_sensitive(True)
+            self._set_button("Open Console", "video-display-symbolic")
+            return
+
+        action = action_defs.start_action_for(guest)
+        applies = guest.status in action.states and guest.kind in action.kinds
+        self._power_action = action.name if applies else None
+        self.console_button.set_sensitive(applies and not guest.template)
+        self._set_button(
+            "Resume" if action.name == "resume" else "Power on",
+            "media-playback-start-symbolic",
+            green=True,
+        )
+
+    def _set_button(self, label, icon_name, green=False):
+        image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.BUTTON)
+        if green:
+            # The theme's own running colour, so it matches the tree.
+            image.get_style_context().add_class("status-running")
+        self.console_button.set_image(image)
+        self.console_button.set_label(label)
+
+    # -- what the guest is configured as --------------------------------
+
+    def _processors_text(self, guest):
+        """Live usage while running, the configured size when not.
+
+        A powered-off guest still has a processor count -- it is in its
+        settings -- and "-" was a worse answer than the truth.
+        """
+        if guest.running:
+            return guest.cpu_text
+        config = guest.config or {}
+        cores = int(config.get("cores") or 0)
+        sockets = int(config.get("sockets") or 1)
+        total = cores * sockets or guest.maxcpu
+        if not total:
+            return "-"
+        if cores and sockets > 1:
+            return f"{total} vCPU ({sockets} sockets x {cores} cores)"
+        return f"{total} vCPU"
+
+    def _os_text(self, guest, pretty=""):
+        """What the agent says, or failing that what the guest is set up as.
+
+        The agent only answers on a running guest with the tools installed,
+        which is exactly when this field used to be empty for everyone else.
+        """
+        if pretty:
+            return pretty
+        configured = os_type_name((guest.config or {}).get("ostype"))
+        if not configured:
+            return "-"
+        return f"{configured}  (configured)"
+
+    def _network_rows(self, guest):
+        """One description per NIC, in slot order."""
+        config = guest.config or {}
+        rows = []
+        for slot in devices.nic_slots(config):
+            pairs = devices.parse_pairs(config.get(slot))
+            model, mac = devices.nic_model(pairs)
+            bridge = devices.get_pair(pairs, "bridge", "")
+            tag = devices.get_pair(pairs, "tag", "")
+            text = model or "nic"
+            if bridge:
+                text += f" on {bridge}"
+            if tag:
+                text += f", VLAN {tag}"
+            if mac:
+                text += f"  ({mac})"
+            if devices.get_pair(pairs, "link_down", "") == "1":
+                text += "  [disconnected]"
+            rows.append((slot, text))
+        return rows
+
+    def _set_networks(self, guest):
+        """Rebuild the netN rows under IP address, one per adapter."""
+        wanted = self._network_rows(guest)
+        grid = self._details_grid
+        for name, value in self._net_widgets:
+            grid.remove(name)
+            grid.remove(value)
+        self._net_widgets = []
+        for offset, (slot, text) in enumerate(wanted):
+            row = len(self.FIELDS) + offset
+            name = Gtk.Label(
+                label=f"Network device{'' if len(wanted) == 1 else f' ({slot})'}",
+                xalign=0.0,
+            )
+            name.get_style_context().add_class("summary-key")
+            value = Gtk.Label(label=text, xalign=0.0)
+            value.get_style_context().add_class("summary-value")
+            value.set_selectable(True)
+            value.set_line_wrap(True)
+            grid.attach(name, 0, row, 1, 1)
+            grid.attach(value, 1, row, 1, 1)
+            self._net_widgets.append((name, value))
+        grid.show_all()
+
     def _on_preview_clicked(self, _widget, event):
         """Clicking the guest goes to it, when there is anything to go to."""
         if event.button != 1:
             return False
         guest = self.guest
-        if guest is None or not guest.running or guest.template:
+        if guest is None or not guest.has_console or guest.template:
             return False
         self.on_show_console()
         return True
@@ -376,11 +579,11 @@ class GuestSummary(Gtk.ScrolledWindow):
         self._detailed_key = None
         self._detail_generation += 1
         self.title.set_markup("<b>No guest selected</b>")
+        self._set_status_icon(None)
         self.subtitle.set_text("Select a guest in the sidebar.")
         for value in self.values.values():
             value.set_text("-")
-        self.console_button.set_sensitive(False)
-        self.footer.set_text("No guest selected.")
+        self._update_buttons(None)
         self._show_placeholder()
         self._notes_key = None
         self._notes_dirty = False
@@ -400,26 +603,20 @@ class GuestSummary(Gtk.ScrolledWindow):
         generation = self._detail_generation
 
         self.title.set_markup(f"<b>{GLib.markup_escape_text(guest.name)}</b>")
+        self._set_status_icon(guest)
         self.subtitle.set_text(
             f"{'Container' if guest.is_container else 'Virtual machine'} "
             f"{guest.vmid} on {guest.node}"
         )
 
-        self._set("name", guest.name)
         self._set("status", "template" if guest.template else guest.status)
-        self._set("node", guest.node)
-        self._set("vmid", str(guest.vmid))
-        self._set(
-            "kind", "LXC container" if guest.is_container else "QEMU virtual machine"
-        )
-        self._set("cpu", guest.cpu_text)
+        self._set("cpu", self._processors_text(guest))
         self._set("memory", guest.memory_text)
         self._set("disk", guest.disk_text)
         self._set("uptime", guest.uptime_text)
         self._set("tags", guest.tags or "-")
 
-        self.console_button.set_sensitive(guest.has_console and not guest.template)
-        self._update_footer(guest)
+        self._update_buttons(guest)
         if not guest.has_console and self._preview is None:
             self._show_placeholder(f"Guest is {guest.status}")
 
@@ -439,32 +636,30 @@ class GuestSummary(Gtk.ScrolledWindow):
         if not changed:
             return
 
-        self._set("os", "-")
+        self._set("os", self._os_text(guest))
         self._set("address", "-")
+        self._set_networks(guest)
 
         if api is not None and not guest.is_container:
             self._detailed_key = guest.key
             self._load_details(guest, api, generation)
 
+    def _set_status_icon(self, guest):
+        """The tree's icon for this guest, beside its name."""
+        pixbuf = (
+            None
+            if guest is None
+            else status_icons.guest_icon(guest, dark=current_dark(), size=HEADING_ICON)
+        )
+        if pixbuf is None:
+            self.status_icon.clear()
+        else:
+            self.status_icon.set_from_pixbuf(pixbuf)
+
     def _set(self, key, text):
         widget = self.values.get(key)
         if widget is not None:
             widget.set_text(str(text) if text not in (None, "") else "-")
-
-    def _update_footer(self, guest):
-        """The line along the bottom: state now, not configuration."""
-        if guest.template:
-            state = "Template"
-        elif guest.running:
-            state = f"Running for {guest.uptime_text}"
-        else:
-            state = f"Powered {guest.status}" if guest.status else "Powered off"
-
-        parts = [state, f"{guest.cpu_text} · {guest.memory_text}"]
-        address = self.values["address"].get_text()
-        if address and address != "-":
-            parts.append(address)
-        self.footer.set_text("   •   ".join(parts))
 
     def _describe_console(self, guest):
         if guest.spice_capable is True:
@@ -555,16 +750,22 @@ class GuestSummary(Gtk.ScrolledWindow):
         guest.config_loaded = True
         self._describe_console(guest)
 
+        # The config has landed, so anything that can be answered from it
+        # now has a better answer than it did a moment ago.
+        self._set("cpu", self._processors_text(guest))
+        self._set_networks(guest)
+
         if osinfo:
             result = osinfo.get("result", osinfo) if isinstance(osinfo, dict) else {}
             pretty = result.get("pretty-name") or result.get("name") or ""
-            self._set("os", pretty or "-")
+            self._set("os", self._os_text(guest, pretty))
             self._set("agent", "running")
         elif guest.running and config.get("agent"):
+            self._set("os", self._os_text(guest))
             self._set("agent", "enabled, not responding")
         else:
+            self._set("os", self._os_text(guest))
             self._set("agent", "not enabled" if guest.running else "-")
 
         self._set("address", address or "-")
-        self._update_footer(guest)
         return False

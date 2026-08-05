@@ -117,6 +117,44 @@ class Node:
         return _human_uptime(self.uptime)
 
 
+# Proxmox's ostype codes, as the web UI writes them. Worth carrying because
+# a guest with no agent -- or one that is switched off -- can still say what
+# it was set up to run, and "-" is a worse answer than the configured value.
+OS_TYPES = {
+    "other": "Other",
+    "wxp": "Windows XP",
+    "w2k": "Windows 2000",
+    "w2k3": "Windows Server 2003",
+    "w2k8": "Windows Server 2008",
+    "wvista": "Windows Vista",
+    "win7": "Windows 7",
+    "win8": "Windows 8",
+    "win10": "Windows 10",
+    "win11": "Windows 11",
+    "l24": "Linux (2.4 kernel)",
+    "l26": "Linux",
+    "solaris": "Solaris",
+    # Container templates name their distribution directly.
+    "debian": "Debian",
+    "ubuntu": "Ubuntu",
+    "centos": "CentOS",
+    "fedora": "Fedora",
+    "opensuse": "openSUSE",
+    "archlinux": "Arch Linux",
+    "alpine": "Alpine Linux",
+    "gentoo": "Gentoo",
+    "nixos": "NixOS",
+}
+
+
+def os_type_name(code):
+    """A readable name for a configured ostype, or "" if there is none."""
+    code = str(code or "").strip()
+    if not code:
+        return ""
+    return OS_TYPES.get(code.lower(), code)
+
+
 # Statuses in which QEMU is up and serving a console, whether or not the
 # guest inside it is executing. Proxmox reports "io-error" for a VM it has
 # had to stop because a disk went away -- the yellow caution mark in the web

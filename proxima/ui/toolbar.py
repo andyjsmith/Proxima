@@ -21,6 +21,7 @@ from .snapshots import describe_revert
 # Name, label, icon, tooltip. The names are the ones the windows use to talk
 # about these buttons afterwards.
 SNAPSHOT_BUTTONS = (
+    ("manage", "Manage", "document-open-recent-symbolic", "Manage snapshots"),
     ("take", "Snapshot", "appointment-new-symbolic", "Take a snapshot"),
     (
         "revert",
@@ -28,7 +29,6 @@ SNAPSHOT_BUTTONS = (
         "document-revert-symbolic",
         "Roll back to the most recent snapshot",
     ),
-    ("manage", "Manage", "document-open-symbolic", "Manage snapshots"),
 )
 
 

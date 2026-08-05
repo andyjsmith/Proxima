@@ -3182,6 +3182,8 @@ class MainWindow(Gtk.Window):
                     k, VIEW_CONSOLE, by_user=True
                 ),
                 on_save_notes=lambda text, k=guest.key: self.save_guest_notes(k, text),
+                on_power_action=lambda name, k=guest.key: self._run_action(k, name),
+                on_edit_settings=lambda k=guest.key: self.open_guest_settings(k),
             )
             tab = GuestTab(
                 guest.key,
