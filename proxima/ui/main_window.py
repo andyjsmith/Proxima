@@ -564,27 +564,22 @@ class MainWindow(Gtk.Window):
         bar.set_style(Gtk.ToolbarStyle.BOTH_HORIZ)
         bar.set_icon_size(Gtk.IconSize.SMALL_TOOLBAR)
 
-        console_item = Gtk.ToolButton()
-        console_item.set_label("Console")
-        console_item.set_icon_name("video-display-symbolic")
-        console_item.set_is_important(True)
-        console_item.set_tooltip_text("Open console")
-        console_item.connect("clicked", lambda *_: self.open_console_selected())
-        console_item.set_sensitive(False)
-        self.console_tool_item = console_item
-        bar.insert(console_item, -1)
-
-        # The flip between the guest's console and its summary. Per tab, so
-        # it shows the state of whichever tab is in front.
-        self.summary_tool_item = Gtk.ToggleToolButton()
-        self.summary_tool_item.set_label("Summary")
-        self.summary_tool_item.set_icon_name("document-properties-symbolic")
-        self.summary_tool_item.set_tooltip_text(
-            "Show this guest's summary instead of its console"
+        # One button, not a Console/Summary pair: the two were exact
+        # opposites of each other, so a single toggle says the same thing in
+        # half the space. Down means the console is showing, up means the
+        # summary is. With nothing open it is also the way in -- pressing it
+        # opens the selected guest's console. The View menu keeps a Summary
+        # entry, which is where the keyboard shortcut lives.
+        self.console_tool_item = Gtk.ToggleToolButton()
+        self.console_tool_item.set_label("Console")
+        self.console_tool_item.set_icon_name("video-display-symbolic")
+        self.console_tool_item.set_is_important(True)
+        self.console_tool_item.set_tooltip_text(
+            "Show this guest's console, or its summary when up"
         )
-        self.summary_tool_item.set_sensitive(False)
-        self.summary_tool_item.connect("toggled", self._on_summary_toggled)
-        bar.insert(self.summary_tool_item, -1)
+        self.console_tool_item.set_sensitive(False)
+        self.console_tool_item.connect("toggled", self._on_console_toggled)
+        bar.insert(self.console_tool_item, -1)
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
@@ -2026,7 +2021,7 @@ class MainWindow(Gtk.Window):
                     # Still waiting; leave the "Stopping..." panel up.
                     continue
 
-            if not guest.running:
+            if not guest.has_console:
                 # A stopped guest has no SPICE session, ours or anyone's, so
                 # any claim we had on one is void. Without this, a guest
                 # that stops and starts inside the linger window could let
@@ -2278,8 +2273,11 @@ class MainWindow(Gtk.Window):
     def _update_action_sensitivity(self, console=_CURRENT):
         guest = self.context_guest(console)
         toolbar_defs.apply_power_state(self._action_items, guest)
+        # Live with a tab in front (there is a view to flip) or with a guest
+        # that could open one.
         self.console_tool_item.set_sensitive(
-            guest is not None and guest.running and not guest.template
+            self.current_tab() is not None
+            or (guest is not None and guest.has_console and not guest.template)
         )
 
         # Snapshots work on stopped guests too; only templates are excluded.
@@ -2669,10 +2667,18 @@ class MainWindow(Gtk.Window):
         if existing_tab is not None and not replace:
             # The guest already has a tab, so bring it forward rather than
             # opening a second one. A tab showing its summary flips to the
-            # console, because opening the console is what was asked for.
+            # console -- but only where there is a picture to flip to. A
+            # stopped or sleeping guest has none, and double-clicking one in
+            # the tree used to land on an empty console; its summary is the
+            # useful half, so that is what comes forward.
             self.panes.focus_page(existing_tab)
             if existing_tab.console is not None:
-                existing_tab.show_view(VIEW_CONSOLE, by_user=True)
+                wanted = (
+                    VIEW_CONSOLE
+                    if guest.has_console and not guest.template
+                    else VIEW_SUMMARY
+                )
+                existing_tab.show_view(wanted, by_user=True)
                 self._sync_tab_view(existing_tab)
                 return
             if self.consoles.get(key) is not None:
@@ -2690,9 +2696,10 @@ class MainWindow(Gtk.Window):
             self.set_status("Templates have no console")
             return
 
-        if not guest.running:
+        if not guest.has_console:
             # Hold the tab open anyway; it becomes a real console as soon as
-            # the guest starts.
+            # the guest starts. A guest stopped on an I/O error is not in
+            # this branch: QEMU is up and still serving its frozen screen.
             self._install_console(
                 guest,
                 PlaceholderConsole(
@@ -3176,7 +3183,15 @@ class MainWindow(Gtk.Window):
                 ),
                 on_save_notes=lambda text, k=guest.key: self.save_guest_notes(k, text),
             )
-            tab = GuestTab(guest.key, summary)
+            tab = GuestTab(
+                guest.key,
+                summary,
+                view=(
+                    VIEW_CONSOLE
+                    if guest.has_console and not guest.template
+                    else VIEW_SUMMARY
+                ),
+            )
             self.tabs[guest.key] = tab
             label = ConsoleTabLabel(
                 self.tab_title(guest),
@@ -3331,11 +3346,29 @@ class MainWindow(Gtk.Window):
         showing_summary = tab is not None and tab.view == VIEW_SUMMARY
         self._updating_view_menu = True
         try:
-            for widget in (self.summary_tool_item, self.summary_view_item):
-                widget.set_sensitive(tab is not None)
-                widget.set_active(showing_summary)
+            self.summary_view_item.set_sensitive(tab is not None)
+            self.summary_view_item.set_active(showing_summary)
+            # Only the state here: the button stays usable with no tab in
+            # front, because that is how the first console gets opened.
+            # _update_action_sensitivity() owns whether it is live.
+            self.console_tool_item.set_active(tab is not None and not showing_summary)
         finally:
             self._updating_view_menu = False
+
+    def _on_console_toggled(self, widget):
+        """The toolbar's Console button: flip the tab, or open one."""
+        if self._updating_view_menu:
+            return
+        tab = self.current_tab()
+        if tab is None:
+            # Nothing in front to flip, so this is a request to open one.
+            if widget.get_active():
+                self.open_console_selected()
+            return
+        tab.show_view(
+            VIEW_CONSOLE if widget.get_active() else VIEW_SUMMARY, by_user=True
+        )
+        self._sync_tab_view(tab)
 
     def _on_summary_toggled(self, widget):
         if self._updating_view_menu:
@@ -3445,6 +3478,14 @@ class MainWindow(Gtk.Window):
                 "Resume the guest to reconnect.",
                 icon="media-playback-pause-symbolic",
                 can_reconnect=False,
+            )
+        elif guest.status == "io-error":
+            panel.show_message(
+                "Guest stopped on an I/O error",
+                "Proxmox stopped it because its storage stopped answering. "
+                "Fix the storage, then reset or stop the guest.",
+                icon="dialog-warning-symbolic",
+                can_reconnect=True,
             )
 
     def _check_displaced(self, key):

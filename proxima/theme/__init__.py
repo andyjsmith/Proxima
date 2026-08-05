@@ -56,8 +56,8 @@ def keep_active(window):
     dimming: it looks like the entire interface is disabled.
 
     Deferring means the flag is cleared once the propagation has finished,
-    where the unset propagates properly. The cost is that a window can be
-    drawn dimmed for one frame as it loses focus.
+    where the unset propagates properly. The idle runs above the redraw, so
+    the frame that would have been drawn dimmed never is -- see schedule().
     """
     state = {"queued": False, "dead": False}
 
@@ -73,7 +73,14 @@ def keep_active(window):
         if state["queued"] or state["dead"]:
             return
         state["queued"] = True
-        GLib.idle_add(clear)
+        # Above GDK_PRIORITY_REDRAW (HIGH_IDLE + 20), so the flag is gone
+        # before the frame that would have shown it dimmed is painted. At the
+        # default idle priority (200) the redraw ran first and the window was
+        # drawn in backdrop colours for a frame -- which the theme's own CSS
+        # transitions then stretched into a visible fade out and back. Still
+        # a separate turn of the main loop, so the propagation problem the
+        # docstring describes is still avoided.
+        GLib.idle_add(clear, priority=GLib.PRIORITY_HIGH_IDLE)
 
     window.connect("state-flags-changed", schedule)
     # Belt and braces: the flag arrives with the window deactivating, and

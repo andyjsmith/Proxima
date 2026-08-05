@@ -37,7 +37,7 @@ def tab_of(page):
 class GuestTab(Gtk.Stack):
     """A guest's console and its summary, one showing at a time."""
 
-    def __init__(self, guest_key, summary):
+    def __init__(self, guest_key, summary, view=SUMMARY):
         super().__init__()
         self.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.set_transition_duration(100)
@@ -45,12 +45,32 @@ class GuestTab(Gtk.Stack):
         self.guest_key = guest_key
         self.summary = summary
         self.console = None
-        # Something has to occupy the console side until a console exists,
-        # or the stack has nothing to switch to and the flip does nothing.
-        self._empty = Gtk.Box()
-        self.add_named(self._empty, CONSOLE)
-        self.add_named(summary, SUMMARY)
-        self.set_visible_child_name(SUMMARY)
+        # The console side is a permanent child of the stack and consoles are
+        # swapped inside it. Adding and removing stack children instead meant
+        # every swap took the visible child away, and a GtkStack with no
+        # visible child falls back to whatever else it has -- the summary. So
+        # each swap crossfaded out to the summary and back: once when the
+        # "Connecting..." placeholder went in, and again when the real console
+        # replaced it. Neither switch went through show_view(), which is why
+        # they were invisible to anything watching that.
+        self._console_side = Gtk.Box()
+        # Wanted side first. A GtkStack shows the first of its children to
+        # become visible, and that happens at show_all() -- after this runs,
+        # and regardless of what was asked for here, because a child that is
+        # not visible yet cannot be selected. Adding them in this order means
+        # the tab is on the right side from its first frame rather than
+        # switching to it once it is on screen.
+        sides = [(self._console_side, CONSOLE), (summary, SUMMARY)]
+        if view != CONSOLE:
+            sides.reverse()
+        for widget, name in sides:
+            self.add_named(widget, name)
+        # Opened on the side it is going to end up on. A tab for a running
+        # guest that started on the summary and crossfaded to the console a
+        # moment later showed the wrong half first and drew the eye to it;
+        # the console side already has "Connecting..." to show while the
+        # ticket is fetched, so there is nothing to wait for.
+        self.set_visible_child_name(view)
 
         # Set when the view was chosen by hand. The guest changing power
         # state clears it: an explicit choice is about the guest as it is
@@ -65,8 +85,13 @@ class GuestTab(Gtk.Stack):
         return self.get_visible_child_name() or SUMMARY
 
     def show_view(self, name, by_user=False):
-        if name == CONSOLE and self.console is None:
-            # Nothing to show yet; the summary is the honest answer.
+        if name == CONSOLE and self.console is None and self.view != CONSOLE:
+            # Nothing to show yet; the summary is the honest answer -- but
+            # only for a tab that is not already on the console side. A tab
+            # opened straight onto the console gets here before its console
+            # has been put in (the caller is still one line away from doing
+            # it), and bouncing it to the summary and back is the flicker
+            # this whole path exists to avoid.
             name = SUMMARY
         if by_user:
             self.chosen = True
@@ -91,7 +116,10 @@ class GuestTab(Gtk.Stack):
         """
         if guest is None:
             return
-        running = guest.running and not guest.template
+        # has_console, not running: a guest QEMU stopped on an I/O error is
+        # not executing but its screen is still there, and yanking the user
+        # to the summary would hide the very thing they need to look at.
+        running = guest.has_console and not guest.template
         wanted = CONSOLE if running else SUMMARY
         if self._last_running is not None and self._last_running == running:
             # Nothing changed, so a hand-picked view stands.
@@ -105,31 +133,28 @@ class GuestTab(Gtk.Stack):
     # -- the console ---------------------------------------------------
 
     def set_console(self, console):
-        """Put a console in the tab, replacing whatever was there."""
-        showing_console = self.view == CONSOLE
+        """Put a console in the tab, replacing whatever was there.
+
+        The view is not touched: the stack's own children do not change, so
+        whichever side was showing goes on showing.
+        """
         old = self.console
-        if old is not None and old.get_parent() is self:
-            self.remove(old)
-        elif self._empty.get_parent() is self:
-            self.remove(self._empty)
+        if old is not None and old.get_parent() is self._console_side:
+            self._console_side.remove(old)
         self.console = console
         if console is not None:
-            self.add_named(console, CONSOLE)
+            self._console_side.pack_start(console, True, True, 0)
             console.show_all()
-        else:
-            self.add_named(self._empty, CONSOLE)
-        if showing_console:
-            self.set_visible_child_name(CONSOLE)
         return old
 
     def take_console(self):
         """Hand the console out -- to a pop-out window -- and keep the tab."""
         console = self.console
-        if console is not None and console.get_parent() is self:
-            self.remove(console)
+        if console is not None and console.get_parent() is self._console_side:
+            self._console_side.remove(console)
         self.console = None
-        self._empty.show_all()
-        self.add_named(self._empty, CONSOLE)
+        # Deliberate, unlike the swap above: with the console gone there is
+        # genuinely nothing on that side to look at.
         self.set_visible_child_name(SUMMARY)
         return console
 

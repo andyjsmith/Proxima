@@ -117,6 +117,14 @@ class Node:
         return _human_uptime(self.uptime)
 
 
+# Statuses in which QEMU is up and serving a console, whether or not the
+# guest inside it is executing. Proxmox reports "io-error" for a VM it has
+# had to stop because a disk went away -- the yellow caution mark in the web
+# UI -- and the process, its console and its power controls are all still
+# there.
+LIVE_STATUSES = ("running", "io-error")
+
+
 @dataclass
 class Guest:
     vmid: int
@@ -199,6 +207,19 @@ class Guest:
     @property
     def running(self):
         return self.status == "running"
+
+    @property
+    def has_console(self):
+        """Whether QEMU is up, so there is a screen to look at.
+
+        Not the same question as `running`. Proxmox reports "io-error" for a
+        guest QEMU has stopped because its storage failed: it is not
+        executing, but the process is alive and still serving its console,
+        showing the frame it froze on. Treating that as "off" hid the
+        picture, greyed out the console button and sent a double-click to
+        the summary -- while the guest was very much still there.
+        """
+        return self.status in LIVE_STATUSES
 
     @property
     def is_container(self):

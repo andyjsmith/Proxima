@@ -62,6 +62,7 @@ class GuestSummary(Gtk.ScrolledWindow):
         self._detailed_key = None
         self._preview = None
         self._preview_width = 0
+        self._preview_budget = 0
         self._notes_key = None
         self._notes_dirty = False
 
@@ -104,21 +105,26 @@ class GuestSummary(Gtk.ScrolledWindow):
         self.console_button.set_sensitive(False)
         self.console_button.connect("clicked", lambda *_: self.on_open_console())
         left.pack_start(self.console_button, False, False, 0)
+        # The notes live under the details rather than along the bottom: full
+        # width they pushed the page taller than the window, and a picture
+        # that grows with the window would then always be scrolling something
+        # off the end. In the column they take the height the picture is not
+        # using.
+        left.pack_start(self._build_notes(), True, True, 0)
 
-        columns.pack_start(self._build_preview(), True, True, 0)
+        self._preview_box = self._build_preview()
+        columns.pack_start(self._preview_box, True, True, 0)
 
         # What changes while you are looking at it, along the bottom.
-        outer.pack_start(
-            Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0
-        )
+        self._separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+        outer.pack_start(self._separator, False, False, 0)
         self.footer = Gtk.Label(xalign=0.0)
         self.footer.get_style_context().add_class("dim")
         self.footer.set_line_wrap(True)
         self.footer.set_text("No guest selected.")
         outer.pack_start(self.footer, False, False, 0)
 
-        outer.pack_start(self._build_notes(), False, False, 0)
-
+        self._outer = outer
         self.add(outer)
 
     def _build_notes(self):
@@ -165,7 +171,9 @@ class GuestSummary(Gtk.ScrolledWindow):
         self.notes_buffer = self.notes_view.get_buffer()
         self.notes_buffer.connect("changed", self._on_notes_changed)
         scroller.add(self.notes_view)
-        box.pack_start(scroller, False, False, 0)
+        # Expanding, so the notes take whatever height the column has left
+        # rather than leaving a gap under a fixed 110px box.
+        box.pack_start(scroller, True, True, 0)
         return box
 
     # -- notes ---------------------------------------------------------
@@ -234,9 +242,28 @@ class GuestSummary(Gtk.ScrolledWindow):
 
         frame = Gtk.Frame()
         frame.get_style_context().add_class("summary-preview")
+
+        # A GtkImage asks for exactly its pixbuf's size and will not go
+        # below it, so once a big frame had been set the page's minimum size
+        # grew with it: the outer scroller then scrolled instead of shrinking,
+        # size-allocate kept reporting the content size rather than the
+        # window's, and the picture could only ever ratchet larger. This
+        # scroller is here for its minimum size, not for scrolling -- EXTERNAL
+        # means no scrollbars, and a scroller's minimum does not depend on its
+        # child, so the frame is free to be made smaller and the rescale below
+        # actually fires.
+        shrinker = Gtk.ScrolledWindow()
+        shrinker.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.EXTERNAL)
+        shrinker.set_size_request(-1, MIN_PREVIEW_HEIGHT)
+        # ...but a scroller's natural size does not follow its child either,
+        # which would leave the frame stuck at the request above whatever the
+        # picture inside it was doing. Propagating the natural height gives
+        # the frame back its grip on the picture while leaving the minimum
+        # small, which is the half that lets it shrink.
+        shrinker.set_propagate_natural_height(True)
         self.preview_image = Gtk.Image()
-        self.preview_image.set_size_request(-1, MIN_PREVIEW_HEIGHT)
-        frame.add(self.preview_image)
+        shrinker.add(self.preview_image)
+        frame.add(shrinker)
         self.preview_button.add(frame)
         box.pack_start(self.preview_button, False, False, 0)
         # Rescale to whatever width the window leaves us.
@@ -273,13 +300,43 @@ class GuestSummary(Gtk.ScrolledWindow):
         width = self.preview_image.get_allocated_width()
         return width if width > 1 else PREVIEW_WIDTH
 
+    def _height_budget(self):
+        """The tallest the picture may be and still fit the visible page.
+
+        Measured against the scroller's own height, which is what the window
+        gives us, not against the content's -- the content is free to grow,
+        which is exactly the runaway this exists to stop.
+
+        Everything counted here sits above or below the picture and none of
+        it depends on the picture's size, so this cannot feed back into
+        itself and start a resize loop.
+        """
+        visible = self.get_allocated_height()
+        if visible <= 1:  # not allocated yet; the width alone decides
+            return 0
+        chrome = 2 * self._outer.get_border_width()
+        stacked = (self.title, self.subtitle, self._separator, self.footer)
+        for widget in stacked:
+            if widget.get_visible():
+                chrome += widget.get_preferred_height()[1]
+        chrome += len(stacked) * self._outer.get_spacing()
+        if self.preview_note.get_visible():
+            chrome += self.preview_note.get_preferred_height()[1]
+            chrome += self._preview_box.get_spacing()
+        return max(MIN_PREVIEW_HEIGHT, visible - chrome)
+
     def _on_preview_allocated(self, _widget, allocation):
         if self._preview is None:
             return
         # Only on a real change: setting an image from inside size-allocate
-        # asks for another allocation, and matching widths is what stops
-        # that turning into a loop.
-        if abs(allocation.width - self._preview_width) < 8:
+        # asks for another allocation, and matching what we last drew is what
+        # stops that turning into a loop. The budget is checked too, so that
+        # a window made shorter without getting narrower still rescales.
+        budget = self._height_budget()
+        if (
+            abs(allocation.width - self._preview_width) < 8
+            and abs(budget - self._preview_budget) < 8
+        ):
             return
         GLib.idle_add(self._rescale_preview, allocation.width)
 
@@ -288,7 +345,15 @@ class GuestSummary(Gtk.ScrolledWindow):
         if pixbuf is None or width < 16:
             return False
         self._preview_width = width
+        budget = self._preview_budget = self._height_budget()
         height = max(1, int(pixbuf.get_height() * width / pixbuf.get_width()))
+        if budget and height > budget:
+            # Too tall for the page: fit the height instead and let the
+            # picture be narrower than the column rather than run off the
+            # bottom. The frame keeps the full width either way, so this
+            # cannot shrink the allocation it was measured from.
+            height = budget
+            width = max(16, int(pixbuf.get_width() * height / pixbuf.get_height()))
         self.preview_image.set_from_pixbuf(
             pixbuf.scale_simple(width, height, GdkPixbuf.InterpType.BILINEAR)
         )
@@ -353,9 +418,9 @@ class GuestSummary(Gtk.ScrolledWindow):
         self._set("uptime", guest.uptime_text)
         self._set("tags", guest.tags or "-")
 
-        self.console_button.set_sensitive(guest.running and not guest.template)
+        self.console_button.set_sensitive(guest.has_console and not guest.template)
         self._update_footer(guest)
-        if not guest.running and self._preview is None:
+        if not guest.has_console and self._preview is None:
             self._show_placeholder(f"Guest is {guest.status}")
 
         if guest.is_container:

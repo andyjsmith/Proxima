@@ -24,7 +24,12 @@ except ImportError:  # pragma: no cover
     cairo = None
 
 from .rfb import RfbClient
-from .status_panel import ConsoleStatusPanel, draw_offline_effect
+from .status_panel import (
+    CONNECTING_ICON,
+    CONNECTING_TITLE,
+    ConsoleStatusPanel,
+    draw_offline_effect,
+)
 from .wsclient import WebSocketStream
 
 AVAILABLE = cairo is not None
@@ -134,6 +139,13 @@ class VncConsole(Gtk.Box):
         self.status_panel = ConsoleStatusPanel(on_reconnect=lambda: self.on_reconnect())
         self.overlay.add_overlay(self.status_panel)
         self.pack_start(self.overlay, True, True, 0)
+        self.status_panel.show_message(
+            CONNECTING_TITLE,
+            "Opening the console session.",
+            icon=CONNECTING_ICON,
+            can_reconnect=False,
+            busy=True,
+        )
 
         self._status("connecting...")
         self._connect(url, headers, password, verify_ssl)
@@ -528,15 +540,18 @@ class VncConsole(Gtk.Box):
             self.release_input()
         titles = {
             "stopped": "Guest is stopped",
+            "io-error": "Guest stopped on an I/O error",
             "suspended": "Guest is suspended",
             "paused": "Guest is paused",
         }
         details = {
             "stopped": "Start the guest to reconnect.",
+            "io-error": "Proxmox stopped it because its storage stopped answering. Fix the storage, then reset or stop the guest.",
             "suspended": "Resume the guest to reconnect.",
             "paused": "Resume the guest to reconnect.",
         }
         icons = {
+            "io-error": "dialog-warning-symbolic",
             "paused": "media-playback-pause-symbolic",
             "suspended": "media-playback-pause-symbolic",
         }

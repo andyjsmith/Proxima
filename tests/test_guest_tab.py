@@ -5,12 +5,20 @@ whichever view each was left on.
 """
 
 import pytest
-from gi.repository import Gdk
+from gi.repository import Gdk, GdkPixbuf
 
 from proxima.api import notes as notes_mod
 from proxima.ui.guest_tab import CONSOLE, SUMMARY, GuestTab
 
-from .conftest import FakeAPI, key_for, open_tab, pump, pump_until, sample_row
+from .conftest import (
+    FakeAPI,
+    FakeConsole,
+    key_for,
+    open_tab,
+    pump,
+    pump_until,
+    sample_row,
+)
 
 
 def press_event(button=1):
@@ -70,17 +78,29 @@ def test_a_stopped_guest_opens_on_its_summary(window, closed_tabs):
 
 
 def test_the_toolbar_button_flips_the_tab_in_front(window, closed_tabs):
+    """One toggle, not a Console/Summary pair: down is the console."""
     tab = open_tab(window, RUNNING)
     assert tab.view == CONSOLE
-    assert not window.summary_tool_item.get_active()
+    assert window.console_tool_item.get_active(), (
+        "the Console button is up while the console is showing"
+    )
 
-    window.summary_tool_item.set_active(True)
+    window.console_tool_item.set_active(False)
     pump(0.3)
-    assert tab.view == SUMMARY, "the Summary button did not flip the tab"
+    assert tab.view == SUMMARY, "releasing the Console button did not show the summary"
 
-    window.summary_tool_item.set_active(False)
+    window.console_tool_item.set_active(True)
     pump(0.3)
-    assert tab.view == CONSOLE
+    assert tab.view == CONSOLE, "pressing the Console button did not show the console"
+
+
+def test_there_is_no_separate_summary_button(window):
+    """The pair was two names for one piece of state."""
+    assert not hasattr(window, "summary_tool_item"), (
+        "the Summary toolbar button is back alongside Console"
+    )
+    # The View menu keeps its entry, which is where the accelerator lives.
+    assert window.summary_view_item is not None
 
 
 def test_the_button_shows_the_state_of_whichever_tab_is_in_front(window, closed_tabs):
@@ -90,13 +110,13 @@ def test_the_button_shows_the_state_of_whichever_tab_is_in_front(window, closed_
     window.tabs[RUNNING].show_view(SUMMARY, by_user=True)
     window.panes.focus_page(window.tabs[RUNNING])
     pump(0.4)
-    assert window.summary_tool_item.get_active(), (
+    assert not window.console_tool_item.get_active(), (
         "the button does not show that this tab is on its summary"
     )
 
     window.panes.focus_page(window.tabs[OTHER_RUNNING])
     pump(0.4)
-    assert not window.summary_tool_item.get_active(), (
+    assert window.console_tool_item.get_active(), (
         "the button kept the other tab's state"
     )
 
@@ -282,3 +302,242 @@ def test_a_poll_does_not_overwrite_notes_being_typed(window, closed_tabs):
     # Whatever the server says now, the half-typed sentence stays.
     summary.set_notes(RUNNING, "Original text.")
     assert summary.notes_text() == "half a sentence"
+
+
+# -- the summary's picture of the guest -----------------------------------
+
+
+def big_pixbuf(width=1920, height=1080):
+    """A frame the size a real console hands over."""
+    pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, width, height)
+    pixbuf.fill(0x336699FF)
+    return pixbuf
+
+
+def test_the_preview_shrinks_with_the_window(window, closed_tabs):
+    """A picture must never be able to make the page bigger than the window.
+
+    A GtkImage will not go below its pixbuf's size, so a large frame used to
+    push the summary's minimum width past the window: the page scrolled, the
+    allocation stopped tracking the window, and the picture could only ever
+    ratchet larger.
+    """
+    tab = open_tab(window, RUNNING)
+    tab.show_view(SUMMARY, by_user=True)
+    summary = tab.summary
+    was = window.get_size()
+    try:
+        window.resize(1400, 900)
+        pump(0.6)
+        summary.set_preview(big_pixbuf())
+        pump(0.6)
+        wide = summary.preview_image.get_pixbuf()
+        assert wide is not None, "the preview never took the frame"
+
+        window.resize(760, 700)
+        pump(1.2)
+        narrow = summary.preview_image.get_pixbuf()
+        assert narrow.get_width() < wide.get_width(), (
+            f"the preview did not shrink with the window: "
+            f"{wide.get_width()}px wide before, {narrow.get_width()}px after"
+        )
+    finally:
+        window.resize(*was)
+        pump(0.4)
+
+
+def test_the_preview_never_outgrows_the_visible_page(window, closed_tabs):
+    """The whole point of the height budget: no scrollbar on the summary."""
+    tab = open_tab(window, RUNNING)
+    tab.show_view(SUMMARY, by_user=True)
+    summary = tab.summary
+    was = window.get_size()
+    try:
+        # Wide and short, which is what makes a 16:9 frame scaled to the full
+        # width taller than the page it sits on.
+        window.resize(1600, 700)
+        pump(0.6)
+        summary.set_preview(big_pixbuf())
+        pump(1.2)
+        drawn = summary.preview_image.get_pixbuf()
+        assert drawn is not None
+        assert drawn.get_height() <= summary.get_allocated_height(), (
+            f"the picture is {drawn.get_height()}px tall in a "
+            f"{summary.get_allocated_height()}px page"
+        )
+    finally:
+        window.resize(*was)
+        pump(0.4)
+
+
+def test_the_notes_sit_under_the_details_not_across_the_bottom(window, closed_tabs):
+    """Full width, the notes were what pushed the page past the window."""
+    tab = open_tab(window, RUNNING)
+    summary = tab.summary
+    # Walk up from the notes to see which column they landed in.
+    parents = []
+    widget = summary.notes_view
+    while widget is not None:
+        parents.append(widget)
+        widget = widget.get_parent()
+    assert summary.console_button.get_parent() in parents, (
+        "the notes are not in the same column as the details"
+    )
+
+
+def test_double_clicking_a_stopped_guest_lands_on_its_summary(window, closed_tabs):
+    """There is no picture to look at, so the summary is the useful half.
+
+    The tab already opens on the summary; what regressed is the second
+    activation, which forced the console view on a guest that has none.
+    """
+    tab = open_tab(window, STOPPED)
+    assert tab.view == SUMMARY
+
+    # A double-click in the tree on a guest that already has a tab.
+    window.sidebar.emit("guest-activated", STOPPED)
+    pump(0.6)
+    assert tab.view == SUMMARY, "double-clicking a stopped guest opened a dead console"
+    assert not window.console_tool_item.get_active()
+
+
+def test_double_clicking_a_running_guest_still_goes_to_its_console(window, closed_tabs):
+    tab = open_tab(window, RUNNING)
+    tab.show_view(SUMMARY, by_user=True)
+    pump(0.3)
+
+    window.sidebar.emit("guest-activated", RUNNING)
+    pump(0.6)
+    assert tab.view == CONSOLE, "double-clicking a running guest left the summary up"
+
+
+def test_double_clicking_an_io_error_guest_goes_to_its_console(window, closed_tabs):
+    """Its screen is frozen but present, and it is what you need to see."""
+    tab = open_tab(window, RUNNING)
+    tab.show_view(SUMMARY, by_user=True)
+    pump(0.3)
+    sample_row(100)["status"] = "io-error"
+    try:
+        window.refresh()
+        pump_until(lambda: window.sidebar.guests[RUNNING].status == "io-error", 8)
+        window.sidebar.emit("guest-activated", RUNNING)
+        pump(0.6)
+        assert tab.view == CONSOLE, "an io-error guest was sent to its summary"
+    finally:
+        sample_row(100)["status"] = "running"
+        window.refresh()
+        pump(0.5)
+
+
+def test_the_preview_frame_follows_the_picture_it_holds(window, closed_tabs):
+    """The frame must hug the picture, not sit at one fixed height.
+
+    The scroller that lets the picture shrink does not pass its child's
+    natural size up by default, which left the frame stuck at its minimum
+    whatever was inside it.
+    """
+    tab = open_tab(window, RUNNING)
+    tab.show_view(SUMMARY, by_user=True)
+    summary = tab.summary
+    was = window.get_size()
+    frame = summary.preview_image.get_parent().get_parent()
+    try:
+        window.resize(1400, 950)
+        pump(0.6)
+        summary.set_preview(big_pixbuf())
+        pump(1.2)
+        drawn = summary.preview_image.get_pixbuf()
+        gap = frame.get_allocated_height() - drawn.get_height()
+        assert 0 <= gap <= 40, (
+            f"the frame is {frame.get_allocated_height()}px around a "
+            f"{drawn.get_height()}px picture"
+        )
+    finally:
+        window.resize(*was)
+        pump(0.4)
+
+
+def watch_views(monkeypatch):
+    """Every view a tab shows, from the moment it is built.
+
+    Hooked on the property, not on show_view(): swapping a console used to
+    change the visible child without going anywhere near show_view, so a spy
+    on that method saw a clean run while the screen flashed.
+    """
+    seen = []
+    real_init = GuestTab.__init__
+
+    def spy(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        seen.append(self.get_visible_child_name())
+        self.connect(
+            "notify::visible-child-name",
+            lambda stack, _p: seen.append(stack.get_visible_child_name()),
+        )
+
+    monkeypatch.setattr(GuestTab, "__init__", spy)
+    return seen
+
+
+def test_a_running_guest_opens_on_the_console_without_passing_the_summary(
+    window, closed_tabs, monkeypatch
+):
+    """No flip to watch, including while the console itself is swapped in.
+
+    A tab puts up a "Connecting..." placeholder and replaces it with the real
+    console once the ticket lands. Both of those used to take the stack's
+    visible child away, and a GtkStack with no visible child falls back to
+    the summary -- so the tab crossfaded out and back twice on the way in.
+    """
+    seen = watch_views(monkeypatch)
+    window.open_console(RUNNING)
+    pump_until(lambda: window.tabs[RUNNING].console is not None, 8)
+    pump(0.6)
+
+    assert seen, "the tab never picked a view"
+    assert SUMMARY not in seen, (
+        f"the tab passed through the summary on its way to the console: {seen}"
+    )
+    assert window.tabs[RUNNING].view == CONSOLE
+
+
+def test_swapping_a_console_leaves_the_view_alone(window, closed_tabs):
+    """The mechanism behind the flash, on its own.
+
+    Replacing the console is the one thing that must never move the tab: a
+    reconnect happens under the user, and being thrown to the summary for it
+    is exactly what the flicker was.
+    """
+    tab = open_tab(window, RUNNING)
+    assert tab.view == CONSOLE
+    seen = []
+    tab.connect(
+        "notify::visible-child-name",
+        lambda stack, _p: seen.append(stack.get_visible_child_name()),
+    )
+
+    first, second = FakeConsole("first"), FakeConsole("second")
+    tab.set_console(first)
+    pump(0.3)
+    tab.set_console(second)
+    pump(0.3)
+
+    assert tab.console is second
+    assert tab.view == CONSOLE
+    assert seen == [], f"swapping the console moved the tab: {seen}"
+
+
+def test_a_stopped_guest_still_opens_straight_onto_its_summary(
+    window, closed_tabs, monkeypatch
+):
+    """The same path the other way: no console flash for a guest with none."""
+    seen = watch_views(monkeypatch)
+    window.open_console(STOPPED)
+    pump_until(lambda: STOPPED in window.tabs, 8)
+    pump(0.6)
+
+    assert seen, "the tab never picked a view"
+    assert CONSOLE not in seen, (
+        f"a stopped guest's tab flashed a console it does not have: {seen}"
+    )
+    assert window.tabs[STOPPED].view == SUMMARY

@@ -5,6 +5,8 @@ import time
 import pytest
 from gi.repository import Gtk
 
+from proxima.console import status_panel as status_panel_mod
+
 from .conftest import (
     FakeConsole,
     key_for,
@@ -405,3 +407,31 @@ def test_a_saved_console_reopens_and_gives_up_on_guests_that_never_appear(
     window._restore_until = time.monotonic() - 1
     window._resume_session()
     assert not window._restore_keys, "session restore never gives up on a missing guest"
+
+
+def test_a_real_console_keeps_the_tabs_connecting_panel_up(window, live_console):
+    """The handover from placeholder to console must not be visible.
+
+    The tab puts up "Connecting..." while it fetches a ticket, then swaps in
+    the real console. That console used to start with a bare label in its
+    display area, so the rich panel vanished and a line of small text took
+    its place a moment before the picture arrived -- which read as the tab
+    going backwards.
+    """
+    if type(live_console).__name__ == "PlaceholderConsole":
+        pytest.skip("no SPICE widget here, so no real console to hand over to")
+    panel = live_console.status_panel
+    # Either still connecting with the same panel up, or already connected
+    # and the panel gone -- never a bare label in between.
+    if not live_console.connected:
+        assert panel.get_visible(), (
+            "the console dropped the tab's panel while connecting"
+        )
+        assert panel.title.get_text() == status_panel_mod.CONNECTING_TITLE, (
+            f"the console reworded the wait: {panel.title.get_text()!r}"
+        )
+    placeholder = getattr(live_console, "placeholder", None)
+    if placeholder is not None:
+        assert placeholder.get_text() == "", (
+            f"the console shows a bare {placeholder.get_text()!r} label"
+        )

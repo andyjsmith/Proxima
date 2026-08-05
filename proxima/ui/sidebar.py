@@ -43,6 +43,10 @@ STATUS_ICONS = {
     "stopped": "media-playback-stop-symbolic",
     "paused": "media-playback-pause-symbolic",
     "suspended": "media-playback-pause-symbolic",
+    # The caution mark Proxmox shows for a guest stopped by a storage
+    # failure. "unknown" keeps the question mark: that one also means "not
+    # polled yet", and a new row must not flash a warning.
+    "io-error": "dialog-warning-symbolic",
     "unknown": "dialog-question-symbolic",
 }
 
@@ -52,6 +56,7 @@ PALETTES = {
         "stopped": "#77767b",
         "paused": "#c88800",
         "suspended": "#c88800",
+        "io-error": "#e5a50a",
         "unknown": "#77767b",
         "template": "#77767b",
         "group": "#3d3846",
@@ -63,6 +68,7 @@ PALETTES = {
         "stopped": "#9a9996",
         "paused": "#f8e45c",
         "suspended": "#f8e45c",
+        "io-error": "#f9f06b",
         "unknown": "#9a9996",
         "template": "#9a9996",
         "group": "#deddda",

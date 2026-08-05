@@ -11,26 +11,29 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
-from .status_panel import ConsoleStatusPanel
+from .status_panel import CONNECTING_ICON, CONNECTING_TITLE, ConsoleStatusPanel
 
 TITLES = {
     "stopped": "Guest is stopped",
+    "io-error": "Guest stopped on an I/O error",
     "suspended": "Guest is suspended",
     "paused": "Guest is paused",
-    "connecting": "Connecting...",
+    "connecting": CONNECTING_TITLE,
 }
 
 DETAILS = {
     "stopped": "The console will connect when the guest starts.",
+    "io-error": "Proxmox stopped it because its storage stopped answering. Fix the storage, then reset or stop the guest.",
     "suspended": "Resume the guest to connect.",
     "paused": "Resume the guest to connect.",
     "connecting": "Fetching a console ticket from Proxmox.",
 }
 
 ICONS = {
+    "io-error": "dialog-warning-symbolic",
     "paused": "media-playback-pause-symbolic",
     "suspended": "media-playback-pause-symbolic",
-    "connecting": "content-loading-symbolic",
+    "connecting": CONNECTING_ICON,
 }
 
 # States the user cannot act on, so no Reconnect button is offered.

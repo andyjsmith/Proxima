@@ -4,6 +4,7 @@ import pytest
 from gi.repository import Gtk
 
 from proxima.ui import actions as action_defs
+from proxima.ui import sidebar as sidebar_mod
 from proxima.ui.clone import CloneDialog
 
 from .conftest import key_for, pump, pump_until, sample_row
@@ -204,3 +205,59 @@ def test_a_protected_guest_cannot_be_deleted(window, api):
     assert not any(
         c[0] == "delete" for c in api.calls[before:] if isinstance(c, tuple)
     ), "a protected guest was deleted anyway"
+
+
+# -- a guest stopped by a storage failure ---------------------------------
+# Proxmox reports "io-error" and shows a yellow caution mark. The guest is
+# not executing, but QEMU is up: the web UI still offers every control that
+# acts on a live guest, and so must this.
+
+
+@pytest.fixture
+def io_error(window):
+    sample_row(100)["status"] = "io-error"
+    window.refresh()
+    pump_until(lambda: window.sidebar.guests[RUNNING].status == "io-error", 8)
+    yield window.sidebar.guests[RUNNING]
+    sample_row(100)["status"] = "running"
+    window.refresh()
+    pump_until(lambda: window.sidebar.guests[RUNNING].status == "running", 8)
+
+
+def test_an_io_error_guest_can_still_be_powered_off(window, io_error):
+    """The one guest most likely to need Stop had every button greyed out."""
+    offered = {
+        action.name
+        for action in action_defs.visible_actions(io_error)
+        if io_error.status in action.states and io_error.kind in action.kinds
+    }
+    assert {"shutdown", "stop", "reset", "reboot", "suspend"} <= offered, (
+        f"an io-error guest cannot be powered off: {sorted(offered)}"
+    )
+
+
+def test_an_io_error_guest_is_not_offered_a_start(window, io_error):
+    """There is nothing to start, and resuming just faults again."""
+    offered = {
+        action.name
+        for action in action_defs.visible_actions(io_error)
+        if io_error.status in action.states
+    }
+    assert "start" not in offered and "resume" not in offered, (
+        f"start/resume offered for an io-error guest: {sorted(offered)}"
+    )
+
+
+def test_an_io_error_guest_wears_a_warning_not_a_question_mark(window, io_error):
+    icon = sidebar_mod.STATUS_ICONS[io_error.status]
+    assert icon == "dialog-warning-symbolic", f"io-error drew {icon}"
+    for dark in (False, True):
+        colour = sidebar_mod.PALETTES[dark]["io-error"]
+        assert colour != sidebar_mod.PALETTES[dark]["unknown"], (
+            "io-error is drawn in the same grey as unknown"
+        )
+
+
+def test_an_io_error_guest_still_has_a_console(window, io_error):
+    """QEMU is up and still serving the frame it froze on."""
+    assert io_error.has_console, "an io-error guest was treated as powered off"

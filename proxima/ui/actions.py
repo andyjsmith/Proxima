@@ -10,6 +10,14 @@ from collections import namedtuple
 Action = namedtuple("Action", "name label icon tooltip confirm states kinds")
 
 
+# "io-error" is a guest QEMU stopped because its storage failed -- the yellow
+# caution mark in the Proxmox web UI. Its process is still up, so everything
+# that acts on a live guest still applies, and Proxmox offers exactly these.
+# Leaving it out of every state list greyed out the whole toolbar for the one
+# guest most likely to need it.
+#
+# start and resume are deliberately not offered: there is nothing to start,
+# and resuming before the storage is back simply faults again.
 POWER_ACTIONS = [
     # A suspended guest is resumed with start, not resume: resume is for a
     # guest paused in memory, start is what brings back one suspended to
@@ -29,7 +37,7 @@ POWER_ACTIONS = [
         "system-shutdown-symbolic",
         "ACPI shutdown",
         "Shut down {name}?",
-        ("running", "paused"),
+        ("running", "paused", "io-error"),
         ("qemu", "lxc"),
     ),
     Action(
@@ -38,7 +46,7 @@ POWER_ACTIONS = [
         "media-playback-stop-symbolic",
         "Immediate power off",
         "Stop {name}? The guest OS will not shut down cleanly.",
-        ("running", "paused", "suspended"),
+        ("running", "paused", "suspended", "io-error"),
         ("qemu", "lxc"),
     ),
     Action(
@@ -47,7 +55,7 @@ POWER_ACTIONS = [
         "view-refresh-symbolic",
         "Hard reset",
         "Reset {name}? The guest OS will not shut down cleanly.",
-        ("running",),
+        ("running", "io-error"),
         ("qemu",),
     ),
     Action(
@@ -56,7 +64,7 @@ POWER_ACTIONS = [
         "system-reboot-symbolic",
         "ACPI reboot",
         None,
-        ("running",),
+        ("running", "io-error"),
         ("qemu", "lxc"),
     ),
     Action(
@@ -65,7 +73,7 @@ POWER_ACTIONS = [
         "media-playback-pause-symbolic",
         "Pause, keep memory",
         "Pause {name}? The guest stops running until it is resumed.",
-        ("running",),
+        ("running", "io-error"),
         ("qemu", "lxc"),
     ),
     Action(

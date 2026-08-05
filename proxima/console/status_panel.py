@@ -41,6 +41,13 @@ def draw_offline_effect(context, width, height, dim=0.55):
     context.restore()
 
 
+# A tab shows this while it fetches a ticket, and the console that replaces
+# it shows the same thing until its display arrives. One string, because the
+# whole point is that the user cannot tell the handover happened.
+CONNECTING_TITLE = "Connecting..."
+CONNECTING_ICON = "content-loading-symbolic"
+
+
 class ConsoleStatusPanel(Gtk.Box):
     """Centred message over the console, with a Reconnect button."""
 

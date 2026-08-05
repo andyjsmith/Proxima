@@ -1,7 +1,7 @@
 """Preferences, per-VM settings, and the window state that is remembered."""
 
 import pytest
-from gi.repository import Gdk, Gtk
+from gi.repository import Gdk, GLib, Gtk
 
 from proxima.api import devices as dev_mod
 from proxima.api import notes as notes_mod
@@ -357,3 +357,32 @@ def test_an_unmaximised_window_saves_the_size_it_has(window, config, sized):
     window._save_layout()
     assert not config["window_maximized"], "unmaximising did not clear the saved flag"
     assert (config["window_width"], config["window_height"]) == (900, 640)
+
+
+# -- an unfocused window keeps its colours --------------------------------
+
+
+def test_the_backdrop_flag_is_gone_before_the_window_is_repainted(window):
+    """Losing focus must not cost even one dimmed frame.
+
+    theme.keep_active() clears GTK's BACKDROP flag rather than restyling the
+    state, but it has to wait for an idle to do it. At the default idle
+    priority the redraw got there first: the window was painted in backdrop
+    colours for a frame, and the theme's CSS transitions turned that one
+    frame into a visible fade out and back.
+    """
+    seen = []
+    window.set_state_flags(Gtk.StateFlags.BACKDROP, False)
+    GLib.idle_add(
+        lambda: (
+            seen.append(bool(window.get_state_flags() & Gtk.StateFlags.BACKDROP)),
+            False,
+        )[1],
+        # GDK_PRIORITY_REDRAW: what paints the frame.
+        priority=GLib.PRIORITY_HIGH_IDLE + 20,
+    )
+    assert pump_until(lambda: bool(seen), 3), "the redraw never came round"
+    assert not seen[0], (
+        "the window still carried BACKDROP when it came to be painted, "
+        "so it is drawn dimmed for a frame"
+    )
