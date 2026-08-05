@@ -15,13 +15,19 @@ titlebar is then drawn by GTK with the application's own theme, in the same
 colours, and follows light/dark automatically.
 
 The header bar carries the window title, the connection summary as its
-subtitle, the **menu bar** (File / VM / View / Help), and two buttons
-(Refresh, Preferences).
+subtitle, and the **menu bar** (File / VM / View / Help). Nothing else:
+Preferences is on the File menu, which is right there.
 
-The menus are *moved*, not duplicated: `MainWindow.__init__` packs the menu
-bar into the root box only when there is no header bar. Two menu bars would
-be two sources of truth for what is enabled, and reclaiming the row the menu
-bar used to occupy is most of the point of the feature.
+The menus are *moved*, not duplicated: `MainWindow.__init__` puts the menu
+bar in the header bar, or -- when there is no header bar -- at the left of
+the toolbar, sharing its row. Two menu bars would be two sources of truth
+for what is enabled.
+
+Either way the menu bar has no row of its own. That was the point of the
+header bar in the first place, and `_embed_menubar_in_toolbar()` reclaims
+the same row without one, so the two layouts differ in where the title and
+window controls are drawn rather than in how much vertical space the chrome
+costs.
 
 Nothing was moved off the toolbar or the status bar. That is deliberate: a
 header bar that also rearranged those would be much harder to take back out
@@ -62,8 +68,9 @@ there.
 | --- | --- |
 | `proxima/config.py` | `"use_header_bar": False` in `DEFAULTS`, with its comment |
 | `proxima/ui/main_window.py` | `MainWindow._build_header_bar()` — the whole method |
-| `proxima/ui/main_window.py` | In `__init__`, the `self.header_bar = None` / `if … else: root.pack_start(self.menubar, …)` block, and building `self.menubar` before it |
-| `proxima/theme/css.py` | The `headerbar menubar` rules in `COMPACT_CSS` |
+| `proxima/ui/main_window.py` | In `__init__`, the `self.header_bar = None` / `if … else: self._embed_menubar_in_toolbar()` block, and building `self.menubar` before it |
+| `proxima/ui/main_window.py` | `MainWindow._embed_menubar_in_toolbar()` — where the menus go without a header bar |
+| `proxima/theme/css.py` | The `headerbar menubar` and `.toolbar-menus menubar` rules in `COMPACT_CSS` |
 | `proxima/ui/main_window.py` | In `_update_connection_label()`, the `if self.header_bar is not None:` block that sets the subtitle |
 | `proxima/ui/main_window.py` | In `open_settings()`, the `elif` branch reporting "Restart required to change the titlebar" |
 | `proxima/ui/settings_dialog.py` | The `_check(...)` for `"use_header_bar"` in `_appearance_page()`, and the row index of the "Installed GTK themes" note (3 with it, 2 without) |

@@ -115,6 +115,17 @@ scrollbar slider  { min-width: 9px; min-height: 9px; }
 /* Tab labels carry their own close button; keep it from bloating the tab. */
 .tab-close        { padding: 0; min-height: 16px; min-width: 16px; }
 
+/* The menu bar when it shares the toolbar's row rather than having one of
+   its own. It arrives with a background, a border and its own padding, all
+   of which belong to a bar that is alone on a line. */
+.toolbar-menus menubar,
+.toolbar-menus menubar > menuitem {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+}
+.toolbar-menus menubar { padding: 0; margin: 0; }
+
 /* A button showing an icon beside a word. GTK's own image-spacing is two
    pixels, which reads as the two being one glyph. Scoped to a class so
    icon-only buttons -- the toolbar, the tab close buttons -- keep the

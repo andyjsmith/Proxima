@@ -82,3 +82,78 @@ def test_the_titlebar_keeps_its_window_controls(header_window):
         "the titlebar's decoration layout has no close button: "
         f"{header_window.header_bar.get_decoration_layout()!r}"
     )
+
+
+# -- the plain window's single chrome row ---------------------------------
+
+
+def test_the_menus_share_the_toolbars_row(plain_window):
+    """One row, not two: menus at the left, the buttons straight after.
+
+    The menu bar used to have a row of its own above the toolbar, which is a
+    lot of vertical space for four short words.
+    """
+    assert descends_from(plain_window.menubar, plain_window.toolbar), (
+        "the menu bar is not in the toolbar"
+    )
+    root = plain_window.get_child()
+    assert plain_window.menubar not in root.get_children(), (
+        "the menu bar still has a row of its own"
+    )
+
+
+def test_the_menus_come_before_the_toolbar_buttons(plain_window):
+    """Left-most, so the reading order is menus then actions."""
+    items = plain_window.toolbar.get_children()
+    assert items, "the toolbar is empty"
+    assert descends_from(plain_window.menubar, items[0]), (
+        f"the first toolbar item is {items[0]}, not the menus"
+    )
+    assert descends_from(plain_window.console_tool_item, plain_window.toolbar), (
+        "the toolbar lost its buttons"
+    )
+    positions = {
+        "menus": plain_window.toolbar.get_item_index(items[0]),
+        "console": plain_window.toolbar.get_item_index(plain_window.console_tool_item),
+    }
+    assert positions["menus"] < positions["console"], positions
+
+
+def test_a_header_bar_leaves_the_toolbar_to_its_buttons(header_window):
+    """The menus go to one place or the other, never both."""
+    assert not descends_from(header_window.menubar, header_window.toolbar), (
+        "the menus are in the header bar AND the toolbar"
+    )
+
+
+def test_fullscreen_still_hides_the_menus(plain_window):
+    """They are inside the toolbar now, so they must not be left behind."""
+    plain_window.menubar.hide()
+    assert not plain_window.menubar.get_visible()
+    plain_window.menubar.show()
+    assert plain_window.menubar.get_visible()
+
+
+def test_neither_row_carries_a_preferences_button(plain_window, header_window):
+    """It is on the File menu, which is on the same row either way."""
+
+    def buttons(container):
+        found = []
+
+        def walk(widget):
+            name = getattr(widget, "get_icon_name", None)
+            if name is not None and name() == "preferences-system-symbolic":
+                found.append(widget)
+            if hasattr(widget, "get_children"):
+                for child in widget.get_children():
+                    walk(child)
+
+        walk(container)
+        return found
+
+    assert not buttons(plain_window.toolbar), (
+        "the toolbar still has a Preferences button"
+    )
+    assert not buttons(header_window.header_bar), (
+        "the titlebar still has a Preferences button"
+    )

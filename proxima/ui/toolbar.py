@@ -42,7 +42,7 @@ def tool_button(label, icon, tooltip, important=False, sensitive=False):
     return item
 
 
-def add_power_buttons(bar, on_click, important=("start",)):
+def add_power_buttons(bar, on_click, important=()):
     """Insert the power actions into a toolbar. Returns {name: widget}.
 
     on_click is called with the action name.

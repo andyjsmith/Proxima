@@ -189,7 +189,7 @@ class MainWindow(Gtk.Window):
             self.header_bar = self._build_header_bar()
             self.set_titlebar(self.header_bar)
         else:
-            root.pack_start(self.menubar, False, False, 0)
+            self._embed_menubar_in_toolbar()
         root.pack_start(self.toolbar, False, False, 0)
 
         self.paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
@@ -303,6 +303,25 @@ class MainWindow(Gtk.Window):
     # Chrome
     # ------------------------------------------------------------------
 
+    def _embed_menubar_in_toolbar(self):
+        """The menus at the left of the toolbar, sharing its row.
+
+        The same move the header bar makes, for the window that has no
+        header bar: the menus go somewhere that already exists rather than
+        taking a row of their own, which is a lot of vertical space for four
+        short words. Moved, not copied -- two menu bars would be two sources
+        of truth for what is enabled.
+        """
+        holder = Gtk.ToolItem()
+        holder.add(self.menubar)
+        # The menu bar draws its own background and border, which look wrong
+        # sitting inside a toolbar; the class is what the stylesheet keys on
+        # to take them off.
+        holder.get_style_context().add_class("toolbar-menus")
+        self._menubar_item = holder
+        self.toolbar.insert(holder, 0)
+        self.toolbar.insert(Gtk.SeparatorToolItem(), 1)
+
     def _build_header_bar(self):
         """A GTK-drawn titlebar, so the frame is themed like the rest.
 
@@ -323,14 +342,9 @@ class MainWindow(Gtk.Window):
         bar.set_decoration_layout(":minimize,maximize,close")
         bar.set_title(APP_NAME)
 
+        # Just the menus. Preferences lives on the File menu, an inch to the
+        # left of where a button for it would have been.
         bar.pack_start(self.menubar)
-
-        settings = Gtk.Button.new_from_icon_name(
-            "preferences-system-symbolic", Gtk.IconSize.MENU
-        )
-        settings.set_tooltip_text("Preferences")
-        settings.connect("clicked", lambda *_: self.open_settings())
-        bar.pack_end(settings)
         return bar
 
     def _build_menubar(self):
@@ -640,17 +654,8 @@ class MainWindow(Gtk.Window):
         self.tasks_tool_item.connect("toggled", self._on_tasks_toggled)
         bar.insert(self.tasks_tool_item, -1)
 
-        spacer = Gtk.SeparatorToolItem()
-        spacer.set_draw(False)
-        spacer.set_expand(True)
-        bar.insert(spacer, -1)
-
-        settings_item = Gtk.ToolButton()
-        settings_item.set_label("Preferences")
-        settings_item.set_icon_name("preferences-system-symbolic")
-        settings_item.connect("clicked", lambda *_: self.open_settings())
-        bar.insert(settings_item, -1)
-
+        # No Preferences button, and so no expanding spacer to push one to
+        # the right: it is on the File menu, which is now on this same row.
         return bar
 
     # -- panes ---------------------------------------------------------
