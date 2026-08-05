@@ -23,7 +23,7 @@ jobs:
     # sweep. Make it blocking once `ruff format .` has been run and committed.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -49,7 +49,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -68,7 +68,7 @@ jobs:
       GSETTINGS_BACKEND: memory
       PROXIMA_CONFIG_DIR: /tmp/proxima-ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install GTK and PyGObject
         run: |

@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install the GTK stack and a C toolchain
         run: |
@@ -217,7 +217,7 @@ jobs:
       # MSYS2, so it is fetched here.
       ZIG_VERSION: "0.16.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up MSYS2 UCRT64
         id: msys2
