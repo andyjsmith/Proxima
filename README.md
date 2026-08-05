@@ -127,6 +127,19 @@ Pushing the tag builds both platforms and publishes:
 re-uploads the files, for when a build fails for reasons that have nothing to
 do with the code.
 
+### Trying a package without releasing one
+
+Run the release workflow by hand from **Actions -> Release -> Run workflow**
+and leave the tag box **empty**. Everything is built and packaged from the
+branch you picked -- installer, AppImage, deb, rpm, zip, checksums -- and the
+lot is uploaded as a `release-<version>` workflow artifact. Nothing is
+published and no tag is touched, so this is the way to look at an actual
+AppImage or installer before deciding to cut a release.
+
+The version on those files comes from `pyproject.toml`, which on a branch is
+whatever the last release left behind. They are for testing, not for handing
+out.
+
 ### What is in a package
 
 Everything. None of them ask the user to install GTK, spice-gtk, GStreamer or

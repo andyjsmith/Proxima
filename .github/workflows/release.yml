@@ -7,6 +7,11 @@ name: Release
 #
 # The tag is what a release is cut from, so every artifact traces back to one
 # commit. Nothing is published from a branch.
+#
+# Run it by hand with the tag box left empty for a dry run: everything is
+# built and packaged from the branch you picked, the installers land as
+# workflow artifacts, and nothing is published. That is the way to look at an
+# AppImage or an installer without spending a tag on it.
 
 on:
   push:
@@ -14,8 +19,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to (re)build a release from"
-        required: true
+        description: "Existing tag to publish a release from. Leave empty to build the packages without publishing."
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -27,6 +33,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -36,21 +43,35 @@ jobs:
         id: version
         # pyproject is the only place the version is written -- the app reads
         # it back at run time -- so this is the only comparison to make.
+        #
+        # With no tag there is nothing to compare and nothing to publish:
+        # the version comes from pyproject, and the run stops after the
+        # artifacts are uploaded.
         run: |
           set -euo pipefail
-          tag="${{ inputs.tag || github.ref_name }}"
-          version="${tag#v}"
           project_version=$(python3 -c "
           import pathlib, tomllib
           with pathlib.Path('pyproject.toml').open('rb') as fh:
               print(tomllib.load(fh)['project']['version'])
           ")
+          tag="${{ inputs.tag || (github.event_name == 'push' && github.ref_name) || '' }}"
+          if [ -z "$tag" ]; then
+            echo "no tag: building $project_version from ${{ github.ref_name }} without publishing"
+            echo "version=$project_version" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "### Dry run: packaging $project_version, publishing nothing"               >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          version="${tag#v}"
           echo "tag=$version  pyproject=$project_version"
           if [ "$version" != "$project_version" ]; then
             echo "::error::tag $tag does not match pyproject.toml ($project_version)"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"
           case "$version" in
             *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;;
             *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;;
@@ -207,6 +228,10 @@ jobs:
           if-no-files-found: error
 
       - name: Publish the release
+        # Skipped on a dry run: the packages are already uploaded above, and
+        # a release with no tag behind it is exactly what this workflow's
+        # first comment says must not happen.
+        if: needs.verify.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
