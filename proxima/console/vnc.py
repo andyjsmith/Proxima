@@ -58,9 +58,11 @@ class VncConsole(Gtk.Box):
         "refresh": True,
         "ctrl_alt_del": True,
         # RFB carries no audio at all, and Proxmox's VNC proxy has
-        # no clipboard channel either.
+        # no clipboard channel either. USB redirection is a SPICE
+        # protocol extension, so there is nothing to carry it here.
         "clipboard": False,
         "audio": False,
+        "usb": False,
     }
 
     def __init__(

@@ -48,6 +48,10 @@ DEFAULTS = {
     # QEMU serves one SPICE client at a time, so connecting without asking
     # silently throws whoever is there off their session.
     "spice_session_check": True,
+    # Offer a USB device to the guest when it is plugged in, the way VMware
+    # Workstation does. On by default: the alternative is that redirection
+    # is a menu you have to remember exists.
+    "usb_autoprompt": True,
     # -- confirmations -------------------------------------------------
     # Which destructive power actions stop to ask first. The two that cut
     # power without telling the guest are on by default; pausing is

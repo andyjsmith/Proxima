@@ -13,6 +13,27 @@ On Windows this must run under the MSYS2 UCRT64 Python
 (`C:/msys64/ucrt64/bin/python.exe`), not a python.org install: PyGObject and
 spice-gtk come from pacman and will not load anywhere else.
 
+## USB redirection
+
+A USB device plugged into this computer can be handed to a VM over SPICE,
+from **VM -> USB Devices**, from the icon in the status bar, or from the
+question Proxima asks when something is plugged in while a console is in
+front of you. VNC has no channel to carry a device over, so it is offered
+only on SPICE.
+
+Three things have to be in place, and the status bar says which one is
+missing:
+
+| | |
+| --- | --- |
+| The VM needs a SPICE USB port | Proxmox adds none. Hardware -> Add -> USB Device -> Spice Port, which writes `usb0: spice`. One line, one device at a time; add more for more. |
+| Windows needs the UsbDk driver | [UsbDk](https://www.spice-space.org/download.html) (spice-space downloads, or bundled with virt-viewer). Devices are listed without it and the list looks perfectly healthy -- Windows just will not hand one over when it is claimed. |
+| Linux needs access to the device | spice-gtk talks to libusb directly, so the user has to be able to open `/dev/bus/usb`. The distribution's `spice-client-glib-usb-acl-helper` handles this where it is installed. |
+
+A redirected device is taken away from this computer for as long as it is
+redirected; closing the console gives it back. The prompt on plug-in can be
+turned off in Preferences -> Console.
+
 ## Development
 
 PyGObject, pycairo and spice-gtk come from the system, never from pip -- a

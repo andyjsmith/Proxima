@@ -83,6 +83,19 @@ class ConsoleWindow(Gtk.Window):
         keys.connect("clicked", lambda *_: self._send_ctrl_alt_del())
         bar.insert(keys, -1)
 
+        # The main window offers this on the VM menu, which a popped-out
+        # console does not have. Its own console is passed explicitly: it is
+        # not the tab in front of anything.
+        self.usb_item = toolbar.tool_button(
+            "USB",
+            "drive-removable-media-symbolic",
+            "Share a USB device with this guest",
+        )
+        self.usb_item.connect(
+            "clicked", lambda *_: self.main.open_usb_dialog(self.console)
+        )
+        bar.insert(self.usb_item, -1)
+
         full = toolbar.tool_button(
             "Full Screen",
             "view-fullscreen-symbolic",
@@ -114,6 +127,12 @@ class ConsoleWindow(Gtk.Window):
         guest = self.main.sidebar.guests.get(self.guest_key)
         toolbar.apply_power_state(self._action_items, guest)
         toolbar.apply_snapshot_state(self._snapshot_items, guest)
+        self.usb_item.set_sensitive(
+            bool(
+                getattr(self.console, "supports", {}).get("usb")
+                and getattr(self.console, "usb", None) is not None
+            )
+        )
 
     def replace_console(self, console):
         """Swap in a rebuilt console without disturbing the window."""

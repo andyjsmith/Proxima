@@ -238,6 +238,15 @@ class SettingsDialog(Gtk.Dialog):
         self._check(
             grid,
             5,
+            "Ask when a USB device is plugged in",
+            "usb_autoprompt",
+            tooltip="Offer to hand the new device to the guest whose "
+            "console is in front. SPICE only, and the VM needs a "
+            "SPICE USB port.",
+        )
+        self._check(
+            grid,
+            6,
             "Check for other SPICE clients",
             "spice_session_check",
             tooltip="QEMU serves one SPICE client at a time. Ask before "

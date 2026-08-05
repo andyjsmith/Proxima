@@ -21,42 +21,17 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 
-from gi.repository import Gdk, GLib, GObject, Gtk
+from gi.repository import Gdk, GLib, Gtk
 
 from .decoders import gstreamer_report
+from .spicelib import AVAILABLE, SPICE_GLIB_NS, SpiceGLib, SpiceGtk, connect_signal
 from .status_panel import (
     CONNECTING_ICON,
     CONNECTING_TITLE,
     ConsoleStatusPanel,
     draw_offline_effect,
 )
-
-# --------------------------------------------------------------------------
-# Namespace resolution
-#
-# The introspection namespace is spelled SpiceClientGLib in most builds but
-# SpiceClientGlib in some, so probe rather than assume.
-# --------------------------------------------------------------------------
-
-
-def _import_namespace(candidates):
-    for name, version in candidates:
-        try:
-            gi.require_version(name, version)
-            module = __import__("gi.repository", fromlist=[name])
-            return getattr(module, name), name
-        except Exception:
-            continue
-    return None, None
-
-
-SpiceGLib, SPICE_GLIB_NS = _import_namespace(
-    [("SpiceClientGLib", "2.0"), ("SpiceClientGlib", "2.0")]
-)
-SpiceGtk, SPICE_GTK_NS = _import_namespace([("SpiceClientGtk", "3.0")])
-
-AVAILABLE = SpiceGLib is not None and SpiceGtk is not None
-
+from .usb import UsbRedirection
 
 # --------------------------------------------------------------------------
 # Session method shadowing
@@ -65,11 +40,6 @@ AVAILABLE = SpiceGLib is not None and SpiceGtk is not None
 # disconnect. Which one wins depends on the PyGObject build, so call both
 # explicitly and defensively.
 # --------------------------------------------------------------------------
-
-
-def connect_signal(obj, name, handler):
-    """Always attach a GObject signal, never the shadowing Spice method."""
-    return GObject.Object.connect(obj, name, handler)
 
 
 def session_connect(session):
@@ -237,6 +207,7 @@ class SpiceConsole(Gtk.Box):
         "ctrl_alt_del": True,
         "clipboard": True,
         "audio": True,
+        "usb": True,
     }
 
     def __init__(
@@ -252,6 +223,8 @@ class SpiceConsole(Gtk.Box):
         on_reconnect=None,
         share_clipboard=True,
         play_audio=True,
+        on_usb=None,
+        on_usb_plugged=None,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
@@ -260,6 +233,8 @@ class SpiceConsole(Gtk.Box):
         self.on_agent = on_agent or (lambda connected: None)
         self.on_disconnect = on_disconnect or (lambda reason: None)
         self.on_reconnect = on_reconnect or (lambda: None)
+        self.on_usb = on_usb or (lambda: None)
+        self.on_usb_plugged = on_usb_plugged or (lambda key, label: None)
         self.connected = False
         self.agent_connected = False
         self._channels = []
@@ -287,6 +262,7 @@ class SpiceConsole(Gtk.Box):
         self._main_channel = None
         self._closed = False
         self.last_status = ""
+        self.usb = None
 
         if not AVAILABLE:
             self.session = None
@@ -329,6 +305,15 @@ class SpiceConsole(Gtk.Box):
         self.session = self._build_session()
         self._gtk_session = self._get_gtk_session()
         self._apply_clipboard()
+        self.usb = UsbRedirection(
+            self.session,
+            on_changed=self._on_usb_changed,
+            on_plugged=self._on_usb_plugged,
+            on_error=lambda message: self._status(f"USB: {message}"),
+        )
+        for line in (self.usb.note, self.usb.advice):
+            if line:
+                print(f"[usb] {line}")
         connect_signal(self.session, "channel-new", self._on_channel_new)
         connect_signal(self.session, "disconnected", self._on_disconnected)
 
@@ -480,6 +465,38 @@ class SpiceConsole(Gtk.Box):
         """
         self.play_audio = bool(enabled)
         return False
+
+    # -- USB redirection -----------------------------------------------
+
+    def usb_devices(self):
+        return self.usb.devices() if self.usb is not None else []
+
+    def usb_redirected(self):
+        return self.usb.redirected() if self.usb is not None else []
+
+    def usb_channels(self):
+        """Redirection ports the guest offers, 0 when it has none."""
+        return self.usb.channels if self.usb is not None else 0
+
+    def usb_snapshot(self):
+        """(devices, channels) together, for callers that want both."""
+        return self.usb.snapshot() if self.usb is not None else ([], 0)
+
+    def usb_note(self):
+        """Why USB redirection cannot work here at all, or "" when it can."""
+        return self.usb.note if self.usb is not None else ""
+
+    def usb_advice(self):
+        """What is missing on this machine, for a list that works anyway."""
+        return self.usb.advice if self.usb is not None else ""
+
+    def _on_usb_changed(self):
+        if not self._closed:
+            self.on_usb()
+
+    def _on_usb_plugged(self, key, label):
+        if not self._closed:
+            self.on_usb_plugged(key, label)
 
     # -- signals -------------------------------------------------------
 
@@ -838,6 +855,12 @@ class SpiceConsole(Gtk.Box):
 
     def shutdown(self):
         self._closed = True
+        if getattr(self, "usb", None) is not None:
+            # Before the session goes: a redirected device is only handed
+            # back to the host while there is still a channel to say so on.
+            with contextlib.suppress(Exception):
+                self.usb.shutdown()
+            self.usb = None
         if getattr(self, "session", None) is not None:
             session_disconnect(self.session)
         if self._ca_file and os.path.exists(self._ca_file):

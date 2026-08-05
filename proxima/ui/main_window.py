@@ -26,7 +26,12 @@ from .. import APP_NAME, __version__, secrets
 from ..api import AuthError, ProxmoxError
 from ..api import notes as notes_meta
 from ..api.connection import FAILED, Connection, ConnectionManager
-from ..api.models import audio_is_spice, valid_guest_name, vga_is_spice
+from ..api.models import (
+    audio_is_spice,
+    spice_usb_ports,
+    valid_guest_name,
+    vga_is_spice,
+)
 from ..console import SPICE_AVAILABLE, SpiceConsole, VncConsole
 from ..console.placeholder import PlaceholderConsole
 from ..console.spice import IMAGE_COMPRESSION, VIDEO_CODECS
@@ -52,6 +57,7 @@ from .snapshots import SnapshotManager, TakeSnapshotDialog
 from .split import MAX_PANES, SplitView
 from .summary import GuestSummary
 from .task_feed import TaskFeed
+from .usb_dialog import UsbDeviceDialog, UsbPlugPrompt
 from .vm_settings import VMSettingsDialog
 
 # Distinguishes "work it out yourself" from "explicitly no console".
@@ -113,6 +119,9 @@ class MainWindow(Gtk.Window):
         self._closing = False
         self._action_items = {}  # action name -> [widgets]
         self._updating_view_menu = False
+        self._updating_usb_menu = False
+        self._usb_dialog = None  # the device chooser, while it is open
+        self._usb_prompt = None  # the "something was plugged in" question
         # Set while a pane toggle is being put back in step with its pane,
         # so doing so does not read as a click on it.
         self._syncing_toggles = False
@@ -414,6 +423,17 @@ class MainWindow(Gtk.Window):
         }
         for item in self.snapshot_menu_items.values():
             item.set_sensitive(False)
+
+        vm_menu.append(Gtk.SeparatorMenuItem())
+        # Built when the menu opens rather than kept in step with the host:
+        # what is plugged in changes without asking us, and a stale list of
+        # devices is worse than a list that takes a moment to appear.
+        self.usb_menu = Gtk.Menu()
+        self.usb_menu_item = Gtk.MenuItem(label="USB Devices")
+        self.usb_menu_item.set_submenu(self.usb_menu)
+        self.usb_menu_item.set_sensitive(False)
+        vm_menu.append(self.usb_menu_item)
+        vm_menu.connect("show", lambda *_: self._rebuild_usb_menu())
 
         vm_menu.append(Gtk.SeparatorMenuItem())
         agent_item = Gtk.MenuItem(label="Guest Agent")
@@ -732,6 +752,16 @@ class MainWindow(Gtk.Window):
         )
         box.pack_start(self.audio_icon, False, False, 2)
 
+        # Whether a USB device is currently in the guest's hands. Not a
+        # switch like the two before it -- there is nothing to turn on
+        # without saying which device -- so clicking opens the chooser.
+        self.usb_icon = StatusIndicator(
+            "drive-removable-media-symbolic",
+            "USB redirection",
+            on_toggle=self.open_usb_dialog,
+        )
+        box.pack_start(self.usb_icon, False, False, 2)
+
         # Dragging a guest between folders. Not about the console at all,
         # but it belongs with the other two: it is a thing that is either
         # armed or not, and this is where you find out which.
@@ -743,6 +773,7 @@ class MainWindow(Gtk.Window):
         self._set_indicator(self.vdagent_icon, None, "SPICE agent")
         self._set_indicator(self.qga_icon, None, "Guest agent")
         self._set_indicator(self.audio_icon, None, "Audio")
+        self._set_indicator(self.usb_icon, None, "USB redirection")
         self._update_dnd_indicator()
 
         # Protocol of the active console tab. This is the persistent signal
@@ -826,6 +857,9 @@ class MainWindow(Gtk.Window):
 
         # spice-vdagent state comes from the console; VNC has none.
         self._update_clipboard_indicator(console)
+        # The guest's USB ports appear when its usbredir channels connect,
+        # and nothing signals that, so the poll is what notices.
+        self._update_usb_indicator(console)
         return True
 
     def _on_console_agent(self, console, connected):
@@ -1082,6 +1116,277 @@ class MainWindow(Gtk.Window):
                     "device=ich9-intel-hda,driver=spice in Proxmox."
                 ),
             )
+
+    # -- USB redirection -----------------------------------------------
+
+    def _usb_console(self, console=_CURRENT):
+        """The console USB redirection would act on, or None.
+
+        Only a connected SPICE console qualifies: usbredir is a SPICE
+        channel, so on VNC there is nothing to carry a device over.
+        """
+        if console is _CURRENT:
+            console = self.current_console()
+        if console is None or not getattr(console, "supports", {}).get("usb"):
+            return None
+        # No manager at all means spice-gtk never built a session -- it is
+        # not installed, and the tab says so already.
+        if getattr(console, "usb", None) is None:
+            return None
+        return console
+
+    def _update_usb_indicator(self, console=_CURRENT):
+        """Whether a host device is currently in the guest's hands.
+
+        Four different "no" answers, and they want different fixes: the
+        console is VNC, spice-gtk cannot do USB on this machine, the VM has
+        no port to redirect into, or nothing is redirected yet. Only the
+        last of those is a state to click out of, so the others say what
+        they need instead of just going dim.
+        """
+        if console is _CURRENT:
+            console = self.current_console()
+        guest = self.context_guest(console)
+        label = "USB redirection"
+        usable = self._usb_console(console)
+
+        if usable is None:
+            self._set_indicator(
+                self.usb_icon,
+                None,
+                label,
+                can_toggle=False,
+                detail=(
+                    "n/a - this console is VNC, which has no USB channel"
+                    if console is not None
+                    else "n/a - needs an open SPICE console"
+                ),
+            )
+            return
+
+        note = console.usb_note()
+        if note:
+            self._set_indicator(
+                self.usb_icon, None, label, can_toggle=False, detail=note
+            )
+            return
+
+        devices, channels = console.usb_snapshot()
+        if channels == 0:
+            # A VM with no 'usbN: spice' line has nowhere to put a device,
+            # and that is the Proxmox default. Before the config has been
+            # read, say the truthful weaker thing.
+            if guest is not None and guest.config_loaded:
+                detail = (
+                    "no SPICE USB port on this VM. Add one in Proxmox: "
+                    "Hardware -> Add -> USB Device -> Spice Port."
+                    if not spice_usb_ports(guest.config)
+                    else "the guest's USB port has not connected yet"
+                )
+            else:
+                detail = "no redirection port available yet"
+            self._set_indicator(
+                self.usb_icon, False, label, can_toggle=True, detail=detail
+            )
+            return
+
+        redirected = [device for device in devices if device.connected]
+        if not redirected:
+            # The host-side driver is only missing on Windows, and only
+            # matters once there is somewhere to redirect to -- so it is
+            # said here rather than over the reason the VM gave.
+            self._set_indicator(
+                self.usb_icon,
+                False,
+                label,
+                can_toggle=True,
+                detail=console.usb_advice()
+                or "nothing redirected - click to choose a device",
+            )
+            return
+
+        if len(redirected) == 1:
+            summary = redirected[0].label
+        else:
+            summary = f"{len(redirected)} devices redirected"
+        self._set_indicator(
+            self.usb_icon,
+            True,
+            label,
+            can_toggle=True,
+            detail=f"{summary} - click to change",
+        )
+
+    def _rebuild_usb_menu(self):
+        """Fill the VM menu's USB submenu from the console in front."""
+        for child in self.usb_menu.get_children():
+            self.usb_menu.remove(child)
+
+        console = self._usb_console()
+        self.usb_menu_item.set_sensitive(console is not None)
+        if console is None:
+            self.usb_menu_item.set_tooltip_text(
+                "USB redirection needs a SPICE console. VNC has no channel "
+                "to carry a device over."
+            )
+            return
+        self.usb_menu_item.set_tooltip_text("Share a USB device with this guest")
+
+        note = console.usb_note()
+        devices, channels = console.usb_snapshot()
+        if note or channels == 0:
+            self._usb_menu_note(
+                note or "This VM has no SPICE USB port (add 'usb0: spice' in Proxmox)"
+            )
+        else:
+            if not devices:
+                self._usb_menu_note("No USB devices are attached to this computer")
+            for device in devices:
+                item = Gtk.CheckMenuItem(label=device.label)
+                self._updating_usb_menu = True
+                try:
+                    item.set_active(device.connected)
+                finally:
+                    self._updating_usb_menu = False
+                item.set_sensitive(
+                    device.redirectable and not console.usb.is_busy(device.key)
+                )
+                if not device.redirectable and device.reason:
+                    item.set_tooltip_text(device.reason)
+                item.connect("toggled", self._on_usb_menu_toggled, device.key)
+                self.usb_menu.append(item)
+            if console.usb_advice():
+                self._usb_menu_note(console.usb_advice())
+
+        self.usb_menu.append(Gtk.SeparatorMenuItem())
+        self._menu_item(self.usb_menu, "USB Devices...", self.open_usb_dialog)
+        self.usb_menu.show_all()
+
+    def _usb_menu_note(self, text):
+        """A line of explanation where the device list would have been."""
+        item = Gtk.MenuItem(label=text)
+        item.set_sensitive(False)
+        self.usb_menu.append(item)
+
+    def _on_usb_menu_toggled(self, item, key):
+        if self._updating_usb_menu:
+            return
+        console = self._usb_console()
+        if console is None:
+            return
+        item.set_sensitive(False)
+        console.usb.toggle(
+            key, lambda ok, message: self._usb_result(console, key, ok, message)
+        )
+
+    def _usb_result(self, console, key, ok, message):
+        connected = console is not None and any(
+            device.key == key and device.connected for device in console.usb_devices()
+        )
+        if not ok:
+            self.set_status(f"USB: {message}")
+        elif connected:
+            self.set_status(f"USB: {key} connected to the guest")
+        else:
+            self.set_status(f"USB: {key} returned to this computer")
+        self._update_usb_indicator()
+
+    def open_usb_dialog(self, console=None):
+        """The full device list, as a window that stays open while you plug.
+
+        Takes a console explicitly for the popped-out window, which has one
+        of its own and is not the tab in front of anything.
+        """
+        console = self._usb_console(console if console is not None else _CURRENT)
+        if console is None:
+            self.set_status("USB redirection needs an open SPICE console")
+            return
+        if self._usb_dialog is not None:
+            self._usb_dialog.present()
+            return
+        guest = self.context_guest(console)
+        # A popped-out console has a window of its own; a tab's toplevel is
+        # this one. get_toplevel() returns the widget itself when it is in
+        # neither, which is not something a dialog can be transient for.
+        toplevel = console.get_toplevel()
+        self._usb_dialog = UsbDeviceDialog(
+            toplevel if isinstance(toplevel, Gtk.Window) else self,
+            console,
+            guest.label if guest is not None else console.title,
+            on_status=self.set_status,
+        )
+        self._usb_dialog.connect("destroy", self._on_usb_dialog_closed)
+
+    def _on_usb_dialog_closed(self, *_args):
+        self._usb_dialog = None
+
+    def _on_console_usb(self, key):
+        """A device was plugged, pulled, or changed hands on a console."""
+
+        def update():
+            if self._closing:
+                return False
+            console = self.consoles.get(key)
+            if console is not None and console is self.current_console():
+                self._update_usb_indicator(console)
+            if self._usb_dialog is not None and self._usb_dialog.console is console:
+                self._usb_dialog.refresh()
+            return False
+
+        GLib.idle_add(update)
+
+    def _on_console_usb_plugged(self, key, device_key, device_label):
+        """Offer the new device to the guest, the way Workstation does."""
+
+        def ask():
+            if self._closing or not self.config.get("usb_autoprompt", True):
+                return False
+            if self._usb_prompt is not None:
+                return False  # one question at a time
+            console = self.consoles.get(key)
+            if console is None or not getattr(console, "connected", False):
+                return False
+            # Every open SPICE session sees the same plug event, so only the
+            # console being looked at is allowed to ask about it.
+            window = self._popouts.get(key)
+            if window is not None:
+                if not window.is_active():
+                    return False
+            elif console is not self.current_console() or not self.is_active():
+                return False
+            if console.usb_channels() == 0:
+                return False
+
+            guest = self.sidebar.guests.get(key)
+            self._usb_prompt = UsbPlugPrompt(
+                window or self,
+                guest.label if guest is not None else "this VM",
+                device_label,
+                lambda connect, stop: self._usb_prompt_answered(
+                    key, device_key, connect, stop
+                ),
+            )
+            return False
+
+        GLib.idle_add(ask)
+
+    def _usb_prompt_answered(self, key, device_key, connect, stop_asking):
+        self._usb_prompt = None
+        if stop_asking:
+            self.config["usb_autoprompt"] = False
+            self.config.save()
+            self.set_status(
+                "USB devices will not be offered again (Preferences -> Console)"
+            )
+        if not connect:
+            return
+        console = self.consoles.get(key)
+        if console is None or getattr(console, "usb", None) is None:
+            return
+        console.usb.connect_device(
+            device_key,
+            lambda ok, message: self._usb_result(console, device_key, ok, message),
+        )
 
     def _refresh_guest_agent_indicator(self, guest):
         """Ping the QEMU guest agent for the selected guest, off-thread."""
@@ -2218,6 +2523,7 @@ class MainWindow(Gtk.Window):
         self._refresh_snapshot_state(guest)
         self._update_audio_indicator(console)
         self._update_clipboard_indicator(console)
+        self._update_usb_indicator(console)
         self._ensure_config_loaded(guest)
 
     def _ensure_config_loaded(self, guest):
@@ -3009,6 +3315,10 @@ class MainWindow(Gtk.Window):
                     k, reason
                 ),
                 on_reconnect=lambda k=guest.key: self.reconnect_console(k),
+                on_usb=lambda k=guest.key: self._on_console_usb(k),
+                on_usb_plugged=lambda device_key, label, k=guest.key: (
+                    self._on_console_usb_plugged(k, device_key, label)
+                ),
             )
         else:
             console = VncConsole(
@@ -3400,9 +3710,13 @@ class MainWindow(Gtk.Window):
             return
         self._update_audio_indicator(console)
         self._update_clipboard_indicator(console)
+        self._update_usb_indicator(console)
 
     def _shutdown_console(self, console):
         key = getattr(console, "guest_key", None)
+        if self._usb_dialog is not None and self._usb_dialog.console is console:
+            # Its device list belongs to a session that is about to end.
+            self._usb_dialog.destroy()
         if (
             key
             and getattr(console, "protocol", "") == "spice"

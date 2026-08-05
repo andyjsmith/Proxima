@@ -330,6 +330,30 @@ def audio_is_spice(audio_value):
     return "driver=spice" in str(audio_value).replace(" ", "").lower()
 
 
+def spice_usb_ports(config):
+    """The 'usbN' config keys that are SPICE redirection ports.
+
+    Proxmox writes one line per port -- 'usb0: spice' -- and QEMU turns each
+    into a usb-redir device. A VM with none cannot accept a redirected
+    device no matter what the client offers, and Proxmox adds none by
+    default, so an empty list is the usual reason redirection is greyed out.
+
+    Passthrough entries ('usb0: host=1234:5678') are deliberately not
+    counted: they are the host's own device wired straight into the guest by
+    the hypervisor, which is a different feature that happens to share the
+    key.
+    """
+    ports = []
+    for key, value in (config or {}).items():
+        if not str(key).startswith("usb"):
+            continue
+        if not str(key)[3:].isdigit():
+            continue
+        if str(value).strip().split(",")[0].strip().lower() == "spice":
+            ports.append(str(key))
+    return sorted(ports)
+
+
 def parse_spice_clients(text):
     """Read QEMU's 'info spice' output.
 

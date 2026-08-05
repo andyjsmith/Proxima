@@ -2,7 +2,12 @@
 
 import pytest
 
-from proxima.api.models import parse_spice_clients, valid_guest_name, vga_is_spice
+from proxima.api.models import (
+    parse_spice_clients,
+    spice_usb_ports,
+    valid_guest_name,
+    vga_is_spice,
+)
 
 # The vga -> SPICE rule. VirtIO-GPU is plain 'virtio' in the config, which is
 # exactly the value that must not be mistaken for a VNC-only adapter.
@@ -31,6 +36,30 @@ VGA_CASES = [
 )
 def test_vga_is_spice(value, expected):
     assert vga_is_spice(value) is expected
+
+
+# Which 'usbN' lines are redirection ports. A passthrough entry shares the
+# key and is not one: the hypervisor already owns that device.
+USB_CASES = [
+    ({"usb0": "spice"}, ["usb0"], "a redirection port"),
+    ({"usb2": " SPICE "}, ["usb2"], "case and whitespace tolerated"),
+    ({"usb0": "host=1234:5678"}, [], "passthrough is not redirection"),
+    ({"usb0": "host=1-4,usb3=1"}, [], "passthrough by port"),
+    ({"usb0": "spice", "usb1": "spice"}, ["usb0", "usb1"], "two ports"),
+    ({"usbx": "spice"}, [], "not a numbered usb key"),
+    ({"vga": "qxl", "net0": "virtio"}, [], "nothing to do with USB"),
+    ({}, [], "empty config"),
+    (None, [], "no config at all"),
+]
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [(config, expected) for config, expected, _ in USB_CASES],
+    ids=[note for _, _, note in USB_CASES],
+)
+def test_spice_usb_ports(config, expected):
+    assert spice_usb_ports(config) == expected
 
 
 @pytest.mark.parametrize("name", ["web 01", "web/01", "-web01", "web01-", ""])
