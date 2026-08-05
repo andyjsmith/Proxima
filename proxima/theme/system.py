@@ -85,10 +85,13 @@ def _gsettings_dark():
         source = Gio.SettingsSchemaSource.get_default()
         if source is None:
             return None
-        if source.lookup("org.gnome.desktop.interface", True) is None:
+        schema = source.lookup("org.gnome.desktop.interface", True)
+        if schema is None:
             return None
         settings = Gio.Settings.new("org.gnome.desktop.interface")
-        keys = settings.list_keys()
+        # The schema's key list, not Gio.Settings.list_keys(): the latter is
+        # deprecated, and the schema is already in hand from the lookup.
+        keys = schema.list_keys()
         if "color-scheme" in keys:
             scheme = settings.get_string("color-scheme")
             if scheme == "prefer-dark":
