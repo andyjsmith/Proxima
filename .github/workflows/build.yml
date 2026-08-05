@@ -268,6 +268,15 @@ jobs:
         #
         # --include-raw-dir, not --include-data-dir: the latter quietly drops
         # the DLLs, leaving loader and plugin directories that do nothing.
+        #
+        # --file-description is what Windows shows for a running program: the
+        # taskbar's jump list, Task Manager's Name column, the UAC prompt.
+        # Without it all three fall back to "proxima.exe" -- product-name does
+        # not stand in for it.
+        #
+        # Nothing below may carry a "#" comment between the backticks: a
+        # comment ends the line continuation, and every argument after it
+        # would be run as its own command.
         shell: pwsh
         run: |
           Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
@@ -296,6 +305,7 @@ jobs:
             --company-name=Proxima `
             --product-name=Proxima `
             --product-version=0.1.0 `
+            "--file-description=Proxima" `
             --windows-icon-from-ico=packaging/proxima.ico `
             --windows-console-mode=disable `
             --report=build/nuitka-report.xml `
