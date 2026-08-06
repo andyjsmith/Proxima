@@ -240,3 +240,60 @@ def test_the_menu_explains_a_guest_with_no_port(window):
         assert any("usb0: spice" in text for text in labels), labels
     finally:
         remove(window, console)
+
+
+# -- the host driver ----------------------------------------------------
+
+
+def blocked_manager():
+    """A UsbRedirection as it is on a Windows box with no UsbDk."""
+    redirection = UsbRedirection.__new__(UsbRedirection)
+    redirection.blocked = True
+    redirection.advice = "the UsbDk driver is not installed"
+    redirection.note = ""
+    redirection.manager = object()
+    redirection._known = {}
+    redirection._busy = set()
+    redirection._settled = True
+    redirection.on_changed = lambda: None
+    redirection.on_plugged = lambda key, label: None
+    redirection.on_error = lambda message: None
+    return redirection
+
+
+def test_without_the_driver_no_device_offers_to_connect():
+    """spice-gtk says yes right up until it claims the device.
+
+    So the check has to happen here instead: a switch that flips and then
+    silently does nothing reads as "it worked".
+    """
+    redirection = blocked_manager()
+    allowed, reason = redirection._can_redirect(object())
+    assert not allowed
+    assert "UsbDk" in reason, reason
+
+
+def test_without_the_driver_connecting_is_refused_with_a_reason():
+    redirection = blocked_manager()
+    answers = []
+    redirection.connect_device("some device", lambda ok, msg: answers.append((ok, msg)))
+    assert len(answers) == 1
+    ok, message = answers[0]
+    assert not ok
+    assert "UsbDk" in message, message
+
+
+def test_without_the_driver_plugging_something_in_asks_nothing():
+    """The prompt is an offer, and there is nothing to offer."""
+    redirection = blocked_manager()
+    asked = []
+    redirection.on_plugged = lambda key, label: asked.append(key)
+
+    class _Device:
+        @staticmethod
+        def get_description(_format=None):
+            return "Acme Stick [1234:5678] at 1-2"
+
+    redirection._on_device_added(None, _Device())
+    assert asked == [], "a device was offered to the guest with no driver to move it"
+    assert redirection._known, "the device should still be listed, just not offered"

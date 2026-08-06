@@ -559,3 +559,51 @@ def test_returning_to_the_window_regrabs_under_the_pointer():
     console._on_window_active_changed()
     assert not display.focused, "leaving the window handed the keyboard back over"
     assert display.properties["grab-keyboard"] is False
+
+
+def test_emptying_a_split_pane_gives_the_window_back(window):
+    """Close the last tab on one side and the split closes with it.
+
+    Pane 0 used to be pinned visible, so closing its last tab while the
+    other pane still had one left half the window as a permanent blank --
+    a split with nothing on one side of it.
+    """
+    window.open_console(STOPPED)
+    pump_until(lambda: STOPPED in window.tabs, 6)
+    window.open_console(key_for(101))
+    pump_until(lambda: key_for(101) in window.tabs, 6)
+    pump(0.4)
+    try:
+        window._split_console()
+        pump(0.5)
+        assert window.panes.pane_count() == 2, "the split did not open"
+
+        # Whichever guest stayed behind in pane 0 is the one to close.
+        primary = window.panes.primary
+        remaining = primary.get_children()
+        assert len(remaining) == 1, "expected one tab left in the first pane"
+        stayed = remaining[0]
+        moved = [p for p in window.panes.all_pages() if p is not stayed][0]
+
+        window.close_console_widget(stayed)
+        pump(0.5)
+
+        assert window.panes.pane_count() == 1, "emptying one side left the split open"
+        assert not primary.get_visible(), "the empty pane is still taking up room"
+        assert window.panes.notebook_of(moved) is not None, (
+            "the surviving console lost its pane"
+        )
+        assert window.panes.current_page() is moved, (
+            "the window cannot see the console that is actually on screen"
+        )
+
+        # And the last one closing puts the default pane back, so the next
+        # console has somewhere to land.
+        window.close_console_widget(moved)
+        pump(0.5)
+        assert primary.get_visible(), "closing everything left no pane to open into"
+    finally:
+        for key in list(window.tabs):
+            window.close_console(key)
+        window._gather_consoles()
+        pump(0.4)

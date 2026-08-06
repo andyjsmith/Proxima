@@ -112,11 +112,63 @@ def test_only_the_last_few_runs_are_kept(tmp_path):
 
     logs.prune(tmp_path, keep=5)
 
-    remaining = sorted(p.name for p in tmp_path.glob(f"{logs.PREFIX}*{logs.SUFFIX}"))
+    remaining = sorted(p.name for p in tmp_path.glob(f"{logs.PREFIX}*"))
     assert len(remaining) == 5, remaining
     # The five kept are the newest five, by the timestamp in the name.
     assert remaining[0].endswith("20260104-000000.log")
     assert (tmp_path / "notes.txt").exists(), "pruning ate a file that was not a log"
+
+
+def test_a_long_run_ages_out_as_one_run_not_as_many(tmp_path):
+    """A run that rolled its file over is still one run.
+
+    Counting the rolled chunks as runs of their own would push four real
+    runs out of a five-run directory the first time somebody left a console
+    open long enough to fill 10 MB.
+    """
+    for index in range(3):
+        stamp = f"2026010{index}-000000"
+        (tmp_path / f"{logs.PREFIX}{stamp}{logs.SUFFIX}").write_text("x")
+        (tmp_path / f"{logs.PREFIX}{stamp}{logs.SUFFIX}.1").write_text("x")
+
+    logs.prune(tmp_path, keep=2)
+
+    kept = sorted(p.name for p in tmp_path.iterdir())
+    assert len(kept) == 4, kept
+    assert all("20260100" not in name for name in kept), (
+        f"the oldest run was not removed whole: {kept}"
+    )
+    assert f"{logs.PREFIX}20260102-000000{logs.SUFFIX}.1" in kept, (
+        "a surviving run lost its rolled-over chunk"
+    )
+
+
+def test_the_file_handler_rolls_over_rather_than_growing_for_ever(tmp_path):
+    """The cap that stops a fortnight-long session filling a disk."""
+    import logging.handlers
+
+    assert logs.MAX_BYTES <= 16 * 1024 * 1024, "the per-run cap is too generous"
+    handler = logging.handlers.RotatingFileHandler(
+        tmp_path / f"{logs.PREFIX}20260101-000000{logs.SUFFIX}",
+        encoding="utf-8",
+        maxBytes=200,
+        backupCount=logs.KEEP_CHUNKS,
+    )
+    logger = logging.getLogger("proxima.test.rollover")
+    logger.propagate = False
+    logger.addHandler(handler)
+    try:
+        for index in range(200):
+            logger.error("a line that takes up room, number %d", index)
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+
+    files = sorted(p.name for p in tmp_path.iterdir())
+    assert len(files) == logs.KEEP_CHUNKS + 1, files
+    assert all(p.stat().st_size < 2000 for p in tmp_path.iterdir()), (
+        "the log grew past its cap"
+    )
 
 
 def test_pruning_an_unwritable_directory_does_not_raise(tmp_path):

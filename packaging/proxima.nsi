@@ -43,12 +43,29 @@ SetCompressor /SOLID lzma
 !define MULTIUSER_INSTALLMODE_INSTDIR_REGISTRY_KEY \
   "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 !define MULTIUSER_INSTALLMODE_INSTDIR_REGISTRY_VALUENAME "InstallLocation"
+!define MULTIUSER_PAGE_CUSTOMFUNCTION_LEAVE ElevateForAllUsers
 !include MultiUser.nsh
+
+; MultiUser.nsh has just set "highest" for us, which asks Windows for
+; administrator rights before the first page is drawn -- so every install
+; began with a UAC prompt, including the per-user one that needs nothing of
+; the sort. Overridden here, deliberately after the include: the installer
+; starts as the user, and ElevateForAllUsers relaunches it elevated only if
+; the all-users option is actually chosen.
+;
+; The define above still has to be Highest rather than Standard, because
+; that is what decides whether the all-users option exists at all.
+RequestExecutionLevel user
 
 !include MUI2.nsh
 !include FileFunc.nsh
 !include LogicLib.nsh
 !include Sections.nsh
+
+; The uninstaller needs its own copies of these; FileFunc only defines the
+; un. variants when they are asked for.
+!insertmacro un.GetParameters
+!insertmacro un.GetOptions
 
 Name "${APPNAME} ${VERSION}"
 OutFile "${OUTFILE}"
@@ -83,6 +100,68 @@ VIAddVersionKey "LegalCopyright" ""
 
 Function un.onInit
   !insertmacro MULTIUSER_UNINIT
+
+  ; The installer no longer asks for administrator rights up front, and the
+  ; uninstaller is built with the same manifest -- so removing an all-users
+  ; installation has to ask for them here, or it would fail halfway through
+  ; with the files still in Program Files.
+  ${If} $MultiUser.InstallMode == "AllUsers"
+    ClearErrors
+    WriteRegStr HKLM "Software\${APPNAME}" ".probe" "1"
+    DeleteRegValue HKLM "Software\${APPNAME}" ".probe"
+    DeleteRegKey /ifempty HKLM "Software\${APPNAME}"
+    ${If} ${Errors}
+      ; Marked, so an elevated copy that still cannot write HKLM gives up
+      ; and tries the uninstall rather than asking again for ever.
+      ${un.GetParameters} $R0
+      ClearErrors
+      ${un.GetOptions} $R0 "/elevated" $R1
+      ${If} ${Errors}
+        ClearErrors
+        ExecShellWait "runas" "$INSTDIR\uninstall.exe" "/AllUsers /elevated"
+        ${IfNot} ${Errors}
+          Quit  ; the elevated copy is doing it
+        ${EndIf}
+        MessageBox MB_OK|MB_ICONEXCLAMATION \
+          "Removing ${APPNAME} needs administrator rights."
+        Quit
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+; Called as the install-mode page is left, once $MultiUser.InstallMode says
+; which way it went. Leaving is also the last moment where staying put is
+; still possible: Abort here keeps the page up, so somebody who dismisses
+; the elevation prompt lands back on the choice rather than on an
+; installation that quietly did something else.
+Function ElevateForAllUsers
+  ${If} $MultiUser.InstallMode != "AllUsers"
+    Return
+  ${EndIf}
+
+  ; Whether we can write where an all-users install has to write, which is
+  ; the question that actually matters -- rather than asking Windows about
+  ; token elevation and hoping the answer means the same thing.
+  ClearErrors
+  WriteRegStr HKLM "Software\${APPNAME}" ".probe" "1"
+  DeleteRegValue HKLM "Software\${APPNAME}" ".probe"
+  DeleteRegKey /ifempty HKLM "Software\${APPNAME}"
+  ${IfNot} ${Errors}
+    Return  ; already elevated, or somehow allowed; carry on
+  ${EndIf}
+
+  ; Hand over to an elevated copy of ourselves, told which mode to use so
+  ; the choice does not have to be made twice.
+  ClearErrors
+  ExecShellWait "runas" "$EXEPATH" "/AllUsers"
+  ${If} ${Errors}
+    MessageBox MB_OK|MB_ICONEXCLAMATION \
+      "Installing ${APPNAME} for all users needs administrator rights.$\n$\n\
+       Choose 'Only for me' to install without them."
+    Abort  ; stay on the page so the other option is one click away
+  ${EndIf}
+  Quit  ; the elevated copy has taken it from here
 FunctionEnd
 
 Section "Proxima" SecMain

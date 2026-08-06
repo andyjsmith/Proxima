@@ -25,7 +25,14 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from .decoders import gstreamer_report
-from .spicelib import AVAILABLE, SPICE_GLIB_NS, SpiceGLib, SpiceGtk, connect_signal
+from .spicelib import (
+    AVAILABLE,
+    MISSING_LIBRARY,
+    SPICE_GLIB_NS,
+    SpiceGLib,
+    SpiceGtk,
+    connect_signal,
+)
 from .status_panel import (
     CONNECTING_ICON,
     CONNECTING_TITLE,
@@ -385,7 +392,15 @@ class SpiceConsole(Gtk.Box):
         )
 
     def _build_session(self):
-        session = SpiceGLib.Session()
+        try:
+            session = SpiceGLib.Session()
+        except TypeError as exc:
+            # "could not get a reference to type class": the typelib is
+            # there but the library behind it is not, so every SPICE GType
+            # resolves to void. Nothing about that error says "a file is
+            # missing", so it is said here instead.
+            log.error("%s (%s)", MISSING_LIBRARY, exc)
+            raise RuntimeError(MISSING_LIBRARY) from exc
         params = self.params
 
         if not self.enable_audio:

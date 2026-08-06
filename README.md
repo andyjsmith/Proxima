@@ -18,7 +18,10 @@ spice-gtk come from pacman and will not load anywhere else.
 ## Logs
 
 Every run writes one, and **Help -> Open Log Folder** is the short way to
-find it. The last five runs are kept.
+find it. The last five runs are kept, and a single run is capped at 10 MB
+with one previous chunk retained -- so a window left open for a fortnight
+keeps its recent past without growing without limit. A run's chunks age out
+together, so a long one never pushes four short ones out of the directory.
 
 | | |
 | --- | --- |
@@ -228,6 +231,13 @@ offer the driver. It is one tickbox on the components page, unticked
 automatically when the machine already has UsbDk, and the uninstaller
 deliberately leaves the driver alone -- virt-viewer and friends use the same
 one.
+
+The installer runs as the invoking user and asks for administrator rights
+only when they are actually needed: choosing "all users" relaunches it
+elevated at that moment, and the uninstaller does the same for an all-users
+installation. A per-user install never sees a UAC prompt from Proxima
+itself. (The driver's own MSI raises one when it is installed, whichever
+mode is in use -- a kernel driver is per-machine either way.)
 
 The application icon is `packaging/proxima.png`. After changing it, run
 `python3 tools/make_icon.py` to rebuild `packaging/proxima.ico`, which is

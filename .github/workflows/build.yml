@@ -177,6 +177,11 @@ jobs:
           xvfb-run -a ./build/proxima.dist/proxima --diagnose | tee diagnose.txt
           grep -q "SPICE widget available: True" diagnose.txt \
             || { echo "::error::the build has no working SPICE widget"; exit 1; }
+          # The one that matters. A typelib with no library behind it still
+          # imports, so the line above stays True for a bundle that cannot
+          # open a single console -- this one actually builds a session.
+          grep -q "SPICE session usable: True" diagnose.txt \
+            || { echo "::error::SPICE types cannot be created in this bundle"; exit 1; }
           # A bundle that cannot read its own pyproject.toml still starts, and
           # then calls itself 0.0.0+unknown in the About box and in every bug
           # report that follows.
@@ -337,6 +342,12 @@ jobs:
           $out
           if ($out -cnotmatch "SPICE widget available: True") {
             Write-Output "::error::the build has no working SPICE widget"; exit 1
+          }
+          # The one that matters. A typelib with no library behind it still
+          # imports, so the check above stays True for a bundle that cannot
+          # open a single console -- this one actually builds a session.
+          if ($out -cnotmatch "SPICE session usable: True") {
+            Write-Output "::error::SPICE types cannot be created in this bundle"; exit 1
           }
           if ($out -cmatch "0\.0\.0\+unknown") {
             Write-Output "::error::the bundle cannot read its own version"; exit 1

@@ -13,6 +13,21 @@ every machine already has -- is copied in beside the executable.
 
     python3 tools/bundle_deps.py build/proxima.dist --prefix /usr
 
+Typelibs are the other half of the same problem, and a nastier one. A
+typelib is data, not code: SpiceClientGLib-2.0.typelib merely *names*
+libspice-client-glib-2.0-8.dll, and nothing in the program links against it,
+so Nuitka has no reason to copy it. What makes this worth a comment is how
+it fails. The import still works -- `from gi.repository import
+SpiceClientGLib` succeeds against the typelib alone -- so every "is SPICE
+available?" check says yes. Only when something asks for an actual GType
+does g_typelib_symbol() come up empty, every type resolves to void, and
+constructing one raises
+
+    TypeError: could not get a reference to type class
+
+from somewhere with no obvious connection to a missing file. So the
+libraries the bundled typelibs name are treated as roots here too.
+
 On Linux the plugins are also given an RPATH back to the top of the bundle,
 because the loader does not look next to the executable for a library that a
 plugin two directories down asked for.
@@ -129,6 +144,66 @@ def plugin_files(root, windows):
                 yield path
 
 
+def typelib_library_names(path, windows):
+    """The shared libraries a .typelib names, by reading its string pool.
+
+    The field is properly reachable through GIRepository, but asking for it
+    means requiring the namespace -- loading the very library that may not
+    be there. The names sit in the typelib as plain nul-terminated strings,
+    so they are read directly instead. A false positive costs nothing: only
+    names that resolve to a real file in the prefix are ever copied.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        print(f"  ! could not read {path.name}: {exc}")
+        return []
+    names = []
+    for found in re.findall(rb"[ -~]{4,}", data):
+        # A typelib may name several, comma separated.
+        for candidate in found.decode("ascii", "replace").split(","):
+            if looks_like_library(candidate.strip(), windows):
+                names.append(candidate.strip())
+    return names
+
+
+def looks_like_library(name, windows):
+    """Whether a string out of a typelib could be a library filename."""
+    if not name or "/" in name or "\\" in name:
+        return False
+    if windows:
+        return name.lower().endswith(".dll")
+    return ".so" in name
+
+
+def resolve_in_prefix(name, prefix, windows):
+    """Where a library named by a typelib actually lives, or None."""
+    if windows:
+        candidate = prefix / "bin" / name
+        return candidate if candidate.exists() else None
+    for libdir in ("lib", "lib64", "lib/x86_64-linux-gnu", "usr/lib"):
+        candidate = prefix / libdir / name
+        if candidate.exists():
+            return candidate
+    # Multiarch layouts vary more than is worth enumerating.
+    for candidate in prefix.glob(f"lib*/**/{name}"):
+        return candidate
+    return None
+
+
+def typelib_libraries(root, prefix, windows):
+    """Every library the bundle's typelibs name, resolved in the prefix."""
+    found = {}
+    for typelib in root.rglob("*.typelib"):
+        for name in typelib_library_names(typelib, windows):
+            if name in found or is_system_library(name, windows):
+                continue
+            resolved = resolve_in_prefix(name, prefix, windows)
+            if resolved is not None:
+                found[name] = resolved
+    return found
+
+
 def dependencies_windows(path, prefix):
     """Ask objdump what a DLL imports, and resolve it inside the prefix."""
     try:
@@ -228,6 +303,20 @@ def main(argv=None):
     queue = list(plugins)
     seen = set()
     copied = []
+
+    # The libraries behind the typelibs go in first, as roots: nothing links
+    # to them, so nothing else would ever bring them in. See the module
+    # docstring for what their absence looks like.
+    wanted = typelib_libraries(root, prefix, windows)
+    print(f"[deps] {len(wanted)} librar(y|ies) named by bundled typelibs")
+    for name, source in sorted(wanted.items()):
+        destination = root / source.name
+        if source.name.lower() not in present:
+            shutil.copy2(source, destination)
+            present.add(source.name.lower())
+            copied.append(source.name)
+            print(f"       + {name}")
+        queue.append(destination)
     while queue:
         path = queue.pop()
         if path in seen:

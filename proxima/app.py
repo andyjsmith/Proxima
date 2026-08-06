@@ -83,7 +83,15 @@ def main(argv=None):
         print("--- GStreamer ---")
         for line in gstreamer_report():
             print(line)
+        # Two separate facts, deliberately. The typelibs importing is what
+        # "available" used to mean, and it is true even when the libraries
+        # behind them are missing from a bundle -- which is how a build that
+        # cannot open a single SPICE console passed its own smoke test.
+        from .console import spicelib
+
+        ok, detail = spicelib.selftest()
         print(f"\nSPICE widget available: {SPICE_AVAILABLE}")
+        print(f"SPICE session usable: {ok} -- {detail}")
         print(f"VNC fallback available: {VNC_AVAILABLE}")
         return 0
 

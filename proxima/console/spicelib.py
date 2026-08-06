@@ -41,3 +41,37 @@ def connect_signal(obj, name, handler):
     and disconnect, and which one wins depends on the PyGObject build.
     """
     return GObject.Object.connect(obj, name, handler)
+
+
+# What a session that cannot be built actually means, said in terms of the
+# thing to go and fix rather than in terms of GObject's type system.
+MISSING_LIBRARY = (
+    "spice-gtk's typelib is present but its library is not, so no SPICE "
+    "type could be created. A packaged build is missing "
+    "libspice-client-glib; run 'proxima --diagnose' for the detail."
+)
+
+
+def selftest():
+    """(ok, detail) for "can this installation actually build a session?".
+
+    Importing the namespace is not the same question, and the difference is
+    exactly the trap: a typelib with no library behind it imports perfectly
+    and then fails to produce a single object. Construction is the only
+    honest test, and it costs one throwaway object.
+    """
+    if SpiceGLib is None:
+        return False, "the SpiceClientGLib typelib is not installed"
+    try:
+        SpiceGLib.Session()
+    except TypeError as exc:
+        # "could not get a reference to type class" -- the GType resolved to
+        # void because g_typelib_symbol() found no library to ask.
+        return False, f"{MISSING_LIBRARY} ({exc})"
+    except Exception as exc:
+        return False, f"could not create a SPICE session: {exc}"
+    if SpiceGtk is None:
+        return False, "the SpiceClientGtk typelib is not installed"
+    if getattr(SpiceGtk, "Display", None) is None:
+        return False, "spice-gtk has no Display widget"
+    return True, "a session and a display widget can be created"

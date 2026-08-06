@@ -70,6 +70,11 @@ class SplitView(Gtk.Box):
         self.left.pack1(self.notebooks[0], True, False)
         self.left.pack2(self.notebooks[2], True, False)
 
+        # no-show-all on both sides: the window's own show_all() must not be
+        # able to reveal a pane that has nothing in it, and once pane 0 can
+        # be hidden that applies to the left as much as to the right.
+        self.left.set_no_show_all(True)
+
         self.right = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
         self.right.pack1(self.notebooks[1], True, False)
         self.right.pack2(self.notebooks[3], True, False)
@@ -80,7 +85,8 @@ class SplitView(Gtk.Box):
         self.root.pack2(self.right, True, False)
         self.pack_start(self.root, True, True, 0)
 
-        # Pane 0 is the one that always exists; it holds the Summary page.
+        # Pane 0 is where consoles land, so it is the one showing at rest.
+        self.left.show()
         self.notebooks[0].show()
         self.active = self.notebooks[0]
         self._suppress = False
@@ -106,28 +112,40 @@ class SplitView(Gtk.Box):
     def _sync_visibility(self):
         """Show or hide the containers around whatever has pages in it.
 
-        Pane 0 stays visible whatever happens: it owns the Summary page and
-        is where consoles land by default. Any other pane with nothing in it
-        goes away, which is how a pane closes -- drag its last tab out and
-        it stops taking up room.
+        A pane with nothing in it goes away, which is how a pane closes --
+        close or drag out its last tab and it stops taking up room.
+
+        Pane 0 is only special when the whole window is empty. It is where
+        consoles land by default, so it has to exist for one to land in; but
+        an empty pane 0 next to a pane that still has tabs is not a default,
+        it is a hole taking up half the window.
         """
         changed = False
+        empty = not any(n.get_n_pages() for n in self.notebooks)
         for index, notebook in enumerate(self.notebooks):
-            wanted = index == 0 or notebook.get_n_pages() > 0
+            wanted = notebook.get_n_pages() > 0 or (index == 0 and empty)
             if notebook.get_visible() != wanted:
                 notebook.set_visible(wanted)
                 changed = True
 
-        right_wanted = any(self.notebooks[i].get_visible() for i in (1, 3))
-        if self.right.get_visible() != right_wanted:
-            self.right.set_visible(right_wanted)
-            changed = True
+        for paned, pair in ((self.left, (0, 2)), (self.right, (1, 3))):
+            wanted = any(self.notebooks[i].get_visible() for i in pair)
+            if paned.get_visible() != wanted:
+                paned.set_visible(wanted)
+                changed = True
 
         if changed:
             self._place_dividers()
             if self.active is not None and not self.active.get_visible():
-                self.active = self.primary
+                self.active = self._first_visible()
             self.emit("panes-changed")
+
+    def _first_visible(self):
+        """Somewhere to aim at, for when the pane in use has just gone."""
+        for notebook in self.notebooks:
+            if notebook.get_visible():
+                return notebook
+        return self.primary
 
     def _place_dividers(self):
         """Give a pane that has just appeared half of what it splits."""
@@ -210,6 +228,11 @@ class SplitView(Gtk.Box):
         if label is not None:
             label.show_all()
         notebook.show()
+        # The paned around it as well: both are hideable, and a shown
+        # notebook inside a hidden container is still not on screen.
+        for paned, pair in ((self.left, (0, 2)), (self.right, (1, 3))):
+            if notebook in (self.notebooks[i] for i in pair):
+                paned.show()
 
     # -- pages ---------------------------------------------------------
 
@@ -232,6 +255,8 @@ class SplitView(Gtk.Box):
     def append(self, page, label, notebook=None):
         """Add a page to a pane -- the active one unless told otherwise."""
         notebook = notebook or self.active or self.primary
+        # _present shows whichever pane this lands in, so a hidden pane 0 is
+        # a fine target: it comes back for the console being put into it.
         index = notebook.append_page(page, label)
         notebook.set_tab_reorderable(page, True)
         notebook.set_tab_detachable(page, True)
@@ -278,7 +303,10 @@ class SplitView(Gtk.Box):
         """The page in front, in the pane that was last used."""
         notebook = self.active or self.primary
         if not notebook.get_visible():
-            notebook = self.primary
+            # Pane 0 can be the hidden one now, so falling back to it is not
+            # enough -- that would report "no page" while a console is on
+            # screen in another pane.
+            notebook = self._first_visible()
         index = notebook.get_current_page()
         if index < 0:
             return None

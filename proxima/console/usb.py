@@ -114,6 +114,11 @@ class UsbRedirection:
         self.manager = None
         self.note = ""  # why there is no USB redirection here at all
         self.advice = ""  # why it is there but will not work
+        # Set when the host side cannot claim a device however healthy the
+        # rest of it looks. Everything the UI offers is switched off by it:
+        # a switch that flips and then silently does nothing is a worse
+        # answer than a switch that is plainly unavailable.
+        self.blocked = False
         self._handlers = []
         self._busy = set()
         self._known = {}  # key -> SpiceUsbDevice, maintained by the signals
@@ -152,6 +157,7 @@ class UsbRedirection:
 
         if usbdk_installed() is False:
             self.advice = USBDK_ADVICE
+            self.blocked = True
 
     def _seed(self):
         """Take the devices already plugged in when the session was made.
@@ -245,6 +251,11 @@ class UsbRedirection:
 
     def _can_redirect(self, device):
         """(allowed, reason). spice-gtk reports the refusal as a GError."""
+        # spice-gtk will happily say yes here without the host driver and
+        # then fail at the moment it claims the device, so the driver is
+        # checked first -- otherwise the UI offers a switch that cannot work.
+        if self.blocked:
+            return False, self.advice or "USB redirection is not available"
         try:
             return bool(self.manager.can_redirect_device(device)), ""
         except GLib.Error as exc:
@@ -263,6 +274,9 @@ class UsbRedirection:
     def connect_device(self, key, on_done=None):
         """Hand a host device to the guest. Reports through on_done(ok, msg)."""
         done = on_done or (lambda ok, message: None)
+        if self.blocked:
+            done(False, self.advice or "USB redirection is not available")
+            return
         device = self._lookup(key)
         if device is None:
             done(False, "the device is no longer plugged in")
@@ -377,7 +391,9 @@ class UsbRedirection:
         if not self._settled:
             self._arm_settle()
             return
-        if key is None:
+        # Nothing to offer when the answer could only be "no": asking to
+        # connect a device that cannot be connected is worse than silence.
+        if key is None or self.blocked:
             return
         allowed, _reason = self._can_redirect(device)
         if allowed:

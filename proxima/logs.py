@@ -12,6 +12,11 @@ under the conditions that make it necessary:
   * One file per run rather than a rotating one. Runs are the unit a bug
     report is about ("I opened it, clicked the VM, nothing happened"), and a
     size-rotated file cuts across them. Old runs are pruned on the way in.
+  * A run is nonetheless capped. A console left open for a fortnight is a
+    normal way to use this program, and one file growing without limit for
+    all of it is not. Within a run the file rolls at MAX_BYTES keeping one
+    previous chunk, so the recent past survives and the distant past does
+    not; pruning then works on whole runs, chunks and all.
   * GLib's own messages are routed in as well. The most useful line in a
     SPICE fault is usually GSpice's, and it never passed through Python.
 
@@ -21,7 +26,9 @@ before anything else so that anything else can be logged.
 
 import contextlib
 import logging
+import logging.handlers
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -31,8 +38,20 @@ from pathlib import Path
 # Runs to keep, this one included.
 KEEP_RUNS = 5
 
+# Where one run's file rolls over, and how many rolled chunks it keeps. A
+# long-lived window therefore costs at most twice this, and the whole
+# directory at most KEEP_RUNS times that again.
+MAX_BYTES = 10 * 1024 * 1024
+KEEP_CHUNKS = 1
+
 PREFIX = "proxima-"
 SUFFIX = ".log"
+
+# proxima-20260805-143000.log, and the .1 that RotatingFileHandler makes of
+# it. Both belong to the same run and are pruned together.
+RUN_FILE = re.compile(
+    rf"^{re.escape(PREFIX)}(?P<stamp>\d{{8}}-\d{{6}}){re.escape(SUFFIX)}(\.\d+)?$"
+)
 
 ENV_DIR = "PROXIMA_LOG_DIR"
 ENV_LEVEL = "PROXIMA_LOG_LEVEL"
@@ -102,26 +121,32 @@ def _writable_dir():
 
 
 def prune(directory, keep=KEEP_RUNS):
-    """Delete all but the newest `keep` run logs. Returns how many went."""
+    """Delete all but the newest `keep` runs. Returns how many files went.
+
+    Runs, not files: a long run rolls its file over and the chunks belong
+    to it, so they age out together rather than counting as runs of their
+    own and pushing four genuine ones out of the directory.
+    """
+    runs = {}
     try:
-        # By name as well as by time: the name carries a fixed-width
-        # timestamp, so it breaks the tie when several runs share an mtime
-        # -- which is what happens on a filesystem with a coarse clock, and
-        # what would otherwise make "the newest five" arbitrary.
-        files = sorted(
-            (path for path in Path(directory).glob(f"{PREFIX}*{SUFFIX}")),
-            key=lambda path: (path.stat().st_mtime, path.name),
-            reverse=True,
-        )
+        for path in Path(directory).iterdir():
+            found = RUN_FILE.match(path.name)
+            if found and path.is_file():
+                runs.setdefault(found.group("stamp"), []).append(path)
     except OSError:
         return 0
+
+    # By the timestamp in the name: it is fixed width, so sorting it is
+    # sorting by time, and it does not care what the filesystem thinks the
+    # mtime is -- which on a coarse clock can be the same for every file.
     removed = 0
-    for path in files[max(keep, 0) :]:
-        try:
-            path.unlink()
-            removed += 1
-        except OSError:
-            continue
+    for stamp in sorted(runs, reverse=True)[max(keep, 0) :]:
+        for path in runs[stamp]:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                continue
     return removed
 
 
@@ -160,7 +185,13 @@ def setup(level=None, to_console=True):
         stamp = time.strftime("%Y%m%d-%H%M%S")
         path = directory / f"{PREFIX}{stamp}{SUFFIX}"
         try:
-            handler = logging.FileHandler(path, encoding="utf-8", delay=False)
+            handler = logging.handlers.RotatingFileHandler(
+                path,
+                encoding="utf-8",
+                maxBytes=MAX_BYTES,
+                backupCount=KEEP_CHUNKS,
+                delay=False,
+            )
         except OSError:
             pass
         else:
