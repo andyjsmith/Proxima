@@ -13,9 +13,10 @@ import re
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import GLib, Gtk
 
 from ..theme import decorate as theme_decorate
+from . import desktop
 
 log = logging.getLogger(__name__)
 
@@ -96,7 +97,4 @@ class UpdateDialog(Gtk.Dialog):
         url = self.release.get("url")
         self.destroy()
         if response == self.DOWNLOAD and url:
-            try:
-                Gtk.show_uri_on_window(None, url, Gdk.CURRENT_TIME)
-            except Exception as exc:
-                log.warning("could not open %s: %s", url, exc)
+            desktop.open_uri(url)

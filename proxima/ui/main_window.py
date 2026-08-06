@@ -43,6 +43,7 @@ from ..theme import decorate as theme_decorate
 from ..theme import keep_active as theme_keep_active
 from ..theme.system import DarkModeWatcher
 from . import actions as action_defs
+from . import desktop
 from . import toolbar as toolbar_defs
 from .clone import CloneDialog
 from .console_tab import ConsoleTabLabel
@@ -4647,13 +4648,15 @@ class MainWindow(Gtk.Window):
         The first thing a bug report needs, and on Windows the folder is
         under AppData where nobody goes by accident.
         """
-        directory = logs.log_dir()
+        directory = Path(logs.log_dir())
         current = logs.current_log_file()
-        try:
-            Gtk.show_uri_on_window(self, Path(directory).as_uri(), Gdk.CURRENT_TIME)
-        except Exception as exc:
-            log.warning("could not open the log folder: %s", exc)
-            self._error_dialog("Could not open the log folder", str(directory))
+        if not desktop.open_folder(directory, parent=self):
+            # The path is worth showing either way: it can be pasted
+            # somewhere even when nothing here can open it.
+            self._error_dialog(
+                "Could not open the log folder",
+                f"The logs are in:\n\n{directory}",
+            )
             return
         self.set_status(f"Logs: {current or directory}")
 
