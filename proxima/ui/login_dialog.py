@@ -12,9 +12,11 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 
 from .. import secrets
-from ..api import AuthError, ProxmoxError, TwoFactorRequired
+from ..api import AuthError, ProxmoxError, TwoFactorRequired, certs
+from ..api.client import CertificateMismatch, CertificateUntrusted
 from ..api.connection import Connection, split_host
 from ..theme import decorate as theme_decorate
+from . import trust_dialog
 
 REALMS = [
     ("pam", "pam (Linux PAM)"),
@@ -76,13 +78,6 @@ class LoginDialog(Gtk.Dialog):
         self.otp_entry.set_activates_default(True)
         grid.attach(self.otp_entry, 1, 4, 1, 1)
 
-        self.verify_check = Gtk.CheckButton(label="Verify TLS certificate")
-        self.verify_check.set_active(bool(config.get("verify_ssl", False)))
-        self.verify_check.set_tooltip_text(
-            "Off by default: Proxmox uses a self-signed certificate"
-        )
-        content.pack_start(self.verify_check, False, False, 0)
-
         self.save_check = Gtk.CheckButton(label="Save connection")
         self.save_check.set_active(True)
         self.save_check.set_tooltip_text(
@@ -138,7 +133,6 @@ class LoginDialog(Gtk.Dialog):
             self.password_entry,
             self.otp_entry,
             self.realm_combo,
-            self.verify_check,
         ):
             widget.set_sensitive(not busy)
         self.save_check.set_sensitive(not busy)
@@ -183,7 +177,6 @@ class LoginDialog(Gtk.Dialog):
         realm = self.realm_combo.get_active_id() or "pam"
         password = self.password_entry.get_text()
         otp = self.otp_entry.get_text().strip()
-        verify = self.verify_check.get_active()
 
         self._set_busy(True, f"Connecting to {host}...")
 
@@ -193,13 +186,19 @@ class LoginDialog(Gtk.Dialog):
                 port=port,
                 username=username,
                 realm=realm,
-                verify_ssl=verify,
                 save=self.save_check.get_active(),
+                fingerprint=certs.pinned(self.config, host, port),
             )
             try:
                 connection.connect(password=password, otp=otp or None)
             except TwoFactorRequired as need:
                 GLib.idle_add(self._need_tfa, connection, username, realm, need)
+                return
+            except CertificateMismatch as changed:
+                GLib.idle_add(self._need_trust, changed, True, password, otp)
+                return
+            except CertificateUntrusted as unknown:
+                GLib.idle_add(self._need_trust, unknown, False, password, otp)
                 return
             except (AuthError, ProxmoxError) as exc:
                 GLib.idle_add(self._failed, str(exc))
@@ -238,6 +237,41 @@ class LoginDialog(Gtk.Dialog):
         threading.Thread(target=worker, daemon=True, name="proxmox-login-tfa").start()
         return False
 
+    def _need_trust(self, refusal, mismatch, password, otp):
+        """The server's certificate has to be approved before going on.
+
+        Asked on the main thread, and the whole attempt is made again
+        afterwards rather than resumed: the connection that raised this
+        never got as far as sending a credential, which is the point.
+        """
+        self._set_busy(False)
+        info = refusal.info or {}
+        if not info.get("sha256"):
+            self._set_message(
+                f"Could not read the certificate for {refusal.host}.", True
+            )
+            return False
+
+        expected = getattr(refusal, "expected", "")
+        if not trust_dialog.ask(
+            self, refusal.host, refusal.port, info, mismatch, expected
+        ):
+            self._set_message(
+                "The certificate was not trusted, so nothing was sent.", True
+            )
+            return False
+
+        certs.trust(self.config, refusal.host, refusal.port, info)
+        self.config.save()
+        self._retry(password, otp)
+        return False
+
+    def _retry(self, password, otp):
+        """Go round again now that the certificate is pinned."""
+        self.password_entry.set_text(password)
+        self.otp_entry.set_text(otp or "")
+        self._on_response(self, Gtk.ResponseType.OK)
+
     def _failed(self, message):
         self._set_busy(False)
         self._set_message(message, True)
@@ -252,7 +286,6 @@ class LoginDialog(Gtk.Dialog):
         self.config["host"] = connection.id
         self.config["username"] = connection.username
         self.config["realm"] = connection.realm
-        self.config["verify_ssl"] = connection.verify_ssl
         self.config.save()
         self._set_busy(False)
         self.response(Gtk.ResponseType.APPLY)

@@ -15,6 +15,36 @@ On Windows this must run under the MSYS2 UCRT64 Python
 (`C:/msys64/ucrt64/bin/python.exe`), not a python.org install: PyGObject and
 spice-gtk come from pacman and will not load anywhere else.
 
+## Certificates
+
+Proxmox signs its own certificate, so there is no public authority to vouch
+for it. Rather than turn checking off -- which is the usual answer, and
+means talking to anything that answers on port 8006 while holding root
+credentials -- Proxima does what ssh does:
+
+1. The first connection to a server shows you its certificate, including the
+   SHA-256 fingerprint. **Datacenter -> Certificates** in the Proxmox web
+   interface prints the same value, as does
+   `openssl x509 -fingerprint -sha256`, so it can be compared by eye.
+2. Accept it once and the fingerprint is pinned in the settings under
+   `trusted_certs`. Nothing asks again.
+3. If that server ever presents a different certificate, the connection
+   stops before any credential is sent and says so. That is a renewal, or it
+   is somebody in the middle, and nothing at this end can tell which -- so
+   the safe answer is the default one.
+
+There is no "skip the check" setting, deliberately: it would be set once,
+forgotten, and left on the one connection that carries root. A certificate
+that does chain to a public CA is verified normally and is not pinned, so
+renewing it changes nothing. A pinned certificate is not checked for
+hostname, because the fingerprint *is* the identity at that point -- and a
+Proxmox certificate frequently does not match the address you reach it on.
+
+The console's own connection is held to the same pin, so a VNC session
+cannot end up less checked than the API call that opened it. To be asked
+again about a server, delete its entry from `trusted_certs` in
+`settings.json`.
+
 ## Sending keys the host swallows
 
 Ctrl+Alt+Del is a toolbar button; its arrow, and **VM -> Send Key**, carry

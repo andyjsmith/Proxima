@@ -22,7 +22,10 @@ DEFAULTS = {
     "host": "",
     "username": "root",
     "realm": "pam",
-    "verify_ssl": False,
+    # host:port -> the certificate fingerprint approved for it. There is no
+    # setting for "do not check": an unrecognised certificate is shown to
+    # the user once and pinned from then on. See api/certs.py.
+    "trusted_certs": {},
     "save_credentials": False,  # ticket only; never the password
     # -- appearance ----------------------------------------------------
     # The GTK theme is not a setting: the stylesheet and the icons are drawn

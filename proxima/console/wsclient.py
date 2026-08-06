@@ -24,6 +24,8 @@ import ssl
 import struct
 import urllib.parse
 
+from ..api import certs
+
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 OP_CONTINUATION = 0x0
@@ -47,7 +49,12 @@ class WebSocketStream:
     """
 
     def __init__(
-        self, url, headers=None, verify_ssl=False, timeout=20, subprotocols=("binary",)
+        self,
+        url,
+        headers=None,
+        timeout=20,
+        subprotocols=("binary",),
+        fingerprint=None,
     ):
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme not in ("ws", "wss"):
@@ -69,10 +76,23 @@ class WebSocketStream:
 
         if parsed.scheme == "wss":
             context = ssl.create_default_context()
-            if not verify_ssl:
+            # A pinned fingerprint takes the place of CA verification, the
+            # same way it does for the API client -- and it has to, because
+            # this is the console's own connection to the same server. Left
+            # to CA verification it would refuse the certificate the user
+            # has already approved, and every VNC console would fail.
+            if fingerprint:
                 context.check_hostname = False
                 context.verify_mode = ssl.CERT_NONE
             raw = context.wrap_socket(raw, server_hostname=self.host)
+            if fingerprint:
+                presented = certs.fingerprint(raw.getpeercert(binary_form=True) or b"")
+                if presented != fingerprint:
+                    raw.close()
+                    raise WebSocketError(
+                        f"the certificate for {self.host} has changed since it "
+                        "was trusted; refusing to send the console ticket"
+                    )
 
         self.sock = raw
         self._handshake(headers or {}, subprotocols)

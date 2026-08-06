@@ -74,7 +74,7 @@ class VncConsole(Gtk.Box):
         password,
         title="console",
         on_status=None,
-        verify_ssl=False,
+        fingerprint=None,
         scale_to_fit=True,
         on_disconnect=None,
         on_reconnect=None,
@@ -152,14 +152,18 @@ class VncConsole(Gtk.Box):
         )
 
         self._status("connecting...")
-        self._connect(url, headers, password, verify_ssl)
+        self._connect(url, headers, password, fingerprint)
 
     # -- setup ---------------------------------------------------------
 
-    def _connect(self, url, headers, password, verify_ssl):
+    def _connect(self, url, headers, password, fingerprint=None):
         def worker():
             try:
-                stream = WebSocketStream(url, headers=headers, verify_ssl=verify_ssl)
+                stream = WebSocketStream(
+                    url,
+                    headers=headers,
+                    fingerprint=fingerprint,
+                )
             except Exception as exc:
                 GLib.idle_add(self._disconnected, f"{exc}")
                 return

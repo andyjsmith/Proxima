@@ -17,6 +17,7 @@ Authentication model, which is not obvious from the docs:
     as the password together with the OTP code.
 """
 
+import http.client
 import json
 import logging
 import ssl
@@ -26,6 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from . import certs
 from .models import Guest, Node, parse_spice_clients
 
 log = logging.getLogger(__name__)
@@ -57,13 +59,80 @@ class TwoFactorRequired(ProxmoxError):
         self.csrf = csrf
 
 
-def _ssl_context(verify):
-    if verify:
-        return ssl.create_default_context()
+class CertificateUntrusted(ProxmoxError):
+    """No pin for this server, and its certificate has no public CA behind it.
+
+    Carries what the user needs to decide: the fingerprint, and whatever
+    else could be read off the certificate. Not a failure so much as a
+    question -- see api/certs.py.
+    """
+
+    def __init__(self, host, port, info, reason=""):
+        super().__init__(
+            f"the certificate for {host}:{port} is not trusted yet"
+            + (f" ({reason})" if reason else "")
+        )
+        self.host = host
+        self.port = port
+        self.info = info or {}
+        self.reason = reason
+
+
+class CertificateMismatch(ProxmoxError):
+    """A pin exists and the server presented something else.
+
+    Either the certificate was replaced, or something is between the client
+    and the server. Never resolved without asking.
+    """
+
+    def __init__(self, host, port, expected, info):
+        super().__init__(
+            f"the certificate for {host}:{port} has changed since it was trusted"
+        )
+        self.host = host
+        self.port = port
+        self.expected = expected
+        self.info = info or {}
+
+
+def _permissive_context():
+    """A context that checks nothing itself.
+
+    Used only where something else does the checking: with a pin, where the
+    fingerprint is the identity, or where the user has explicitly turned
+    verification off.
+    """
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     return context
+
+
+def _pinned_opener(context, host, port, expected):
+    """An opener that hangs up on anything but the pinned certificate.
+
+    The check has to happen on the socket, after the handshake and before a
+    single byte of request goes out -- which is why this reaches into the
+    connection rather than using a verify callback: Python's ssl module has
+    no hook for "accept this one certificate and no other".
+    """
+
+    class PinnedConnection(http.client.HTTPSConnection):
+        def connect(self):
+            super().connect()
+            der = self.sock.getpeercert(binary_form=True)
+            got = certs.fingerprint(der) if der else ""
+            if got != expected:
+                self.close()
+                raise CertificateMismatch(
+                    host, port, expected, {"sha256": got} if got else {}
+                )
+
+    class PinnedHandler(urllib.request.HTTPSHandler):
+        def https_open(self, req):
+            return self.do_open(PinnedConnection, req, context=context)
+
+    return urllib.request.build_opener(PinnedHandler)
 
 
 class ProxmoxAPI:
@@ -73,23 +142,60 @@ class ProxmoxAPI:
     is the sole piece of mutable shared state.
     """
 
-    def __init__(self, host, port=DEFAULT_PORT, verify_ssl=False, timeout=20):
+    def __init__(self, host, port=DEFAULT_PORT, timeout=20, fingerprint=None):
         self.host = host
         self.port = port
-        self.verify_ssl = verify_ssl
         self.timeout = timeout
+        # The pinned SHA-256, if this server has been trusted before. It
+        # takes precedence over CA verification: a pinned certificate is one
+        # the user has already looked at and approved.
+        self.fingerprint = fingerprint or None
         self._lock = threading.RLock()
         self._ticket = None
         self._csrf = None
         self._issued = 0.0
         self._username = None
         self._password = None  # kept only to renew after expiry
-        self._context = _ssl_context(verify_ssl)
+        self._build_opener()
         # Whether this login may use the QEMU monitor. Starts optimistic and
         # is switched off for good the first time the server says the
         # privilege is missing, so a token without VM.Monitor costs one
         # refused call rather than one before every console.
         self.monitor_available = True
+
+    # -- TLS -----------------------------------------------------------
+
+    def _build_opener(self):
+        """Decide how this connection's certificate will be judged.
+
+        Two ways and no third: against a fingerprint the user has already
+        approved, or against the public CAs. There is deliberately no way to
+        skip the question -- an unknown certificate is something to look at
+        once, not something to turn checking off for.
+        """
+        if self.fingerprint:
+            self._context = _permissive_context()
+            self._opener = _pinned_opener(
+                self._context, self.host, self.port, self.fingerprint
+            )
+        else:
+            self._context = ssl.create_default_context()
+            self._opener = urllib.request.build_opener(
+                urllib.request.HTTPSHandler(context=self._context)
+            )
+
+    def trust(self, fingerprint):
+        """Pin a fingerprint and use it from the next request onwards."""
+        self.fingerprint = fingerprint or None
+        self._build_opener()
+
+    def certificate(self):
+        """What this server is presenting, for the user to look at."""
+        return certs.fetch(self.host, self.port, timeout=self.timeout)
+
+    def _untrusted(self, reason):
+        """Turn a CA verification failure into a question about the cert."""
+        return CertificateUntrusted(self.host, self.port, self.certificate(), reason)
 
     # -- plumbing ------------------------------------------------------
 
@@ -133,9 +239,7 @@ class ProxmoxAPI:
         started = time.monotonic()
         log.debug("%s %s", method, path)
         try:
-            with urllib.request.urlopen(
-                request, timeout=self.timeout, context=self._context
-            ) as response:
+            with self._opener.open(request, timeout=self.timeout) as response:
                 payload = response.read()
                 log.debug(
                     "%s %s -> %s in %.2fs (%d bytes)",
@@ -156,7 +260,27 @@ class ProxmoxAPI:
                 error,
             )
             raise error from None
+        except CertificateMismatch:
+            # Raised from inside the connection, so it arrives here rather
+            # than at the caller. It is a refusal, not a network error, and
+            # must never be reworded into one.
+            log.error(
+                "%s:%s presented a certificate that does not match its pin",
+                self.host,
+                self.port,
+            )
+            raise
         except urllib.error.URLError as exc:
+            if isinstance(exc.reason, ssl.SSLCertVerificationError) and not (
+                self.fingerprint
+            ):
+                # No pin yet and no public CA behind it -- which is what an
+                # ordinary Proxmox install looks like. A question for the
+                # user rather than a failure.
+                log.info(
+                    "%s:%s is not trusted yet: %s", self.host, self.port, exc.reason
+                )
+                raise self._untrusted(str(exc.reason)) from None
             log.warning(
                 "%s %s failed after %.2fs: %s",
                 method,

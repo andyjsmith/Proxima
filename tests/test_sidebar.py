@@ -522,7 +522,12 @@ def busy(window):
 
 def test_a_rename_shows_its_new_name_at_once_and_stops_spinning(window, busy):
     window.rename_guest(STOPPED, "renamed-vm")
-    pump(0.2)
+    # Deliberately not pumped first. "At once" is the promise -- the row is
+    # marked before rename_guest returns -- and pumping to check it is
+    # self-defeating: the fake holds the rename for two polls, so a pump
+    # long enough to be worth doing is also long enough for the rename to
+    # land and the spinner to be cleared for the right reason. That race is
+    # what made this test fail roughly one run in four.
     assert STOPPED in window.sidebar.busy, "a rename did not start a spinner"
     names = {k: v[1] for k, v in window.sidebar.busy.items()}
     assert names.get(STOPPED) == "renamed-vm", (

@@ -24,8 +24,9 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from .. import APP_NAME, __version__, logs, secrets, update
-from ..api import AuthError, ProxmoxError
+from ..api import AuthError, ProxmoxError, certs
 from ..api import notes as notes_meta
+from ..api.client import CertificateMismatch, CertificateUntrusted
 from ..api.connection import FAILED, Connection, ConnectionManager
 from ..api.models import (
     audio_is_spice,
@@ -43,7 +44,7 @@ from ..theme import decorate as theme_decorate
 from ..theme import keep_active as theme_keep_active
 from ..theme.system import DarkModeWatcher
 from . import actions as action_defs
-from . import desktop
+from . import desktop, trust_dialog
 from . import toolbar as toolbar_defs
 from .clone import CloneDialog
 from .console_tab import ConsoleTabLabel
@@ -1559,7 +1560,13 @@ class MainWindow(Gtk.Window):
         """Dial every saved connection, in the background, on startup."""
         entries = self.config.get("connections") or []
         for entry in entries:
-            connection = Connection.from_config(entry, secrets.decode)
+            connection = Connection.from_config(
+                entry,
+                secrets.decode,
+                fingerprint=certs.pinned(
+                    self.config, entry.get("host", ""), entry.get("port") or 8006
+                ),
+            )
             if connection.host:
                 self.connections.add(connection)
         if not self.connections:
@@ -1579,6 +1586,9 @@ class MainWindow(Gtk.Window):
         def worker():
             try:
                 connection.connect()
+            except (CertificateMismatch, CertificateUntrusted) as refusal:
+                GLib.idle_add(self._connection_untrusted, connection, refusal)
+                return
             except Exception as exc:
                 GLib.idle_add(self._connection_failed, connection, str(exc))
                 return
@@ -1593,6 +1603,40 @@ class MainWindow(Gtk.Window):
         self.sidebar.update(self.connections)
         self._update_connection_label()
         self.burst_poll(seconds=6)
+        return False
+
+    def _connection_untrusted(self, connection, refusal):
+        """A saved server whose certificate has not been approved.
+
+        Asked about rather than failed: a first run after adding a server by
+        hand, or a certificate that has been renewed since. Nothing was sent
+        to the server before this -- the refusal happens during the TLS
+        handshake, before the credentials go anywhere.
+        """
+        if self._closing:
+            return False
+        mismatch = isinstance(refusal, CertificateMismatch)
+        info = refusal.info or {}
+        if not info.get("sha256"):
+            return self._connection_failed(
+                connection, f"could not read the certificate for {refusal.host}"
+            )
+        if not trust_dialog.ask(
+            self,
+            refusal.host,
+            refusal.port,
+            info,
+            mismatch,
+            getattr(refusal, "expected", ""),
+        ):
+            return self._connection_failed(
+                connection, "the certificate was not trusted"
+            )
+
+        certs.trust(self.config, refusal.host, refusal.port, info)
+        self.config.save()
+        connection.api.trust(info["sha256"])
+        self._connect_async(connection)
         return False
 
     def _connection_failed(self, connection, message):
@@ -3413,7 +3457,11 @@ class MainWindow(Gtk.Window):
                 plan["password"],
                 title=title,
                 on_status=lambda text: self._console_status(guest, text),
-                verify_ssl=bool(self.config.get("verify_ssl", False)),
+                # The console's own connection to the same server, so it is
+                # held to the same certificate the user approved. Without
+                # this, turning verification on would refuse every VNC
+                # console on a self-signed Proxmox.
+                fingerprint=getattr(self.api_for(guest), "fingerprint", None),
                 scale_to_fit=bool(prefs["scaling"]),
                 on_disconnect=lambda reason, k=guest.key: self._on_console_disconnected(
                     k, reason

@@ -152,7 +152,6 @@ class FakeAPI:
     host = "pve.example.invalid"
     port = 8006
     username = "root@pam"
-    verify_ssl = False
 
     def __init__(self):
         self.calls = []

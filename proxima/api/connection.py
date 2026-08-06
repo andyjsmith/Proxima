@@ -46,19 +46,18 @@ class Connection:
         port=DEFAULT_PORT,
         username="root",
         realm="pam",
-        verify_ssl=False,
         password="",
         save=False,
+        fingerprint=None,
     ):
         self.host = host
         self.port = port
         self.username = username
         self.realm = realm
-        self.verify_ssl = verify_ssl
         self.password = password
         self.save = save
 
-        self.api = ProxmoxAPI(host, port=port, verify_ssl=verify_ssl)
+        self.api = ProxmoxAPI(host, port=port, fingerprint=fingerprint)
         self.state = DISCONNECTED
         self.error = ""
         self.guests = {}  # key -> Guest
@@ -150,7 +149,6 @@ class Connection:
             "port": self.port,
             "username": self.username,
             "realm": self.realm,
-            "verify_ssl": self.verify_ssl,
             "save": True,
         }
         if self.password:
@@ -158,15 +156,22 @@ class Connection:
         return entry
 
     @classmethod
-    def from_config(cls, entry, decode_password):
+    def from_config(cls, entry, decode_password, fingerprint=None):
+        """Rebuild a saved server.
+
+        The pinned fingerprint is not part of the entry: it lives in one
+        store keyed by host and port, so removing and re-adding a server
+        does not throw away a certificate the user already approved, and two
+        entries for the same server cannot disagree about it.
+        """
         return cls(
             host=entry.get("host", ""),
             port=int(entry.get("port") or DEFAULT_PORT),
             username=entry.get("username", "root"),
             realm=entry.get("realm", "pam"),
-            verify_ssl=bool(entry.get("verify_ssl", False)),
             password=decode_password(entry.get("password", "")),
             save=True,
+            fingerprint=fingerprint,
         )
 
 
