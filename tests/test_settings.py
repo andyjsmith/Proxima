@@ -442,3 +442,55 @@ def test_the_backdrop_flag_is_gone_before_the_window_is_repainted(window):
         "the window still carried BACKDROP when it came to be painted, "
         "so it is drawn dimmed for a frame"
     )
+
+
+def bridge_options(entry):
+    """What a NIC row's bridge dropdown actually offers."""
+    combo = entry["bridge_widget"]
+    model = combo.get_model()
+    return [row[0] for row in model] if model is not None else []
+
+
+def test_a_nic_added_later_can_still_choose_its_bridge(hardware):
+    """The dropdown is filled when the row is built, not only once.
+
+    The bridge list arrives on a worker thread and used to be written into
+    the rows that existed at that moment. A NIC added afterwards got an
+    empty model -- and GTK draws the button of an empty combo insensitive,
+    so it looked like the bridge could not be changed at all.
+    """
+    assert bridge_options(hardware.nets[0]) == ["vmbr0", "vmbr1"], (
+        "the first row never got the bridge list"
+    )
+
+    hardware._add_net()
+    pump(0.3)
+    added = hardware.nets[-1]
+    assert bridge_options(added) == ["vmbr0", "vmbr1"], (
+        "a NIC added after the lookup landed has an empty bridge list"
+    )
+    assert added["bridge_widget"].get_child().get_text(), (
+        "the new NIC was not given a bridge to start on"
+    )
+
+
+def test_removing_a_nic_leaves_the_others_editable(hardware):
+    """Removal rebuilds every row, so every row has to be refilled."""
+    hardware._add_net()
+    pump(0.3)
+    hardware._remove_net(hardware.nets[-1])
+    pump(0.3)
+    for entry in hardware.nets:
+        assert bridge_options(entry) == ["vmbr0", "vmbr1"], (
+            f"{entry['slot']} lost its bridge list when another was removed"
+        )
+
+
+def test_refreshing_the_bridge_list_keeps_what_each_nic_is_on(hardware):
+    """remove_all() clears the entry too, which would blank the bridge."""
+    before = hardware.nets[0]["bridge_widget"].get_child().get_text()
+    assert before, "the first NIC has no bridge to preserve"
+    hardware._apply_bridges(["vmbr0", "vmbr1", "vnet-dmz"])
+    pump(0.2)
+    assert hardware.nets[0]["bridge_widget"].get_child().get_text() == before
+    assert "vnet-dmz" in bridge_options(hardware.nets[0]), "the refresh did not land"

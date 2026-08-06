@@ -80,6 +80,11 @@ PROTOCOL_CHOICES = [
 class VMSettingsDialog(Gtk.Dialog):
     """Hardware / Options / Proxmox Manager for one guest."""
 
+    # Empty until the node answers. A class attribute as well as an instance
+    # one, so that a NIC row built at any point in construction has a list
+    # to fill its dropdown from rather than an AttributeError.
+    _bridges = ()
+
     def __init__(self, parent, api, guest, on_saved=None):
         super().__init__(
             title=f"Settings - {guest.label}", transient_for=parent, modal=True
@@ -297,8 +302,10 @@ class VMSettingsDialog(Gtk.Dialog):
             )
         grid.attach(self.net_note, 0, row, 2, 1)
 
-        self._rebuild_nets()
+        # Before the rows are built, not after: _net_row fills each combo
+        # from this, and the first rows are built by the call below.
         self._bridges = []
+        self._rebuild_nets()
         self._load_bridges()
         return self._scrolled(grid)
 
@@ -377,8 +384,13 @@ class VMSettingsDialog(Gtk.Dialog):
         # node's list -- or a node we could not ask -- must still be usable.
         bridge = Gtk.ComboBoxText.new_with_entry()
         bridge.get_child().set_width_chars(9)
-        current_bridge = devices.get_pair(entry["pairs"], "bridge", "")
-        bridge.get_child().set_text(current_bridge)
+        # Filled here as well as in _apply_bridges, and that is the point: a
+        # row built after the lookup has landed -- a NIC just added, or any
+        # rebuild after a removal -- would otherwise be born with an empty
+        # model. GTK draws the button of an empty combo insensitive, so it
+        # reads as "the bridge cannot be changed" rather than as a list that
+        # was never filled in.
+        self._fill_bridges(bridge, devices.get_pair(entry["pairs"], "bridge", ""))
         bridge.get_child().connect("changed", self._on_net_bridge, entry)
         entry["bridge_widget"] = bridge
         box.pack_start(bridge, False, False, 0)
@@ -530,20 +542,26 @@ class VMSettingsDialog(Gtk.Dialog):
             target=worker, daemon=True, name=f"bridges-{guest.node}"
         ).start()
 
+    def _fill_bridges(self, widget, current):
+        """Put the known bridges in a combo, keeping what it is set to.
+
+        remove_all() clears the entry as well as the list, so the current
+        value is read first and put back afterwards -- otherwise refreshing
+        the list would silently blank the bridge a NIC is already on.
+        """
+        widget.remove_all()
+        for name in self._bridges:
+            widget.append_text(name)
+        widget.get_child().set_text(current or "")
+
     def _apply_bridges(self, names):
         if not getattr(self, "_alive", True):
             return False
         self._bridges = list(names)
         for entry in self.nets:
             widget = entry.get("bridge_widget")
-            if widget is None:
-                continue
-            current = widget.get_child().get_text()
-            widget.remove_all()
-            for name in names:
-                widget.append_text(name)
-            # remove_all() clears the entry as well, so put it back.
-            widget.get_child().set_text(current)
+            if widget is not None:
+                self._fill_bridges(widget, widget.get_child().get_text())
         return False
 
     # -- options -------------------------------------------------------

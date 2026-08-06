@@ -664,10 +664,37 @@ class ProxmoxAPI:
             return None
         return self.put(f"/nodes/{node}/{kind}/{vmid}/config", data)
 
+    # Interface types a guest NIC can actually be attached to. SDN vnets
+    # belong here as much as plain and OVS bridges do -- from the guest's
+    # side they are the same thing, and leaving them out means an SDN
+    # network cannot be chosen at all.
+    BRIDGE_TYPES = ("bridge", "OVSBridge", "vnet")
+
     def node_bridges(self, node):
-        """Bridge names on a node, for the network device dropdowns."""
-        rows = self.get(f"/nodes/{node}/network", {"type": "bridge"}) or []
-        names = [row.get("iface") for row in rows if row.get("iface")]
+        """Everything a guest NIC can be attached to on a node.
+
+        Filtered here rather than by the API's own 'type' parameter. The
+        value meaning "anything a NIC can use" has changed across releases
+        -- bridge, then any_bridge, then any_local_bridge once SDN vnets
+        arrived -- and asking an older server for a type it does not know is
+        an error rather than an empty list. Asking for everything and
+        picking works on all of them.
+        """
+        names = set()
+        for row in self.get(f"/nodes/{node}/network") or []:
+            if row.get("type") in self.BRIDGE_TYPES and row.get("iface"):
+                names.add(row["iface"])
+
+        # And the cluster's own view of SDN, for releases that do not list
+        # vnets per node. Best effort: SDN is optional, and a login without
+        # the privilege for it should not cost the bridges we already have.
+        try:
+            for row in self.get("/cluster/sdn/vnets") or []:
+                if row.get("vnet"):
+                    names.add(row["vnet"])
+        except ProxmoxError as exc:
+            log.debug("no SDN vnets listed: %s", exc)
+
         return sorted(names)
 
     # -- guest agent ---------------------------------------------------
