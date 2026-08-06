@@ -1,4 +1,11 @@
-"""Theming: the compact stylesheet, base theme selection, font rendering."""
+"""Theming: the compact stylesheet, light/dark, font rendering.
+
+The GTK theme itself is not a choice. Adwaita is what the compact stylesheet
+is written against, what the symbolic icons are drawn for, and the only one
+a packaged build carries -- so it is pinned rather than inherited from the
+desktop, which on Linux could otherwise be anything and would take the
+layout with it. Light and dark remain a choice; both are Adwaita.
+"""
 
 import logging
 
@@ -7,9 +14,12 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
-from . import css, discovery, fonts, native_chrome, system
+from . import css, fonts, native_chrome, system
 
 log = logging.getLogger(__name__)
+
+# Compiled into GTK, so it is always there and needs no discovery.
+THEME_NAME = "Adwaita"
 
 _providers = []
 _dark = False
@@ -117,16 +127,17 @@ def decorate(window):
 
 
 def decorate_all():
-    """Re-decorate every live toplevel, e.g. after the theme changes."""
+    """Re-decorate every live toplevel, e.g. after light/dark changes."""
     for window in Gtk.Window.list_toplevels():
         if window.get_realized():
             native_chrome.apply_dark_titlebar(window, dark=_dark)
 
 
 def apply(config, root_widget=None):
-    """Apply theme, density CSS, font rendering and titlebar in one pass.
+    """Apply the stylesheet, font rendering and titlebar in one pass.
 
-    Returns the resolved (gtk_theme_name, dark) so callers can report it.
+    Returns whether the result is dark, which is what callers have to pass
+    on to anything that draws its own colours.
     """
     global _dark
 
@@ -135,11 +146,9 @@ def apply(config, root_widget=None):
 
     dark = system.resolve_dark(config.get("color_mode", "system"))
     _dark = dark
-    theme_name, available = discovery.resolve_theme(
-        config.get("theme", "Adwaita"), dark
-    )
 
-    settings.set_property("gtk-theme-name", theme_name)
+    settings.set_property("gtk-theme-name", THEME_NAME)
+    # Adwaita's dark variant is selected by this flag rather than by name.
     settings.set_property("gtk-application-prefer-dark-theme", dark)
 
     for existing in _providers:
@@ -153,17 +162,15 @@ def apply(config, root_widget=None):
     # Covers the main window and any dialog that happens to be open.
     decorate_all()
 
-    if not available:
-        log.info("%s is not installed; using %s", config.get("theme"), theme_name)
-    return theme_name, dark
+    return dark
 
 
 __all__ = [
+    "THEME_NAME",
     "apply",
     "css",
     "decorate",
     "decorate_all",
-    "discovery",
     "fonts",
     "keep_active",
     "native_chrome",

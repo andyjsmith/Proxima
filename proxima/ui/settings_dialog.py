@@ -11,12 +11,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
 from ..theme import decorate as theme_decorate
-from ..theme import discovery, fonts
-
-THEMES = [
-    ("Adwaita", "Adwaita"),
-    ("Fluent", "Fluent"),
-]
+from ..theme import fonts
 
 COLOR_MODES = [
     ("system", "Follow system"),
@@ -61,7 +56,6 @@ class SettingsDialog(Gtk.Dialog):
         notebook = Gtk.Notebook()
         notebook.set_border_width(8)
         notebook.append_page(self._appearance_page(), Gtk.Label(label="Appearance"))
-        notebook.append_page(self._font_page(), Gtk.Label(label="Text"))
         notebook.append_page(self._console_page(), Gtk.Label(label="Console"))
         notebook.append_page(self._behaviour_page(), Gtk.Label(label="Behaviour"))
         notebook.append_page(self._polling_page(), Gtk.Label(label="Polling"))
@@ -86,12 +80,10 @@ class SettingsDialog(Gtk.Dialog):
         label.get_style_context().add_class("dim")
         return label
 
-    def _combo(self, grid, row, label, choices, key, tooltip=None, annotate=None):
+    def _combo(self, grid, row, label, choices, key, tooltip=None):
         grid.attach(self._label(label), 0, row, 1, 1)
         combo = Gtk.ComboBoxText()
         for value, text in choices:
-            if annotate:
-                text = annotate(value, text)
             combo.append(value, text)
         combo.set_active_id(str(self.config.get(key)))
         if combo.get_active_id() is None:
@@ -113,86 +105,77 @@ class SettingsDialog(Gtk.Dialog):
         return check
 
     def _appearance_page(self):
+        """How the window looks: its colours, and how text is drawn.
+
+        Text had a tab of its own until there was only one other thing to
+        put beside it. Two headings on one page say the same thing without
+        making anybody go looking in a second place for the font.
+        """
         grid = self._page()
-        installed = discovery.installed_themes()
+        row = 0
 
-        def annotate(value, text):
-            if value == "Adwaita":
-                return text
-            _, available = discovery.resolve_theme(value, False, installed)
-            return text if available else f"{text}  (not installed)"
-
+        grid.attach(self._heading("Window"), 0, row, 2, 1)
+        row += 1
         self._combo(
             grid,
-            0,
-            "Theme",
-            THEMES,
-            "theme",
-            annotate=annotate,
-            tooltip="Fluent must be installed separately. See README.",
-        )
-        self._combo(
-            grid,
-            1,
+            row,
             "Colours",
             COLOR_MODES,
             "color_mode",
             tooltip="Tracks the system light/dark setting",
         )
-
+        row += 1
         self._check(
             grid,
-            2,
+            row,
             "Draw the titlebar in the application",
             "use_header_bar",
             tooltip="Replaces the system titlebar with one GTK draws, so it "
-            "matches the theme. Restart required.",
+            "matches the rest of the window. Restart required.",
         )
+        row += 1
 
-        detected = discovery.installed_themes()
-        note = Gtk.Label(xalign=0.0)
-        note.get_style_context().add_class("dim")
-        note.set_line_wrap(True)
-        note.set_text("Installed GTK themes: " + ", ".join(detected))
-        grid.attach(note, 0, 3, 2, 1)
-        return grid
-
-    def _font_page(self):
-        grid = self._page()
+        grid.attach(self._heading("Text"), 0, row, 2, 1)
+        row += 1
 
         backend, hinting_ok = fonts.font_backend()
 
         self._combo(
             grid,
-            0,
+            row,
             "Font backend",
             fonts.FONT_BACKEND_CHOICES,
             "font_backend",
             tooltip="Restart required",
         )
+        row += 1
 
         font_choices = [(name, name or "Theme default") for name in fonts.FONT_CHOICES]
-        self._combo(grid, 1, "Interface font", font_choices, "font_name")
+        self._combo(grid, row, "Interface font", font_choices, "font_name")
+        row += 1
 
         self._combo(
             grid,
-            2,
+            row,
             "Antialiasing",
             fonts.ANTIALIAS_CHOICES,
             "antialias",
             tooltip="Grayscale avoids colour fringing",
         )
+        row += 1
 
         self.hint_combo = self._combo(
-            grid, 3, "Hinting", fonts.HINT_STYLE_CHOICES, "hint_style"
+            grid, row, "Hinting", fonts.HINT_STYLE_CHOICES, "hint_style"
         )
+        row += 1
         self._check(
             grid,
-            4,
+            row,
             "Hint metrics",
             "hint_metrics",
             tooltip="Snap glyph advances to whole pixels",
         )
+        row += 1
 
         status = Gtk.Label(xalign=0.0)
         status.set_line_wrap(True)
@@ -205,7 +188,7 @@ class SettingsDialog(Gtk.Dialog):
                 "ignored - select FreeType and restart.</span>"
             )
             self.hint_combo.set_sensitive(False)
-        grid.attach(status, 0, 5, 2, 1)
+        grid.attach(status, 0, row, 2, 1)
         return grid
 
     def _console_page(self):

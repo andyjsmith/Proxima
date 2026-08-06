@@ -1,9 +1,8 @@
-"""The compact density stylesheet, layered on top of whichever base theme
-is active.
+"""The compact density stylesheet, layered on top of Adwaita.
 
 This is application CSS at PRIORITY_APPLICATION, so it trims padding without
-overriding the base theme's colours -- which is what lets the same sheet sit
-on both Adwaita and Fluent, light or dark, without either looking wrong.
+overriding the theme's own colours -- which is what lets one sheet serve
+both light and dark without either looking wrong.
 """
 
 COMPACT_CSS = """

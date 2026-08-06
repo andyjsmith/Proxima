@@ -69,14 +69,12 @@ def main(argv=None):
         from . import bundle
         from .console import SPICE_AVAILABLE, VNC_AVAILABLE
         from .console.decoders import gstreamer_report
-        from .theme import discovery
 
         # First, and with the interpreter: a bundle that cannot find its own
         # pyproject reports 0.0.0+unknown here, and the python it was built
         # against is what decides which standard library the bundle has.
         print(f"{APP_NAME} {__version__} (python {sys.version.split()[0]})")
         print(f"logs: {logs.current_log_file() or logs.log_dir()}")
-        discovery.diagnose()
         for line in bundle.report():
             print(line)
         print()

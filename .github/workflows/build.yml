@@ -352,10 +352,10 @@ jobs:
           if ($out -cmatch "0\.0\.0\+unknown") {
             Write-Output "::error::the bundle cannot read its own version"; exit 1
           }
-          # -cmatch, not -match: PowerShell's -match is case-insensitive, so
-          # the plain one also matches the lower-case "[missing]" the theme
-          # section prints for every search root it did not find -- which is
-          # normal, and which failed this step for a healthy bundle.
+          # -cmatch, not -match: bundle.report() marks only genuinely absent
+          # required data as "MISSING" in capitals, and PowerShell's plain
+          # -match is case-insensitive -- so it would also fire on any
+          # lower-case "missing" that happened to appear in the report.
           if ($out -cmatch "\[MISSING\]") {
             Write-Output "::error::the bundle is missing GTK runtime data"; exit 1
           }

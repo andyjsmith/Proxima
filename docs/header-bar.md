@@ -73,7 +73,7 @@ there.
 | `proxima/theme/css.py` | The `headerbar menubar` and `.toolbar-menus menubar` rules in `COMPACT_CSS` |
 | `proxima/ui/main_window.py` | In `_update_connection_label()`, the `if self.header_bar is not None:` block that sets the subtitle |
 | `proxima/ui/main_window.py` | In `open_settings()`, the `elif` branch reporting "Restart required to change the titlebar" |
-| `proxima/ui/settings_dialog.py` | The `_check(...)` for `"use_header_bar"` in `_appearance_page()`, and the row index of the "Installed GTK themes" note (3 with it, 2 without) |
+| `proxima/ui/settings_dialog.py` | The `_check(...)` for `"use_header_bar"` in `_appearance_page()` |
 | `tools/smoke_test.py` | The "in-application titlebar" section |
 | `docs/header-bar.md` | This file |
 
@@ -84,8 +84,7 @@ there.
    `root.pack_start(self.menubar, False, False, 0)` with no `if`. This is the
    only step that changes behaviour rather than just deleting code — with the
    feature gone the menus have nowhere else to live.
-3. Change the themes note in `_appearance_page()` back to `grid.attach(note, 0, 2, 2, 1)`.
-4. `grep -rn "use_header_bar\|header_bar" proxima/ tools/` should come back
+3. `grep -rn "use_header_bar\|header_bar" proxima/ tools/` should come back
    empty.
 
 Nothing else references the setting, and no other code branches on it, so

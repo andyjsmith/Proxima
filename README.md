@@ -5,7 +5,7 @@ VNC.
 
 ```
 python3 proxima.py                 normal start
-python3 proxima.py --diagnose      report the theme/SPICE stack
+python3 proxima.py --diagnose      report the GTK/SPICE stack
 python3 proxima.py --fontconfig    force the FreeType font backend
 python3 proxima.py --debug         log everything, including GLib's own
 python3 proxima.py --logs          print the log directory and exit

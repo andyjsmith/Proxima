@@ -25,7 +25,9 @@ DEFAULTS = {
     "verify_ssl": False,
     "save_credentials": False,  # ticket only; never the password
     # -- appearance ----------------------------------------------------
-    "theme": "Adwaita",  # "Adwaita" | "Fluent"
+    # The GTK theme is not a setting: the stylesheet and the icons are drawn
+    # for Adwaita and it is the only one a packaged build carries. Light and
+    # dark are still a choice, and both are Adwaita.
     "color_mode": "system",  # "system" | "light" | "dark"
     # Draw the titlebar ourselves (GtkHeaderBar) instead of letting the OS
     # do it. Off by default, and read once at startup -- GTK will not swap a

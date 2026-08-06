@@ -27,6 +27,17 @@ def notebook_tabs(container):
     return [notebook.get_tab_label_text(c) for c in notebook.get_children()]
 
 
+def label_texts(widget):
+    """Every label on a page, headings included, however deeply nested."""
+    found = []
+    if isinstance(widget, Gtk.Label):
+        found.append(widget.get_text())
+    if isinstance(widget, Gtk.Container):
+        for child in widget.get_children():
+            found.extend(label_texts(child))
+    return found
+
+
 @pytest.mark.parametrize(
     "key", ["refresh_seconds", "task_refresh_seconds", "burst_seconds"]
 )
@@ -289,13 +300,58 @@ def test_a_running_vm_hides_the_fields_proxmox_would_park_as_pending(window, api
 # -- appearance and window state ------------------------------------------
 
 
-@pytest.mark.parametrize("theme", ["Adwaita", "Fluent"])
 @pytest.mark.parametrize("mode", ["light", "dark", "system"])
-def test_every_theme_and_colour_mode_applies(window, config, theme, mode):
-    config["theme"] = theme
+def test_every_colour_mode_applies(window, config, mode):
     config["color_mode"] = mode
     window.apply_appearance()
     pump(0.1)
+
+
+def test_the_text_settings_sit_on_the_appearance_page(window, config):
+    """The Text tab is gone -- its contents moved, rather than going with it.
+
+    Two headings on one page, because a tab holding one combo box and a
+    tickbox is a place to go looking rather than a place to find things.
+    """
+    dialog = SettingsDialog(window, config)
+    pump(0.3)
+    try:
+        titles = notebook_tabs(dialog.get_children()[0])
+        assert "Text" not in titles, f"the Text tab is still there: {titles}"
+        assert titles[0] == "Appearance", titles
+
+        notebook = dialog.get_children()[0].get_children()[0]
+        appearance = label_texts(notebook.get_nth_page(0))
+        for heading in ("Window", "Text"):
+            assert heading in appearance, f"no {heading!r} heading: {appearance}"
+        for moved in ("Font backend", "Interface font", "Antialiasing", "Hinting"):
+            assert moved in appearance, f"{moved!r} was lost with the tab"
+        assert "Colours" in appearance, appearance
+        # The hinting combo is still reachable, since the backend check
+        # disables it when FreeType is not in use.
+        assert dialog.hint_combo is not None
+    finally:
+        dialog.destroy()
+        pump(0.2)
+
+
+def test_the_gtk_theme_is_not_a_setting(window, config):
+    """Adwaita is pinned: the stylesheet and icons are drawn for it.
+
+    Inheriting the desktop's theme instead would let anything from Yaru to
+    Breeze redraw the layout the compact CSS was measured against.
+    """
+    from gi.repository import Gtk
+
+    from proxima import theme as theme_mod
+
+    assert "theme" not in config, "the theme setting is back"
+    window.apply_appearance()
+    pump(0.1)
+    assert (
+        Gtk.Settings.get_default().get_property("gtk-theme-name")
+        == theme_mod.THEME_NAME
+    )
 
 
 @pytest.mark.parametrize("antialias", ["grayscale", "subpixel", "none", "default"])

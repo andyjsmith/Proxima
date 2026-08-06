@@ -1484,12 +1484,12 @@ class MainWindow(Gtk.Window):
     # ------------------------------------------------------------------
 
     def apply_appearance(self):
-        theme_name, dark = apply_theme(self.config, self)
+        dark = apply_theme(self.config, self)
         self.sidebar.set_row_ypad(theme_css.ROW_YPAD)
         self.sidebar.set_dark(dark)
-        self._update_connection_label(theme_name, dark)
+        self._update_connection_label()
 
-    def _update_connection_label(self, theme_name=None, dark=None):
+    def _update_connection_label(self):
         count = len(self.connections.connected)
         total = len(self.connections)
         if total == 0:
@@ -1498,11 +1498,7 @@ class MainWindow(Gtk.Window):
             text = self.connections.all[0].label
         else:
             text = f"{count}/{total} servers"
-        if theme_name:
-            self._last_theme = (theme_name, dark)
-        theme_name, dark = getattr(self, "_last_theme", ("", False))
-        suffix = f"  |  {theme_name}{' dark' if dark else ''}" if theme_name else ""
-        self.connection_label.set_text(text + suffix)
+        self.connection_label.set_text(text)
         if self.header_bar is not None:
             # The same fact, in the one place a header bar has room for it.
             self.header_bar.set_subtitle(text)
