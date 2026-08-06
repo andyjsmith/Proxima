@@ -109,10 +109,10 @@ jobs:
             file
           sudo gem install --no-document fpm -v 1.15.1
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist-linux
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist-windows
 
@@ -245,7 +245,7 @@ jobs:
           cat SHA256SUMS
           ls -lh
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ env.VERSION }}
           path: out/*

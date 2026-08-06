@@ -84,7 +84,7 @@ jobs:
         # compile against the same interpreter that imports it.
         run: python3 -m pip install "nuitka==${NUITKA_VERSION}" ordered-set zstandard
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/ccache
           key: ccache-nuitka-linux-${{ github.sha }}
@@ -191,14 +191,14 @@ jobs:
         # tar, not the artifact's own zip: the executable bit has to survive.
         run: tar -C build -czf proxima-linux-x86_64-dist.tar.gz proxima.dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-linux
           path: proxima-linux-x86_64-dist.tar.gz
           if-no-files-found: error
           retention-days: 7
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nuitka-report-linux
@@ -356,14 +356,14 @@ jobs:
         shell: pwsh
         run: tar -C build -czf proxima-windows-x86_64-dist.tar.gz proxima.dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-windows
           path: proxima-windows-x86_64-dist.tar.gz
           if-no-files-found: error
           retention-days: 7
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nuitka-report-windows
