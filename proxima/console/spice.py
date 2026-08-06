@@ -25,6 +25,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from .decoders import gstreamer_report
+from .keys import CTRL_ALT_DEL
 from .spicelib import (
     AVAILABLE,
     MISSING_LIBRARY,
@@ -179,12 +180,6 @@ class DisplayHolder(Gtk.Bin):
         if child is not None and child.get_visible():
             child.size_allocate(allocation)
 
-
-# X11 keysyms. spice_display_send_keys() wants these as integers.
-KEY_CONTROL_L = 0xFFE3
-KEY_ALT_L = 0xFFE9
-KEY_DELETE = 0xFFFF
-KEY_CTRL_ALT_DEL = (KEY_CONTROL_L, KEY_ALT_L, KEY_DELETE)
 
 CHANNEL_EVENTS = {
     0: "closed",
@@ -825,7 +820,7 @@ class SpiceConsole(Gtk.Box):
             return False
 
     def send_ctrl_alt_del(self):
-        return self.send_keys(KEY_CTRL_ALT_DEL)
+        return self.send_keys(CTRL_ALT_DEL)
 
     def grab_focus_display(self):
         if self._display is not None:

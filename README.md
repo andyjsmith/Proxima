@@ -15,6 +15,17 @@ On Windows this must run under the MSYS2 UCRT64 Python
 (`C:/msys64/ucrt64/bin/python.exe`), not a python.org install: PyGObject and
 spice-gtk come from pacman and will not load anywhere else.
 
+## Sending keys the host swallows
+
+Ctrl+Alt+Del is a toolbar button; its arrow, and **VM -> Send Key**, carry
+the rest -- Ctrl+Alt+Backspace, the twelve virtual terminals, Alt+Tab,
+Alt+F4, Ctrl+Esc and PrintScreen. These exist because pressing them does
+not work: the window manager on *this* computer takes Alt+Tab, a Linux
+desktop takes Ctrl+Alt+F2, and something is usually listening for
+PrintScreen, so none of them ever reach the guest. Both protocols carry
+them -- keysyms go over SPICE and RFB alike -- so the menu works on a VNC
+console too.
+
 ## Logs
 
 Every run writes one, and **Help -> Open Log Folder** is the short way to

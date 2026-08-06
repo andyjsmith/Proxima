@@ -34,6 +34,7 @@ from ..api.models import (
     vga_is_spice,
 )
 from ..console import SPICE_AVAILABLE, SpiceConsole, VncConsole
+from ..console import keys as console_keys
 from ..console.placeholder import PlaceholderConsole
 from ..console.spice import IMAGE_COMPRESSION, VIDEO_CODECS
 from ..theme import apply as apply_theme
@@ -392,10 +393,18 @@ class MainWindow(Gtk.Window):
             vm_menu, "Reopen Console with VNC", self._switch_console_protocol
         )
         self.switch_protocol_item.set_sensitive(False)
+        # Ctrl+Alt+Del keeps an entry of its own as well as its place at the
+        # top of the submenu: it is the one people go looking for by name,
+        # and being three inches from where it has always been is not an
+        # improvement.
         self.ctrl_alt_del_item = self._menu_item(
             vm_menu, "Send Ctrl+Alt+Del", self._send_ctrl_alt_del
         )
         self.ctrl_alt_del_item.set_sensitive(False)
+        self.send_key_item = Gtk.MenuItem(label="Send Key")
+        self.send_key_item.set_submenu(toolbar_defs.send_key_menu(self._send_key))
+        self.send_key_item.set_sensitive(False)
+        vm_menu.append(self.send_key_item)
         self.screenshot_item = self._menu_item(
             vm_menu, "Save Console Screenshot...", self._save_screenshot
         )
@@ -661,6 +670,11 @@ class MainWindow(Gtk.Window):
         self.fullscreen_item_tb.set_sensitive(False)
         self.fullscreen_item_tb.connect("clicked", lambda *_: self._toggle_fullscreen())
         bar.insert(self.fullscreen_item_tb, -1)
+
+        # The one key combination nobody can send by pressing it, on the
+        # toolbar rather than two menus deep.
+        self.send_key_item_tb = toolbar_defs.send_key_button(self._send_key)
+        bar.insert(self.send_key_item_tb, -1)
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
@@ -4209,7 +4223,12 @@ class MainWindow(Gtk.Window):
             self.fullscreen_item.set_sensitive(console is not None)
             self.fullscreen_item_tb.set_sensitive(console is not None)
             self.popout_item.set_sensitive(console is not None)
-            self.ctrl_alt_del_item.set_sensitive(bool(supports.get("ctrl_alt_del")))
+            # One capability, three controls: the menu entry, the submenu
+            # and the toolbar button all need a console that can be typed at.
+            can_type = bool(supports.get("ctrl_alt_del"))
+            self.ctrl_alt_del_item.set_sensitive(can_type)
+            self.send_key_item.set_sensitive(can_type)
+            self.send_key_item_tb.set_sensitive(can_type)
             self.screenshot_item.set_sensitive(
                 console is not None
                 and hasattr(console, "screenshot")
@@ -4326,9 +4345,22 @@ class MainWindow(Gtk.Window):
             console.refresh_framebuffer()
 
     def _send_ctrl_alt_del(self):
+        self._send_key(console_keys.CTRL_ALT_DEL)
+
+    def _send_key(self, keysyms):
+        """Send one combination to the console in front.
+
+        The guest gets the keyboard back afterwards: these are sent from a
+        menu, so the pointer is somewhere over the menu rather than over the
+        console, and without this the next thing typed would go to the
+        window rather than to the guest that was just poked.
+        """
         console = self.current_console()
-        if console is not None:
-            console.send_ctrl_alt_del()
+        if console is None or not hasattr(console, "send_keys"):
+            return
+        console.send_keys(keysyms)
+        if hasattr(console, "grab_focus_display"):
+            console.grab_focus_display()
 
     # -- fullscreen console --------------------------------------------
 

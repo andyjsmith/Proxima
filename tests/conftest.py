@@ -38,6 +38,7 @@ from gi.repository import Gtk
 from proxima.api.connection import CONNECTED, Connection
 from proxima.api.models import Guest
 from proxima.config import Config
+from proxima.console import keys as console_keys
 from proxima.theme import apply as apply_theme
 from proxima.ui.main_window import MainWindow
 
@@ -557,6 +558,7 @@ class FakeConsole(Gtk.Box):
         self.codec_index = 0
         self.compression_index = 0
         self.ctrl_alt_del_sent = 0
+        self.keys_sent = []
         self.share_clipboard = True
         self.play_audio = True
         self.last_status = ""
@@ -583,8 +585,14 @@ class FakeConsole(Gtk.Box):
     def set_compression_index(self, index):
         self.compression_index = index
 
+    def send_keys(self, keyvals):
+        self.keys_sent.append(tuple(keyvals))
+        return True
+
     def send_ctrl_alt_del(self):
         self.ctrl_alt_del_sent += 1
+        # Through send_keys, as both real consoles do.
+        return self.send_keys(console_keys.CTRL_ALT_DEL)
 
     def show_guest_state(self, status):
         self.last_status = status
@@ -698,6 +706,11 @@ def reset_fakes():
     """Put the module-level fake state back to its defaults."""
     global SAMPLE
     SAMPLE[:] = copy.deepcopy(SAMPLE_DEFAULTS)
+    FakeAPI.RENAME_DELAY = False
+    # Disarm as well as reset: a rename that is still a poll away from
+    # landing will otherwise apply itself in the middle of the *next* test,
+    # renaming a guest nobody asked about. See the busy fixture.
+    FakeAPI._deferred_rename = None
     FakeAPI.NOTES = {}
     FakeAPI.HARDWARE = {}
     FakeAPI.SPICE_CLIENTS = {}

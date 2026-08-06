@@ -24,6 +24,7 @@ try:
 except ImportError:  # pragma: no cover
     cairo = None
 
+from .keys import CTRL_ALT_DEL
 from .rfb import RfbClient
 from .status_panel import (
     CONNECTING_ICON,
@@ -38,10 +39,8 @@ log = logging.getLogger(__name__)
 AVAILABLE = cairo is not None
 
 # GDK keyvals are X11 keysyms by definition, so key events need no mapping
-# table at all -- except for the handful of keys we synthesise ourselves.
-KEY_CONTROL_L = 0xFFE3
-KEY_ALT_L = 0xFFE9
-KEY_DELETE = 0xFFFF
+# table at all. The ones we synthesise rather than receive come from
+# console/keys.py, which both protocols share.
 
 
 class VncConsole(Gtk.Box):
@@ -465,9 +464,25 @@ class VncConsole(Gtk.Box):
         # Tab or trigger mnemonics while the guest has the keyboard.
         return True
 
+    def send_keys(self, keyvals):
+        """Press and release a combination in the guest.
+
+        RFB carries keysyms directly, so anything the Send Key menu offers
+        works here as well as it does over SPICE -- which matters, because
+        VNC is what a guest without a SPICE display gets.
+        """
+        if self.client is None:
+            self._status("not connected")
+            return False
+        try:
+            self.client.send_key_click(list(keyvals))
+            return True
+        except Exception as exc:
+            self._status(f"could not send keys: {exc}")
+            return False
+
     def send_ctrl_alt_del(self):
-        if self.client is not None:
-            self.client.send_key_click([KEY_CONTROL_L, KEY_ALT_L, KEY_DELETE])
+        return self.send_keys(CTRL_ALT_DEL)
 
     def grab_focus_display(self):
         if getattr(self, "area", None) is not None:

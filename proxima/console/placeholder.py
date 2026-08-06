@@ -113,6 +113,9 @@ class PlaceholderConsole(Gtk.Box):
     def telemetry(self):
         return None
 
+    def send_keys(self, _keyvals):
+        return False
+
     def send_ctrl_alt_del(self):
         return False
 

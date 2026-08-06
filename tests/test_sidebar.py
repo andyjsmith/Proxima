@@ -503,14 +503,20 @@ def busy(window):
     FakeAPI.RENAME_DELAY = True
     yield window.sidebar.guests[STOPPED]
     FakeAPI.RENAME_DELAY = False
+    # Disarmed before anything is put back, and this is the order that
+    # matters. A rename the fake is still holding back would otherwise land
+    # on a later poll -- after the restore, during somebody else's test --
+    # and rename the guest to 'renamed-vm' again. The next test to rename it
+    # to 'renamed-vm' then asks for the name it already has, which is a
+    # no-op that starts no spinner, and the failure lands two tests away
+    # from the cause.
+    FakeAPI._deferred_rename = None
     window._clear_busy(STOPPED)
     sample_row(102)["name"] = "build-runner"
     sample_row(102)["status"] = "stopped"
     window.refresh()
-    # Waited for, not slept on. The next test in this file renames the same
-    # guest, and a rename to the name it already has is a no-op that starts
-    # no spinner -- so a teardown that gave up before the refresh landed
-    # failed the *following* test, and only ever under a loaded suite.
+    # Waited for, not slept on: a fixed pump is a bet on the refresh landing
+    # inside it.
     pump_until(lambda: window.sidebar.guests[STOPPED].name == "build-runner", 10)
 
 

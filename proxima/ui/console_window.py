@@ -74,14 +74,9 @@ class ConsoleWindow(Gtk.Window):
 
         bar.insert(Gtk.SeparatorToolItem(), -1)
 
-        keys = toolbar.tool_button(
-            "Ctrl+Alt+Del",
-            "input-keyboard-symbolic",
-            "Send Ctrl+Alt+Del to the guest",
-            sensitive=True,
-        )
-        keys.connect("clicked", lambda *_: self._send_ctrl_alt_del())
-        bar.insert(keys, -1)
+        self.send_key_item = toolbar.send_key_button(self._send_key)
+        self.send_key_item.set_sensitive(True)
+        bar.insert(self.send_key_item, -1)
 
         # The main window offers this on the VM menu, which a popped-out
         # console does not have. Its own console is passed explicitly: it is
@@ -153,6 +148,14 @@ class ConsoleWindow(Gtk.Window):
     def _send_ctrl_alt_del(self):
         if self.console is not None:
             self.console.send_ctrl_alt_del()
+
+    def _send_key(self, keysyms):
+        """One combination to this window's own console, not the tab in front."""
+        if self.console is None or not hasattr(self.console, "send_keys"):
+            return
+        self.console.send_keys(keysyms)
+        if hasattr(self.console, "grab_focus_display"):
+            self.console.grab_focus_display()
 
     # -- lifecycle -----------------------------------------------------
 

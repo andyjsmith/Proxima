@@ -15,6 +15,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from ..console import keys as console_keys
 from . import actions as action_defs
 from .snapshots import describe_revert
 
@@ -39,6 +40,50 @@ def tool_button(label, icon, tooltip, important=False, sensitive=False):
     item.set_tooltip_text(tooltip)
     item.set_is_important(important)
     item.set_sensitive(sensitive)
+    return item
+
+
+SEND_KEY_ICON = "input-keyboard-symbolic"
+SEND_KEY_TOOLTIP = (
+    "Send Ctrl+Alt+Del to the guest. The arrow has the other combinations "
+    "this computer would otherwise swallow."
+)
+
+
+def send_key_menu(on_send):
+    """A fresh Send Key menu, calling on_send(keysyms) for each entry.
+
+    Fresh every time on purpose: a GtkMenu belongs to one place, so the
+    main window and a popped-out console cannot share one instance.
+    """
+    menu = Gtk.Menu()
+    for entry in console_keys.SEND_KEYS:
+        if entry is None:
+            menu.append(Gtk.SeparatorMenuItem())
+            continue
+        label, keysyms = entry
+        item = Gtk.MenuItem(label=label)
+        item.connect("activate", lambda _i, keys=keysyms: on_send(keys))
+        menu.append(item)
+    menu.show_all()
+    return menu
+
+
+def send_key_button(on_send):
+    """Ctrl+Alt+Del as a button, with the rest of the keys behind its arrow.
+
+    The click is the one people came for -- Ctrl+Alt+Del is most of the
+    reason this control exists -- and the menu is there for the twelve
+    virtual terminals and the ones the window manager eats.
+    """
+    item = Gtk.MenuToolButton()
+    item.set_label("Ctrl+Alt+Del")
+    item.set_icon_name(SEND_KEY_ICON)
+    item.set_tooltip_text(SEND_KEY_TOOLTIP)
+    item.set_arrow_tooltip_text("Send another key combination")
+    item.set_menu(send_key_menu(on_send))
+    item.set_sensitive(False)
+    item.connect("clicked", lambda *_: on_send(console_keys.CTRL_ALT_DEL))
     return item
 
 

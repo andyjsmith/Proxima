@@ -5,6 +5,7 @@ import time
 import pytest
 from gi.repository import Gtk
 
+from proxima.console import keys as keys_mod
 from proxima.console import status_panel as status_panel_mod
 
 from .conftest import (
@@ -607,3 +608,117 @@ def test_emptying_a_split_pane_gives_the_window_back(window):
             window.close_console(key)
         window._gather_consoles()
         pump(0.4)
+
+
+# -- sending keys the host would otherwise eat ---------------------------
+
+
+def send_key_items(menu_item):
+    """The labelled entries of a Send Key submenu, in order."""
+    return {
+        child.get_label(): child
+        for child in menu_item.get_submenu().get_children()
+        if isinstance(child, Gtk.MenuItem) and child.get_label()
+    }
+
+
+def test_the_send_key_menu_covers_what_the_host_swallows(window):
+    """Alt+Tab and the virtual terminals never reach the guest by being
+    pressed -- the window manager takes them first -- so the menu is the
+    only way to send one."""
+    console = FakeConsole("keys")
+    console.guest_key = STOPPED
+    window.consoles[STOPPED] = console
+    window.panes.append(console, Gtk.Label(label="k"))
+    pump(0.4)
+    try:
+        window._sync_view_menu()
+        assert window.send_key_item.get_sensitive()
+        assert window.send_key_item_tb.get_sensitive(), "the toolbar button is dead"
+
+        items = send_key_items(window.send_key_item)
+        for label in ("Ctrl+Alt+Del", "Alt+Tab", "PrintScreen", "Ctrl+Alt+F1"):
+            assert label in items, f"{label} is not on the menu: {sorted(items)}"
+        # All twelve virtual terminals, not the two somebody felt like typing.
+        for number in range(1, 13):
+            assert f"Ctrl+Alt+F{number}" in items
+
+        items["Ctrl+Alt+F2"].activate()
+        pump(0.2)
+        assert console.keys_sent == [(keys_mod.CONTROL_L, keys_mod.ALT_L, 0xFFBF)], (
+            f"wrong keysyms for Ctrl+Alt+F2: {console.keys_sent}"
+        )
+
+        console.keys_sent.clear()
+        items["PrintScreen"].activate()
+        pump(0.2)
+        assert console.keys_sent == [(keys_mod.PRINT,)]
+    finally:
+        window.close_console_widget(console)
+        pump(0.3)
+
+
+def test_the_toolbar_button_sends_ctrl_alt_del(window):
+    """The click is the common case; the arrow is for everything else."""
+    console = FakeConsole("cad")
+    console.guest_key = STOPPED
+    window.consoles[STOPPED] = console
+    window.panes.append(console, Gtk.Label(label="c"))
+    pump(0.4)
+    try:
+        window._sync_view_menu()
+        window.send_key_item_tb.emit("clicked")
+        pump(0.2)
+        assert console.keys_sent == [keys_mod.CTRL_ALT_DEL], console.keys_sent
+    finally:
+        window.close_console_widget(console)
+        pump(0.3)
+
+
+def test_sending_keys_is_dead_without_a_console(window):
+    for page in list(window.panes.all_pages()):
+        window.close_console_widget(page)
+    pump(0.3)
+    window._sync_view_menu()
+    assert not window.send_key_item.get_sensitive()
+    assert not window.send_key_item_tb.get_sensitive()
+    assert not window.ctrl_alt_del_item.get_sensitive()
+
+
+# Wrong keysyms do not raise anywhere: the guest simply receives a different
+# key, or nothing at all, which is a miserable thing to debug from the far
+# end of a console. So they are pinned against the X11 names they came from.
+
+
+def test_the_function_keys_are_the_whole_consecutive_run():
+    assert keys_mod.function_key(1) == 0xFFBE, "F1 is not XK_F1"
+    assert keys_mod.function_key(12) == 0xFFC9, "F12 is not XK_F12"
+    assert [keys_mod.function_key(n) for n in range(1, 13)] == list(
+        range(0xFFBE, 0xFFCA)
+    )
+
+
+@pytest.mark.parametrize("number", [0, 13, -1])
+def test_a_key_that_does_not_exist_is_refused(number):
+    with pytest.raises(ValueError):
+        keys_mod.function_key(number)
+
+
+def test_every_send_key_entry_is_a_real_combination():
+    labelled = [entry for entry in keys_mod.SEND_KEYS if entry is not None]
+    seen = set()
+    for label, keysyms in labelled:
+        assert label not in seen, f"{label} is on the menu twice"
+        seen.add(label)
+        assert keysyms, f"{label} sends nothing"
+        # Every keysym in the function/modifier block, which is where the
+        # non-printing keys live. A stray ASCII value here would mean a
+        # literal character being typed at the guest instead.
+        assert all(isinstance(k, int) for k in keysyms), label
+        assert all(0xFF00 <= k <= 0xFFFF for k in keysyms), f"{label}: {keysyms}"
+
+    assert labelled[0] == ("Ctrl+Alt+Del", keys_mod.CTRL_ALT_DEL), (
+        "Ctrl+Alt+Del is not the first thing on the menu"
+    )
+    assert seen >= {f"Ctrl+Alt+F{n}" for n in range(1, 13)}, "a terminal is missing"
+    assert {"Alt+Tab", "PrintScreen"} <= seen
