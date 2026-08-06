@@ -14,9 +14,12 @@ Deliberately dependency-free, and importable before gi, for the same reason
 config.py is.
 """
 
+import logging
 import os
 import sys
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # The pixbuf loader cache names every module it knows about. The paths in it
 # are wherever the loaders were when the cache was generated -- absolute on
@@ -86,7 +89,7 @@ def _cached_copy(name, text):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
     except OSError as exc:
-        print(f"[bundle] could not write {path}: {exc}")
+        log.warning("could not write %s: %s", path, exc)
         return None
     return path
 

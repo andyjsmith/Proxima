@@ -15,7 +15,10 @@ protection that is not there.
 import base64
 import ctypes
 import ctypes.wintypes
+import logging
 import os
+
+log = logging.getLogger(__name__)
 
 IS_WINDOWS = os.name == "nt"
 
@@ -71,7 +74,7 @@ def encode(password):
                 _dpapi("CryptProtectData", raw, "proxima")
             ).decode("ascii")
         except Exception as exc:
-            print(f"[secrets] DPAPI unavailable ({exc}); storing obfuscated")
+            log.warning("DPAPI unavailable (%s); storing obfuscated", exc)
     return "plain:" + base64.b64encode(raw).decode("ascii")
 
 

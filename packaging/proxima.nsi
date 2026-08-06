@@ -9,6 +9,11 @@
 ;
 ;   makensis -DVERSION=1.2.3 -DDIST=../build/proxima.dist \
 ;            -DOUTFILE=proxima-1.2.3-windows-x86_64-setup.exe packaging/proxima.nsi
+;
+; Optionally carries the UsbDk driver, which SPICE USB redirection needs on
+; Windows. Fetch it first with tools/fetch_usbdk.py and point -DUSBDK at the
+; MSI; without that define the installer simply does not offer it, so a
+; build with no network still produces a working installer.
 
 Unicode true
 
@@ -42,6 +47,8 @@ SetCompressor /SOLID lzma
 
 !include MUI2.nsh
 !include FileFunc.nsh
+!include LogicLib.nsh
+!include Sections.nsh
 
 Name "${APPNAME} ${VERSION}"
 OutFile "${OUTFILE}"
@@ -62,6 +69,7 @@ VIAddVersionKey "LegalCopyright" ""
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MULTIUSER_PAGE_INSTALLMODE
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${APPEXE}"
@@ -72,10 +80,6 @@ VIAddVersionKey "LegalCopyright" ""
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
-
-Function .onInit
-  !insertmacro MULTIUSER_INIT
-FunctionEnd
 
 Function un.onInit
   !insertmacro MULTIUSER_UNINIT
@@ -112,6 +116,63 @@ Section "Proxima" SecMain
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD SHCTX "${UNINST_KEY}" "EstimatedSize" "$0"
 SectionEnd
+
+!ifdef USBDK
+; SPICE can hand a USB device on this computer to the VM, but on Windows
+; that needs a kernel driver -- spice-gtk lists devices without it and then
+; fails at the moment one is claimed, which is a miserable way to find out.
+;
+; Unselected when UsbDk is already installed (see .onInit): reinstalling a
+; driver somebody else's software may be using is not a favour.
+;
+; /passive rather than /qn: installing a driver needs administrator rights,
+; and a per-user install of Proxima does not have them. Windows Installer
+; raises its own elevation prompt, which it can only do if it is allowed to
+; show UI at all. The uninstaller deliberately leaves the driver alone --
+; virt-viewer and friends use the same one.
+Section "USB redirection driver (UsbDk)" SecUsbDk
+  DetailPrint "Installing the UsbDk USB redirection driver..."
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=UsbDk.msi" "${USBDK}"
+  ExecWait '"$SYSDIR\msiexec.exe" /i "$PLUGINSDIR\UsbDk.msi" /passive /norestart' $0
+  ${If} $0 == 0
+    DetailPrint "UsbDk installed."
+  ${ElseIf} $0 == 3010
+    DetailPrint "UsbDk installed; a restart will finish it."
+  ${ElseIf} $0 == 1602
+    DetailPrint "UsbDk installation cancelled. USB redirection will not work."
+  ${Else}
+    DetailPrint "UsbDk installation failed (code $0). USB redirection will not work."
+  ${EndIf}
+  Delete "$PLUGINSDIR\UsbDk.msi"
+SectionEnd
+!endif
+
+; Below the sections deliberately: ${SecUsbDk} is only defined once the
+; section it names has been seen, and NSIS resolves that where it is used.
+Function .onInit
+  !insertmacro MULTIUSER_INIT
+!ifdef USBDK
+  ; Already there: offer it, but do not tick it. The file is the one the
+  ; driver's own installer writes, and it is what the app checks for too.
+  ${If} ${FileExists} "$SYSDIR\drivers\UsbDk.sys"
+    SectionSetText ${SecUsbDk} "USB redirection driver (UsbDk, already installed)"
+    !insertmacro UnselectSection ${SecUsbDk}
+  ${EndIf}
+!endif
+FunctionEnd
+
+!insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} \
+    "${APPNAME} itself, with the GTK, SPICE and VNC libraries it needs."
+!ifdef USBDK
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecUsbDk} \
+    "The driver that lets ${APPNAME} pass a USB device on this computer \
+     through to a virtual machine over SPICE. Needs administrator rights. \
+     Leave this unticked if you do not want USB redirection, or if you \
+     already have UsbDk."
+!endif
+!insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
   Delete "$SMPROGRAMS\${APPNAME}.lnk"

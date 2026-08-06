@@ -18,6 +18,7 @@ Authentication model, which is not obvious from the docs:
 """
 
 import json
+import logging
 import ssl
 import threading
 import time
@@ -26,6 +27,8 @@ import urllib.parse
 import urllib.request
 
 from .models import Guest, Node, parse_spice_clients
+
+log = logging.getLogger(__name__)
 
 DEFAULT_PORT = 8006
 TICKET_LIFETIME = 7200  # what PVE grants
@@ -124,16 +127,48 @@ class ProxmoxAPI:
                     headers["CSRFPreventionToken"] = self._csrf
 
         request = urllib.request.Request(url, data=body, headers=headers, method=method)
+        # Every call, with how long it took. This is the record that says
+        # whether a console that never opened was waiting on the server or
+        # never asked it anything -- worth the two lines it costs.
+        started = time.monotonic()
+        log.debug("%s %s", method, path)
         try:
             with urllib.request.urlopen(
                 request, timeout=self.timeout, context=self._context
             ) as response:
                 payload = response.read()
+                log.debug(
+                    "%s %s -> %s in %.2fs (%d bytes)",
+                    method,
+                    path,
+                    response.status,
+                    time.monotonic() - started,
+                    len(payload),
+                )
         except urllib.error.HTTPError as exc:
-            raise self._http_error(exc) from None
+            error = self._http_error(exc)
+            log.warning(
+                "%s %s -> HTTP %s in %.2fs: %s",
+                method,
+                path,
+                exc.code,
+                time.monotonic() - started,
+                error,
+            )
+            raise error from None
         except urllib.error.URLError as exc:
+            log.warning(
+                "%s %s failed after %.2fs: %s",
+                method,
+                path,
+                time.monotonic() - started,
+                exc.reason,
+            )
             raise ProxmoxError(f"cannot reach {self.host}: {exc.reason}") from None
         except TimeoutError:
+            log.warning(
+                "%s %s timed out after %.2fs", method, path, time.monotonic() - started
+            )
             raise ProxmoxError(f"timed out talking to {self.host}") from None
 
         if not payload:
@@ -633,9 +668,9 @@ class ProxmoxAPI:
         if parsed is None:
             # Printed in full because the only way this gets fixed is by
             # seeing what the server actually said.
-            print("[api] unrecognised 'info spice' output:")
+            log.info("unrecognised 'info spice' output:")
             for line in text.splitlines()[:20]:
-                print(f"[api]   {line}")
+                log.info("  %s", line)
             raise ProxmoxError("could not read the monitor's SPICE report")
         return parsed
 

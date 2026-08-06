@@ -11,6 +11,7 @@ frame.
 """
 
 import contextlib
+import logging
 import time
 
 import gi
@@ -31,6 +32,8 @@ from .status_panel import (
     draw_offline_effect,
 )
 from .wsclient import WebSocketStream
+
+log = logging.getLogger(__name__)
 
 AVAILABLE = cairo is not None
 
@@ -497,7 +500,7 @@ class VncConsole(Gtk.Box):
     def _status(self, text):
         self.last_status = text
         self.on_status(text)
-        print(f"[vnc] {self.title}: {text}")
+        log.info("%s: %s", self.title, text)
         return False
 
     def screenshot(self, path):

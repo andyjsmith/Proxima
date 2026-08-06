@@ -204,14 +204,38 @@ jobs:
           (cd work/windows/proxima.dist && zip -qr9 \
             "${GITHUB_WORKSPACE}/out/proxima-${VERSION}-windows-x86_64.zip" .)
 
+      - name: Fetch the UsbDk driver
+        # SPICE USB redirection needs a kernel driver on Windows, and the
+        # installer offers to put it on -- so the MSI has to be inside the
+        # installer. Fetched here rather than committed: it is six megabytes
+        # of somebody else's release, and it should track theirs.
+        #
+        # Not fatal. A release without it is a release whose installer does
+        # not offer the driver, which is worse than one that does and far
+        # better than no release at all; the step says so and the installer
+        # compiles without it.
+        id: usbdk
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 tools/fetch_usbdk.py work/usbdk/UsbDk_x64.msi
+          echo "msi=${GITHUB_WORKSPACE}/work/usbdk/UsbDk_x64.msi" >> "$GITHUB_OUTPUT"
+
       - name: Windows installer
         run: |
           set -euo pipefail
-          makensis \
-            "-DVERSION=${VERSION}" \
-            "-DDIST=${GITHUB_WORKSPACE}/work/windows/proxima.dist" \
-            "-DOUTFILE=${GITHUB_WORKSPACE}/out/proxima-${VERSION}-windows-x86_64-setup.exe" \
-            packaging/proxima.nsi
+          args=(
+            "-DVERSION=${VERSION}"
+            "-DDIST=${GITHUB_WORKSPACE}/work/windows/proxima.dist"
+            "-DOUTFILE=${GITHUB_WORKSPACE}/out/proxima-${VERSION}-windows-x86_64-setup.exe"
+          )
+          if [ -f "work/usbdk/UsbDk_x64.msi" ]; then
+            args+=("-DUSBDK=${GITHUB_WORKSPACE}/work/usbdk/UsbDk_x64.msi")
+            echo "bundling the UsbDk driver"
+          else
+            echo "::warning::UsbDk was not fetched; the installer will not offer it"
+          fi
+          makensis "${args[@]}" packaging/proxima.nsi
 
       - name: Checksums
         run: |

@@ -6,6 +6,7 @@ is nowhere, so the file is found by hand and set as the default for every
 window the process opens.
 """
 
+import logging
 import sys
 from pathlib import Path
 
@@ -13,6 +14,8 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
+
+log = logging.getLogger(__name__)
 
 ICON_NAME = "proxima.png"
 
@@ -43,6 +46,6 @@ def apply_default_icon():
     try:
         Gtk.Window.set_default_icon_from_file(str(path))
     except Exception as exc:  # a corrupt or unreadable file is not fatal
-        print(f"[icon] could not load {path}: {exc}")
+        log.warning("could not load %s: %s", path, exc)
         return None
     return path

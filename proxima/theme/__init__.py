@@ -1,11 +1,15 @@
 """Theming: the compact stylesheet, base theme selection, font rendering."""
 
+import logging
+
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
 from . import css, discovery, fonts, native_chrome, system
+
+log = logging.getLogger(__name__)
 
 _providers = []
 _dark = False
@@ -17,7 +21,7 @@ def _load(screen, stylesheet, label):
     try:
         provider.load_from_data(stylesheet.encode("utf-8"))
     except GLib.Error as exc:
-        print(f"[theme] {label} CSS not applied: {exc.message}")
+        log.warning("%s CSS not applied: %s", label, exc.message)
         return False
     Gtk.StyleContext.add_provider_for_screen(
         screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
@@ -150,7 +154,7 @@ def apply(config, root_widget=None):
     decorate_all()
 
     if not available:
-        print(f"[theme] {config.get('theme')} is not installed; using {theme_name}")
+        log.info("%s is not installed; using %s", config.get("theme"), theme_name)
     return theme_name, dark
 
 

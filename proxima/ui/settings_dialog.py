@@ -279,11 +279,15 @@ class SettingsDialog(Gtk.Dialog):
         self._check(
             grid,
             row,
+            "Automatically check for updates",
+            "check_updates",
+        )
+        row += 1
+        self._check(
+            grid,
+            row,
             "Restore the last session",
             "restore_session",
-            tooltip="Reopen the consoles that were open when the "
-            "app last closed, and expand the tree the same "
-            "way",
         )
         row += 1
 

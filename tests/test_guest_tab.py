@@ -702,10 +702,13 @@ def test_the_action_buttons_space_their_icons_off_their_labels(window, closed_ta
         assert button.get_style_context().has_class("labelled-icon"), name
         spaced = image.get_allocation().width
         button.get_style_context().remove_class("labelled-icon")
-        pump(0.4)
+        # Waited for rather than slept on: a fixed pump is a bet that GTK
+        # gets round to re-allocating within it, and on a loaded suite that
+        # bet is lost often enough to fail a test about the CSS.
+        pump_until(lambda i=image, w=spaced: i.get_allocation().width != w, 5, step=0.1)
         bare = image.get_allocation().width
         button.get_style_context().add_class("labelled-icon")
-        pump(0.4)
+        pump_until(lambda i=image, w=spaced: i.get_allocation().width == w, 5, step=0.1)
         assert spaced - bare >= 4, (
             f"{name} gives its icon {spaced - bare}px of room beside the text"
         )

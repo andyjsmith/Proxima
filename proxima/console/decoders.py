@@ -7,7 +7,10 @@ to demote them. It has to be applied before Gst.init(), which spice-gtk calls
 lazily on the first streamed frame.
 """
 
+import logging
 import os
+
+log = logging.getLogger(__name__)
 
 HARDWARE_DECODERS = [
     "d3d11h264dec",
@@ -40,7 +43,7 @@ def demote_hardware_decoders():
     existing = os.environ.get("GST_PLUGIN_FEATURE_RANK", "")
     ranks = ",".join(f"{name}:NONE" for name in HARDWARE_DECODERS)
     os.environ["GST_PLUGIN_FEATURE_RANK"] = f"{existing},{ranks}" if existing else ranks
-    print("[spice] hardware decoders demoted; software decoding only")
+    log.info("hardware decoders demoted; software decoding only")
 
 
 def gstreamer_report():

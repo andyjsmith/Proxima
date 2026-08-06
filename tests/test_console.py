@@ -435,3 +435,127 @@ def test_a_real_console_keeps_the_tabs_connecting_panel_up(window, live_console)
         assert placeholder.get_text() == "", (
             f"the console shows a bare {placeholder.get_text()!r} label"
         )
+
+
+def test_a_second_tab_makes_the_split_entry_live(window):
+    """The split controls act on the notebook page, not on the console.
+
+    A console lives inside a GuestTab and the tab is what the notebook
+    holds, so looking up "which pane holds this console" answered "none"
+    every time -- which left Move Console to a New Pane permanently grey and
+    made the toolbar button do nothing on the rare path that reached it.
+    """
+    window.open_console(STOPPED)
+    pump_until(lambda: STOPPED in window.tabs, 6)
+    window.open_console(key_for(101))
+    pump_until(lambda: key_for(101) in window.tabs, 6)
+    pump(0.4)
+    try:
+        assert window.panes.total_pages() >= 2, "the two tabs did not both open"
+        window._sync_view_menu()
+        assert window.split_item.get_sensitive(), (
+            "the split entry is dead with two tabs open in one pane"
+        )
+        assert window.split_item_tb.get_sensitive(), "the split button is dead too"
+
+        panes_before = window.panes.pane_count()
+        window._split_console()
+        pump(0.5)
+        assert window.panes.pane_count() == panes_before + 1, (
+            "splitting did not open a second pane"
+        )
+    finally:
+        window._gather_consoles()
+        window.close_console(key_for(101))
+        window.close_console(STOPPED)
+        pump(0.4)
+
+
+class _FakeDisplay:
+    """Just enough SpiceDisplay to answer "who has the keyboard?"."""
+
+    def __init__(self):
+        self.properties = {"grab-keyboard": True, "grab-mouse": True}
+        self.focused = False
+        self.ungrabs = 0
+
+    def set_property(self, name, value):
+        self.properties[name] = value
+
+    def get_property(self, name):
+        return self.properties[name]
+
+    def grab_focus(self):
+        self.focused = True
+
+    def keyboard_ungrab(self):
+        self.ungrabs += 1
+
+
+class _FakeToplevel:
+    def __init__(self, active):
+        self.active = active
+
+    def is_active(self):
+        return self.active
+
+
+def test_hovering_an_inactive_window_does_not_take_the_keyboard():
+    """Hover grabs the keyboard, but only for the window you are using.
+
+    spice-gtk's grab is a low-level keyboard hook on Windows, so a console
+    that grabs while its window is in the background swallows what is being
+    typed into whatever *is* in the foreground.
+    """
+    from proxima.console.spice import SpiceConsole
+
+    console = SpiceConsole.__new__(SpiceConsole)
+    console._closed = False
+    console.connected = True
+    console._pointer_inside = False
+    display = _FakeDisplay()
+    console._display = display
+    console._toplevel = _FakeToplevel(active=False)
+
+    console._apply_keyboard_grab()
+    assert display.properties["grab-keyboard"] is False, (
+        "spice-gtk was left free to grab from a background window"
+    )
+    assert display.ungrabs == 1, "an inactive window kept the keyboard grabbed"
+
+    console._on_display_enter(display, None)
+    assert not display.focused, "hovering a background console took the keyboard"
+    assert console._pointer_inside, "the pointer position was not remembered"
+
+    # The same hover, once the window is the one being used.
+    console._toplevel.active = True
+    console._apply_keyboard_grab()
+    assert display.properties["grab-keyboard"] is True
+    console._on_display_enter(display, None)
+    assert display.focused, "hovering the active console did not take the keyboard"
+
+
+def test_returning_to_the_window_regrabs_under_the_pointer():
+    """Alt-tabbing back with the pointer already on the console.
+
+    spice-gtk only reconsiders the grab on a crossing or focus event, and
+    neither one is coming -- the pointer never moved.
+    """
+    from proxima.console.spice import SpiceConsole
+
+    console = SpiceConsole.__new__(SpiceConsole)
+    console._closed = False
+    console.connected = True
+    console._pointer_inside = True
+    display = _FakeDisplay()
+    console._display = display
+    console._toplevel = _FakeToplevel(active=True)
+
+    console._on_window_active_changed()
+    assert display.focused, "coming back left the guest without the keyboard"
+
+    display.focused = False
+    console._toplevel.active = False
+    console._on_window_active_changed()
+    assert not display.focused, "leaving the window handed the keyboard back over"
+    assert display.properties["grab-keyboard"] is False

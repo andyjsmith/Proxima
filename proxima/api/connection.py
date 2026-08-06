@@ -7,9 +7,12 @@ others keep working, rather than taking the whole window with it.
 """
 
 import contextlib
+import logging
 import threading
 
 from .client import DEFAULT_PORT, AuthError, ProxmoxAPI, ProxmoxError
+
+log = logging.getLogger(__name__)
 
 # Connection states
 DISCONNECTED = "disconnected"
@@ -90,17 +93,21 @@ class Connection:
         self.state = CONNECTING
         self.error = ""
         secret = password if password is not None else self.password
+        log.info("connecting to %s as %s@%s", self.host, self.username, self.realm)
         try:
             self.api.login(self.username, secret, realm=self.realm, otp=otp)
         except (AuthError, ProxmoxError) as exc:
             self.state = FAILED
             self.error = str(exc)
+            log.warning("login to %s refused: %s", self.host, exc)
             raise
         except Exception as exc:
             self.state = FAILED
             self.error = f"{type(exc).__name__}: {exc}"
+            log.exception("login to %s raised", self.host)
             raise
         self.state = CONNECTED
+        log.info("connected to %s", self.host)
         if password is not None:
             self.password = password
         return self

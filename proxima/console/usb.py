@@ -32,6 +32,7 @@ not a favour.
 """
 
 import contextlib
+import logging
 import os
 
 from gi.repository import GLib
@@ -52,10 +53,16 @@ SETTLE_MS = 2000
 # is far too late to be a useful place to explain the requirement.
 USBDK_DRIVER = "System32/drivers/UsbDk.sys"
 
+# Where to get it. The installer offers to put it on for you, so this is the
+# path for a zip install, or for somebody who said no the first time.
+USBDK_RELEASES = "https://github.com/daynix/UsbDk/releases/latest"
+
 USBDK_ADVICE = (
     "the UsbDk driver is not installed, so Windows will not hand a device "
-    "over. Install UsbDk (spice-space.org) to redirect USB devices."
+    "over. Install UsbDk to redirect USB devices."
 )
+
+log = logging.getLogger(__name__)
 
 # Devices from the seeding enumeration, deliberately never released: see the
 # module docstring. A handful of small objects per console, once.
@@ -121,14 +128,14 @@ class UsbRedirection:
             self.manager = SpiceGLib.UsbDeviceManager.get(session)
         except Exception as exc:
             self.note = f"USB redirection unavailable: {exc}"
-            print(f"[usb] no device manager: {exc}")
+            log.info("no device manager: %s", exc)
             return
 
         try:
             # We ask before taking a device; see the module docstring.
             self.manager.set_property("auto-connect", False)
         except Exception as exc:
-            print(f"[usb] could not turn auto-connect off: {exc}")
+            log.warning("could not turn auto-connect off: %s", exc)
 
         for name, handler in (
             ("device-added", self._on_device_added),
@@ -138,7 +145,7 @@ class UsbRedirection:
             try:
                 self._handlers.append(connect_signal(self.manager, name, handler))
             except Exception as exc:
-                print(f"[usb] no '{name}' signal: {exc}")
+                log.info("no '%s' signal: %s", name, exc)
 
         self._seed()
         self._arm_settle()
@@ -157,7 +164,7 @@ class UsbRedirection:
         try:
             found = self.manager.get_devices() or []
         except Exception as exc:
-            print(f"[usb] could not seed the device list: {exc}")
+            log.warning("could not seed the device list: %s", exc)
             return
         for device in found:
             _SEEDED.append(device)
@@ -226,7 +233,7 @@ class UsbRedirection:
         try:
             text = device.get_description(None)
         except Exception as exc:
-            print(f"[usb] could not describe a device: {exc}")
+            log.warning("could not describe a device: %s", exc)
             return None
         return " ".join(text.split()) if text else None
 
@@ -318,7 +325,7 @@ class UsbRedirection:
                 return
             except Exception as exc:
                 self._busy.discard(key)
-                print(f"[usb] async disconnect failed, falling back: {exc}")
+                log.warning("async disconnect failed, falling back: %s", exc)
 
         try:
             self.manager.disconnect_device(device)

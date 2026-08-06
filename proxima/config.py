@@ -7,8 +7,11 @@ are pushed into the environment before GTK loads.
 
 import copy
 import json
+import logging
 import os
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # Bumped when a stored setting needs rewriting rather than merely defaulting.
 CONFIG_VERSION = 1
@@ -61,6 +64,11 @@ DEFAULTS = {
     "confirm_reset": True,
     "confirm_pause": False,
     # -- startup -------------------------------------------------------
+    # Ask GitHub for the latest release a few seconds after the window
+    # opens. Only a packaged build does this: a source checkout reports
+    # whatever pyproject says, which is routinely behind the tree it
+    # describes, so the answer would be noise.
+    "check_updates": True,
     # Reopen the consoles that were open when the app last closed, and put
     # the tree back the way it was expanded.
     "restore_session": True,
@@ -162,7 +170,7 @@ class Config(dict):
             os.replace(tmp, config_file())
             return True
         except OSError as exc:
-            print(f"[config] could not save: {exc}")
+            log.warning("could not save: %s", exc)
             return False
 
 

@@ -7,11 +7,43 @@ VNC.
 python3 proxima.py                 normal start
 python3 proxima.py --diagnose      report the theme/SPICE stack
 python3 proxima.py --fontconfig    force the FreeType font backend
+python3 proxima.py --debug         log everything, including GLib's own
+python3 proxima.py --logs          print the log directory and exit
 ```
 
 On Windows this must run under the MSYS2 UCRT64 Python
 (`C:/msys64/ucrt64/bin/python.exe`), not a python.org install: PyGObject and
 spice-gtk come from pacman and will not load anywhere else.
+
+## Logs
+
+Every run writes one, and **Help -> Open Log Folder** is the short way to
+find it. The last five runs are kept.
+
+| | |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\Proxima\logs` |
+| Linux | `$XDG_STATE_HOME/proxima/logs`, or `~/.local/state/proxima/logs` |
+| macOS | `~/Library/Logs/Proxima` |
+| Anywhere | `PROXIMA_LOG_DIR` overrides all of the above |
+
+The file always gets full detail; `--debug` additionally puts it on the
+console and stops filtering GLib's own chatter (`G_MESSAGES_DEBUG` picks
+individual domains, as it would anywhere else). This matters more than it
+looks: a packaged Windows build is a GUI-subsystem executable with **no
+stdout and no stderr at all**, so on Windows the log file is the only
+account of a run there will ever be. GTK, GStreamer and spice-gtk log
+through GLib rather than through Python, and those messages are routed into
+the same file -- a SPICE fault usually explains itself on a `GSpice` line.
+
+## Updates
+
+A packaged build asks GitHub for the latest release a few seconds after the
+window opens, and says so only when there is a newer one. It never downloads
+or installs anything; the dialog shows the release notes and a link. Turn it
+off in Preferences -> Behaviour, or check on demand from Help -> Check for
+Updates. A source checkout never checks by itself -- the version there comes
+from `pyproject.toml`, which is routinely behind the tree it describes.
 
 ## USB redirection
 
@@ -27,7 +59,7 @@ missing:
 | | |
 | --- | --- |
 | The VM needs a SPICE USB port | Proxmox adds none. Hardware -> Add -> USB Device -> Spice Port, which writes `usb0: spice`. One line, one device at a time; add more for more. |
-| Windows needs the UsbDk driver | [UsbDk](https://www.spice-space.org/download.html) (spice-space downloads, or bundled with virt-viewer). Devices are listed without it and the list looks perfectly healthy -- Windows just will not hand one over when it is claimed. |
+| Windows needs the UsbDk driver | The installer offers to install it (a tickbox on the components page), or get it from [daynix/UsbDk](https://github.com/daynix/UsbDk/releases/latest). Devices are listed without it and the list looks perfectly healthy -- Windows just will not hand one over when it is claimed. |
 | Linux needs access to the device | spice-gtk talks to libusb directly, so the user has to be able to open `/dev/bus/usb`. The distribution's `spice-client-glib-usb-acl-helper` handles this where it is installed. |
 
 A redirected device is taken away from this computer for as long as it is
@@ -187,6 +219,15 @@ rewritten, since the paths in it belong to the machine the build was made on
 `gst-plugins.txt` -- the list of GStreamer plugins a build carries. Shipping
 every plugin costs about 200 MB, nearly all of it encoders a client never
 uses.
+
+The Windows installer can also carry the UsbDk driver, which USB redirection
+needs. `tools/fetch_usbdk.py` downloads the latest x64 MSI at package time
+and the release workflow passes it to `makensis` as `-DUSBDK=...`; without
+that define the installer compiles exactly as before and simply does not
+offer the driver. It is one tickbox on the components page, unticked
+automatically when the machine already has UsbDk, and the uninstaller
+deliberately leaves the driver alone -- virt-viewer and friends use the same
+one.
 
 The application icon is `packaging/proxima.png`. After changing it, run
 `python3 tools/make_icon.py` to rebuild `packaging/proxima.ico`, which is

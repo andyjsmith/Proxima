@@ -507,7 +507,11 @@ def busy(window):
     sample_row(102)["name"] = "build-runner"
     sample_row(102)["status"] = "stopped"
     window.refresh()
-    pump(0.6)
+    # Waited for, not slept on. The next test in this file renames the same
+    # guest, and a rename to the name it already has is a no-op that starts
+    # no spinner -- so a teardown that gave up before the refresh landed
+    # failed the *following* test, and only ever under a loaded suite.
+    pump_until(lambda: window.sidebar.guests[STOPPED].name == "build-runner", 10)
 
 
 def test_a_rename_shows_its_new_name_at_once_and_stops_spinning(window, busy):

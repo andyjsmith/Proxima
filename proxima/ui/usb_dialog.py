@@ -17,6 +17,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from ..console.usb import USBDK_RELEASES, usbdk_installed
 from ..theme import decorate as theme_decorate
 
 # What to do about a guest with no redirection port. Proxmox writes this
@@ -51,6 +52,11 @@ class UsbDeviceDialog(Gtk.Dialog):
         content.set_border_width(12)
         content.set_spacing(8)
 
+        # The one thing that cannot be fixed from inside this dialog, so it
+        # goes above everything and carries the way to fix it.
+        if usbdk_installed() is False:
+            content.pack_start(self._usbdk_banner(), False, False, 0)
+
         self.note = Gtk.Label(xalign=0.0)
         self.note.set_line_wrap(True)
         self.note.get_style_context().add_class("dim")
@@ -66,6 +72,47 @@ class UsbDeviceDialog(Gtk.Dialog):
         theme_decorate(self)
         self.refresh()
         self.show_all()
+
+    @staticmethod
+    def _usbdk_banner():
+        """The driver requirement, and where to go and get it.
+
+        Devices still list without UsbDk and the list looks perfectly
+        healthy, so the requirement has to be stated somewhere other than
+        the failure it eventually causes.
+        """
+        frame = Gtk.Frame()
+        frame.get_style_context().add_class("usb-driver-notice")
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        box.set_border_width(8)
+
+        icon = Gtk.Image.new_from_icon_name(
+            "dialog-warning-symbolic", Gtk.IconSize.LARGE_TOOLBAR
+        )
+        icon.set_valign(Gtk.Align.START)
+        box.pack_start(icon, False, False, 0)
+
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        heading = Gtk.Label(xalign=0.0)
+        heading.set_markup("<b>The UsbDk driver is not installed</b>")
+        text.pack_start(heading, False, False, 0)
+
+        detail = Gtk.Label(xalign=0.0)
+        detail.set_line_wrap(True)
+        detail.set_text(
+            "Windows will not hand a USB device to the VM without it. "
+            "Devices are listed below either way, but connecting one will "
+            "fail. Proxima's installer can put it on for you, or:"
+        )
+        text.pack_start(detail, False, False, 0)
+
+        link = Gtk.LinkButton.new_with_label(USBDK_RELEASES, "Download UsbDk")
+        link.set_halign(Gtk.Align.START)
+        text.pack_start(link, False, False, 0)
+
+        box.pack_start(text, True, True, 0)
+        frame.add(box)
+        return frame
 
     # -- contents ------------------------------------------------------
 

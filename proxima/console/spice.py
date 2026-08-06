@@ -13,6 +13,7 @@ Its quirks are worth restating because none of them are guessable:
 """
 
 import contextlib
+import logging
 import os
 import tempfile
 import time
@@ -32,6 +33,8 @@ from .status_panel import (
     draw_offline_effect,
 )
 from .usb import UsbRedirection
+
+log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------
 # Session method shadowing
@@ -263,6 +266,13 @@ class SpiceConsole(Gtk.Box):
         self._closed = False
         self.last_status = ""
         self.usb = None
+        # The window this console is in, and whether the pointer is on it:
+        # together they decide who is allowed the keyboard. See the grab
+        # section further down.
+        self._toplevel = None
+        self._toplevel_handler = None
+        self._pointer_inside = False
+        self.connect("hierarchy-changed", self._on_hierarchy_changed)
 
         if not AVAILABLE:
             self.session = None
@@ -279,7 +289,7 @@ class SpiceConsole(Gtk.Box):
         if not _REPORTED_GSTREAMER:
             _REPORTED_GSTREAMER = True
             for line in gstreamer_report():
-                print(f"[spice] {line}")
+                log.info("%s", line)
 
         self.stack_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         # Blank, and only to hold the space until the display arrives. The
@@ -313,7 +323,7 @@ class SpiceConsole(Gtk.Box):
         )
         for line in (self.usb.note, self.usb.advice):
             if line:
-                print(f"[usb] {line}")
+                log.info("%s", line)
         connect_signal(self.session, "channel-new", self._on_channel_new)
         connect_signal(self.session, "disconnected", self._on_disconnected)
 
@@ -346,13 +356,13 @@ class SpiceConsole(Gtk.Box):
                     try:
                         func(*args)
                         self._status(f"{label} via {location}")
-                        print(f"[spice] applied {location} arity={len(args)}")
+                        log.info("applied %s arity=%s", location, len(args))
                         return
                     except Exception as exc:
                         errors.append(f"{location}: {exc}")
         self._status(f"{func_name} failed -- {errors[0] if errors else '?'}")
         for line in errors[:4]:
-            print(f"[spice]   {line}")
+            log.info("  %s", line)
 
     def set_codec_index(self, index):
         self.codec_index = index
@@ -384,9 +394,9 @@ class SpiceConsole(Gtk.Box):
             # Disabling audio isolates that from video latency.
             try:
                 session.set_property("enable-audio", False)
-                print("[spice] audio disabled")
+                log.info("audio disabled")
             except Exception as exc:
-                print(f"[spice] could not disable audio: {exc}")
+                log.warning("could not disable audio: %s", exc)
 
         # host is the Proxmox proxy ticket, passed through verbatim.
         if params.get("host"):
@@ -437,7 +447,7 @@ class SpiceConsole(Gtk.Box):
         try:
             return SpiceGtk.GtkSession.get(self.session)
         except Exception as exc:
-            print(f"[spice] no GtkSession for clipboard control: {exc}")
+            log.info("no GtkSession for clipboard control: %s", exc)
             return None
 
     def _apply_clipboard(self):
@@ -447,7 +457,7 @@ class SpiceConsole(Gtk.Box):
             self._gtk_session.set_property("auto-clipboard", bool(self.share_clipboard))
             return True
         except Exception as exc:
-            print(f"[spice] could not set clipboard sharing: {exc}")
+            log.warning("could not set clipboard sharing: %s", exc)
             return False
 
     def set_clipboard_enabled(self, enabled):
@@ -618,7 +628,7 @@ class SpiceConsole(Gtk.Box):
                 SpiceGtk.GrabSequence.new_from_string("Control_L+Alt_L")
             )
         except Exception as exc:
-            print(f"[spice] could not set grab keys: {exc}")
+            log.warning("could not set grab keys: %s", exc)
         # Never let the widget's own size request drive layout; the holder
         # decides the size and the guest follows it.
         display.set_size_request(-1, -1)
@@ -644,18 +654,81 @@ class SpiceConsole(Gtk.Box):
         self.stack_area.remove(self.placeholder)
         self.stack_area.pack_start(holder, True, True, 0)
         holder.show_all()
-        display.grab_focus()
 
         self._display = display
         self._holder = holder
         self.connected = True
+        # Only after _display is set: this is what decides whether the guest
+        # is allowed the keyboard at all, and it reads the display.
+        self._apply_keyboard_grab()
+        if self._window_active():
+            display.grab_focus()
         self.status_panel.hide_message()
         self._status("connected")
         return False
 
+    # -- keyboard grab --------------------------------------------------
+    #
+    # Two rules, and the second is the one that is easy to get wrong:
+    #
+    #   * the pointer has to be over the console, and
+    #   * the window has to be the active one.
+    #
+    # Without the second, hovering the console of a window you are not using
+    # takes the keyboard away from the window you *are* using. On Windows
+    # that is not a figure of speech: spice-gtk's grab is a low-level
+    # keyboard hook, so an unfocused Proxima will happily swallow what you
+    # are typing into your browser.
+
+    def _window_active(self):
+        return self._toplevel is not None and self._toplevel.is_active()
+
+    def _on_hierarchy_changed(self, _widget, _old_toplevel):
+        """Follow the window this console is in, tab or pop-out."""
+        window = self.get_toplevel()
+        if not isinstance(window, Gtk.Window):
+            window = None
+        if window is self._toplevel:
+            return
+        if self._toplevel is not None and self._toplevel_handler is not None:
+            with contextlib.suppress(Exception):
+                self._toplevel.disconnect(self._toplevel_handler)
+        self._toplevel = window
+        self._toplevel_handler = None
+        if window is not None:
+            self._toplevel_handler = window.connect(
+                "notify::is-active", self._on_window_active_changed
+            )
+        self._apply_keyboard_grab()
+
+    def _on_window_active_changed(self, *_args):
+        self._apply_keyboard_grab()
+        # Coming back to a window with the pointer already sitting on the
+        # console: spice-gtk only reconsiders the grab on a crossing or
+        # focus event, and neither is coming, so give it one.
+        if self._window_active() and self._pointer_inside and not self._closed:
+            with contextlib.suppress(Exception):
+                self._display.grab_focus()
+
+    def _apply_keyboard_grab(self):
+        """Let spice-gtk hold the keyboard only for an active window.
+
+        Belt and braces with the focus handling below: this switches off
+        spice-gtk's own grab logic outright, so nothing it does on a
+        crossing event can reach around us.
+        """
+        if self._display is None:
+            return
+        active = self._window_active()
+        with contextlib.suppress(Exception):
+            self._display.set_property("grab-keyboard", active)
+        if not active:
+            self._ungrab_keyboard()
+
     def _on_display_enter(self, widget, _event):
         """Pointer over the console: it may take the keyboard again."""
-        if self.connected and not self._closed:
+        self._pointer_inside = True
+        if self.connected and not self._closed and self._window_active():
             widget.grab_focus()
         return False
 
@@ -674,6 +747,7 @@ class SpiceConsole(Gtk.Box):
             and self._mouse_grabbed()
         ):
             return False
+        self._pointer_inside = False
         self._ungrab_keyboard()
         return False
 
@@ -696,7 +770,7 @@ class SpiceConsole(Gtk.Box):
             try:
                 func()
             except Exception as exc:
-                print(f"[spice] keyboard_ungrab failed: {exc}")
+                log.warning("keyboard_ungrab failed: %s", exc)
 
     def _on_display_drawn(self, widget, context):
         if not self.connected or self.pending:
@@ -752,14 +826,14 @@ class SpiceConsole(Gtk.Box):
                 try:
                     func()
                 except Exception as exc:
-                    print(f"[spice] {name} failed: {exc}")
+                    log.warning("%s failed: %s", name, exc)
 
     # -- lifecycle -----------------------------------------------------
 
     def _status(self, text):
         self.last_status = text
         self.on_status(text)
-        print(f"[spice] {self.title}: {text}")
+        log.info("%s: %s", self.title, text)
 
     def screenshot(self, path):
         """Grab the display widget.
@@ -855,6 +929,10 @@ class SpiceConsole(Gtk.Box):
 
     def shutdown(self):
         self._closed = True
+        if self._toplevel is not None and self._toplevel_handler is not None:
+            with contextlib.suppress(Exception):
+                self._toplevel.disconnect(self._toplevel_handler)
+            self._toplevel_handler = None
         if getattr(self, "usb", None) is not None:
             # Before the session goes: a redirected device is only handed
             # back to the host while there is still a channel to say so on.

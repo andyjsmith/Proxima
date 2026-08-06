@@ -10,19 +10,20 @@ allowed to block the main loop, because the main loop is also what draws the
 console.
 """
 
+import logging
 import os
 import subprocess
 import threading
 import time
-import traceback
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import gi
 
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
-from .. import APP_NAME, __version__, secrets
+from .. import APP_NAME, __version__, logs, secrets, update
 from ..api import AuthError, ProxmoxError
 from ..api import notes as notes_meta
 from ..api.connection import FAILED, Connection, ConnectionManager
@@ -57,8 +58,11 @@ from .snapshots import SnapshotManager, TakeSnapshotDialog
 from .split import MAX_PANES, SplitView
 from .summary import GuestSummary
 from .task_feed import TaskFeed
+from .update_dialog import UpdateDialog
 from .usb_dialog import UsbDeviceDialog, UsbPlugPrompt
 from .vm_settings import VMSettingsDialog
+
+log = logging.getLogger(__name__)
 
 # Distinguishes "work it out yourself" from "explicitly no console".
 _CURRENT = object()
@@ -122,6 +126,7 @@ class MainWindow(Gtk.Window):
         self._updating_usb_menu = False
         self._usb_dialog = None  # the device chooser, while it is open
         self._usb_prompt = None  # the "something was plugged in" question
+        self._update_pending = False
         # Set while a pane toggle is being put back in step with its pane,
         # so doing so does not read as a click on it.
         self._syncing_toggles = False
@@ -466,6 +471,9 @@ class MainWindow(Gtk.Window):
         help_menu = Gtk.Menu()
         help_item = Gtk.MenuItem(label="_Help", use_underline=True)
         help_item.set_submenu(help_menu)
+        self._menu_item(help_menu, "Check for Updates...", self._check_updates_now)
+        self._menu_item(help_menu, "Open Log Folder", self._open_log_folder)
+        help_menu.append(Gtk.SeparatorMenuItem())
         self._menu_item(help_menu, "About", self._about)
         bar.append(help_item)
 
@@ -3027,33 +3035,82 @@ class MainWindow(Gtk.Window):
         # the config and then a SPICE or VNC ticket is two round trips and
         # can take several seconds, which used to be spent staring at an
         # unchanged window with one line in the status bar.
-        self._install_console(
-            guest,
-            PlaceholderConsole(
-                title=guest.name,
-                status="connecting",
-                on_reconnect=lambda k=guest.key: self.reconnect_console(k),
-            ),
+        waiting = PlaceholderConsole(
+            title=guest.name,
+            status="connecting",
+            on_reconnect=lambda k=guest.key: self.reconnect_console(k),
         )
+        self._install_console(guest, waiting)
         self.set_status(f"{guest.label}: connecting...")
 
+        log.info(
+            "opening a console for %s (replace=%s automatic=%s takeover=%s)",
+            guest.label,
+            replace,
+            automatic,
+            takeover,
+        )
+        GLib.timeout_add_seconds(
+            self.CONSOLE_WATCHDOG,
+            lambda: self._console_still_waiting(guest.key, waiting),
+        )
+
         def worker():
+            started = time.monotonic()
             try:
                 plan = self._plan_console(guest, takeover=takeover)
             except ProxmoxError as exc:
+                log.warning("%s: planning the console failed: %s", guest.label, exc)
                 GLib.idle_add(self._console_failed, guest, str(exc))
                 return
             except Exception as exc:
-                traceback.print_exc()
+                log.exception("%s: planning the console raised", guest.label)
                 GLib.idle_add(
                     self._console_failed, guest, f"{type(exc).__name__}: {exc}"
                 )
                 return
+            log.info(
+                "%s: plan is %s after %.2fs",
+                guest.label,
+                plan.get("protocol"),
+                time.monotonic() - started,
+            )
             GLib.idle_add(self._build_console, guest, plan, replace, automatic)
 
         threading.Thread(
             target=worker, daemon=True, name=f"console-{guest.vmid}"
         ).start()
+
+    # Longer than the API's own timeout, so an ordinary slow server has
+    # already given up and reported itself before this has anything to say.
+    CONSOLE_WATCHDOG = 45
+
+    def _console_still_waiting(self, key, placeholder):
+        """A console that never became one. Say so instead of spinning.
+
+        There is no legitimate way to sit here this long: every request the
+        opening path makes carries a timeout, and every failure along it
+        reports into the tab. Reaching this means something got lost --
+        which used to look exactly like "the app does nothing", with the
+        spinner still going and no way to find out more.
+        """
+        if self._closing or self.consoles.get(key) is not placeholder:
+            return False
+        if getattr(placeholder, "last_status", "") != "connecting":
+            return False
+        log.error(
+            "%s: still waiting for a console after %ss",
+            key,
+            self.CONSOLE_WATCHDOG,
+        )
+        placeholder.show_error_state(
+            f"Proxmox did not answer within {self.CONSOLE_WATCHDOG} seconds, "
+            "and nothing reported why.\n\n"
+            f"The log has the detail: {logs.current_log_file() or logs.log_dir()} "
+            "(Help > Open Log Folder)."
+        )
+        self.set_status(f"{key}: the console never opened -- see the log")
+        return False
 
     def _switch_console_protocol(self):
         """Reopen the console in front on the other protocol.
@@ -3133,15 +3190,16 @@ class MainWindow(Gtk.Window):
         try:
             count, addresses = api.spice_clients(guest.node, guest.vmid)
         except ProxmoxError as exc:
-            print(
-                f"[console] {guest.label}: could not check for other SPICE "
-                f"clients ({exc})"
+            log.warning(
+                "%s: could not check for other SPICE clients (%s)", guest.label, exc
             )
             return None
         except Exception as exc:
-            print(
-                f"[console] {guest.label}: SPICE client check failed "
-                f"({type(exc).__name__}: {exc})"
+            log.warning(
+                "%s: SPICE client check failed (%s: %s)",
+                guest.label,
+                type(exc).__name__,
+                exc,
             )
             return None
         ours = 1 if self._holds_spice_session(guest.key) else 0
@@ -3178,7 +3236,7 @@ class MainWindow(Gtk.Window):
                 self.absorb_config(guest, config)
         except ProxmoxError as exc:
             config = {}
-            print(f"[console] could not read the config for {guest.label}: {exc}")
+            log.warning("could not read the config for %s: %s", guest.label, exc)
 
         forced_vnc = guest.key in self._force_vnc
         forced_spice = guest.key in self._force_spice
@@ -3226,7 +3284,7 @@ class MainWindow(Gtk.Window):
                     # console you can use beats a correct error message.
                     guest.spice_capable = False
                     reason = f"spiceproxy refused: {exc}"
-                    print(f"[console] {guest.label}: {reason}")
+                    log.info("%s: %s", guest.label, reason)
             else:
                 reason = f"display {guest.display or 'std'} has no SPICE"
         elif not guest.is_container and not forced_vnc:
@@ -3289,6 +3347,22 @@ class MainWindow(Gtk.Window):
         self.config.save()
 
     def _build_console(self, guest, plan, replace=False, automatic=False):
+        """Turn a plan into a console widget. Runs as a GLib idle callback.
+
+        Wrapped whole, because of where it runs: an exception escaping an
+        idle callback is caught by PyGObject and written to stderr, and a
+        packaged Windows build has no stderr. The tab would be left on
+        "connecting..." with nothing anywhere to say why -- which is exactly
+        how this presented before there was a log file to read.
+        """
+        try:
+            return self._build_console_now(guest, plan, replace, automatic)
+        except Exception as exc:
+            log.exception("%s: building the console raised", guest.label)
+            self._console_failed(guest, f"{type(exc).__name__}: {exc}")
+            return False
+
+    def _build_console_now(self, guest, plan, replace=False, automatic=False):
         if self._closing:
             return False
 
@@ -3296,6 +3370,7 @@ class MainWindow(Gtk.Window):
             self._console_occupied(guest, plan, automatic)
             return False
 
+        log.info("%s: building a %s console", guest.label, plan["protocol"])
         title = guest.name
         prefs = self.guest_prefs(guest.key)
         if plan["protocol"] == "spice":
@@ -3729,7 +3804,7 @@ class MainWindow(Gtk.Window):
         try:
             console.shutdown()
         except Exception:
-            traceback.print_exc()
+            log.exception("shutting down the console for %s raised", key)
 
     def _console_status(self, guest, text):
         def apply():
@@ -4117,8 +4192,14 @@ class MainWindow(Gtk.Window):
             # Splitting needs a console to move and somewhere to put it, and
             # is pointless when it is the only tab in a pane -- that would
             # just move an empty gap around.
+            #
+            # The lookup is by page, not by console: a console lives inside
+            # a GuestTab and the tab is what the notebook holds, so asking
+            # which notebook holds the *console* answered "none" every time
+            # and left the entry permanently grey.
             panes = self.panes.pane_count()
-            holder = self.panes.notebook_of(console) if console is not None else None
+            page = self.panes.current_page() if console is not None else None
+            holder = self.panes.notebook_of(page) if page is not None else None
             can_split = bool(
                 console is not None
                 and panes < MAX_PANES
@@ -4216,16 +4297,21 @@ class MainWindow(Gtk.Window):
             self._save_guest_pref("compression_index", index)
 
     def _split_console(self):
-        """Give the console in front a pane of its own."""
-        console = self.current_console()
-        if console is None:
+        """Give the console in front a pane of its own.
+
+        What moves is the notebook page -- the guest's tab, with its summary
+        and its console in it -- not the console widget, which the notebook
+        has never heard of.
+        """
+        page = self.panes.current_page()
+        if page is None or console_of(page) is None:
             return
         if self.fullscreen_control.active:
             self.fullscreen_control.leave()
         if self.panes.pane_count() >= MAX_PANES:
             self.set_status(f"Already showing {MAX_PANES} panes")
             return
-        if self.panes.split(console) is None:
+        if self.panes.split(page) is None:
             self.set_status("Could not split this console out")
             return
         self.set_status(f"{self.panes.pane_count()} panes - drag tabs between them")
@@ -4477,6 +4563,71 @@ class MainWindow(Gtk.Window):
         theme_decorate(dialog)
         dialog.run()
         dialog.destroy()
+
+    # -- updates -------------------------------------------------------
+
+    def check_for_updates(self, automatic=True):
+        """Ask GitHub whether there is a newer release.
+
+        Automatic checks are silent unless there is something to say. A
+        check asked for by hand answers either way, including "nothing new"
+        -- an explicit question that produces no reply reads as broken.
+        """
+        if self._update_pending:
+            return False
+
+        def landed(release, asked):
+            GLib.idle_add(self._update_result, release, asked, automatic)
+
+        started = update.check(self.config, landed, automatic=automatic)
+        self._update_pending = started
+        return started
+
+    def _check_updates_now(self):
+        self.set_status("Checking for updates...")
+        if not self.check_for_updates(automatic=False):
+            self.set_status("An update check is already running")
+
+    def _update_result(self, release, asked, automatic):
+        self._update_pending = False
+        if self._closing:
+            return False
+        if release is not None:
+            UpdateDialog(
+                self,
+                release,
+                __version__,
+                on_setting=self._set_update_checking,
+            )
+        elif not automatic:
+            self.set_status(
+                f"Proxima {__version__} is up to date"
+                if asked
+                else "Could not reach GitHub to check for updates"
+            )
+        return False
+
+    def _set_update_checking(self, enabled):
+        if bool(self.config.get("check_updates", True)) == bool(enabled):
+            return
+        self.config["check_updates"] = bool(enabled)
+        self.config.save()
+
+    def _open_log_folder(self):
+        """Show this run's log in the file manager.
+
+        The first thing a bug report needs, and on Windows the folder is
+        under AppData where nobody goes by accident.
+        """
+        directory = logs.log_dir()
+        current = logs.current_log_file()
+        try:
+            Gtk.show_uri_on_window(self, Path(directory).as_uri(), Gdk.CURRENT_TIME)
+        except Exception as exc:
+            log.warning("could not open the log folder: %s", exc)
+            self._error_dialog("Could not open the log folder", str(directory))
+            return
+        self.set_status(f"Logs: {current or directory}")
 
     def _on_window_state(self, _widget, event):
         """Track maximised and fullscreen, so neither is saved as the other.
