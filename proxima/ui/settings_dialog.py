@@ -12,6 +12,7 @@ from gi.repository import Gtk
 
 from ..theme import decorate as theme_decorate
 from ..theme import fonts
+from . import sidebar
 
 COLOR_MODES = [
     ("system", "Follow system"),
@@ -274,11 +275,24 @@ class SettingsDialog(Gtk.Dialog):
         )
         row += 1
 
+        grid.attach(self._heading("Inventory tree"), 0, row, 2, 1)
+        row += 1
+        self._combo(
+            grid,
+            row,
+            "Group guests by",
+            sidebar.VIEW_LABELS,
+            "tree_view",
+            tooltip="The same three shapes the button beside the search box "
+            "cycles through.",
+        )
+        row += 1
+        self._combo(grid, row, "Names", TREE_NAME_FORMATS, "tree_name_format")
+        row += 1
+
         grid.attach(self._heading("Names"), 0, row, 2, 1)
         row += 1
         self._combo(grid, row, "Console tabs", TAB_TITLE_FORMATS, "tab_title_format")
-        row += 1
-        self._combo(grid, row, "Inventory tree", TREE_NAME_FORMATS, "tree_name_format")
         row += 1
         self._check(
             grid,

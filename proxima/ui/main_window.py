@@ -45,6 +45,7 @@ from ..theme import keep_active as theme_keep_active
 from ..theme.system import DarkModeWatcher
 from . import actions as action_defs
 from . import desktop, trust_dialog
+from . import sidebar as sidebar_mod
 from . import toolbar as toolbar_defs
 from .clone import CloneDialog
 from .console_tab import ConsoleTabLabel
@@ -260,7 +261,7 @@ class MainWindow(Gtk.Window):
         # There is no global summary page: a guest you have not opened has
         # no tab, exactly as it has no console.
         self.tabs = {}  # guest key -> GuestTab
-        self.sidebar.folder_view = bool(config.get("folder_view", False))
+        self.sidebar.view_mode = sidebar_mod.resolve_view(config.get("tree_view"))
         self.sidebar._update_view_button()
 
         # The panes sit under an overlay so the fullscreen bar can float
@@ -1523,9 +1524,21 @@ class MainWindow(Gtk.Window):
         if self.config.get("color_mode", "system") == "system":
             self.apply_appearance()
 
+    def _settings_changed(self):
+        """Everything in Preferences that takes effect while it is open.
+
+        The tree's shape is here as well as on its own button: both write
+        the same setting, so changing it in one place has to be visible in
+        the other rather than waiting for a restart.
+        """
+        self.apply_appearance()
+        self.sidebar.set_view_mode(
+            sidebar_mod.resolve_view(self.config.get("tree_view"))
+        )
+
     def open_settings(self):
         before = (self.config.get("font_backend"), self.config.get("sw_decoders"))
-        dialog = SettingsDialog(self, self.config, on_change=self.apply_appearance)
+        dialog = SettingsDialog(self, self.config, on_change=self._settings_changed)
         dialog.run()
         self.task_feed.interval = max(
             1, int(self.config.get("task_refresh_seconds", 5))
@@ -2446,7 +2459,7 @@ class MainWindow(Gtk.Window):
         if self.sidebar.folder_view:
             self.set_status("Folder view: reading guest notes...")
             self._load_folders()
-        self.config["folder_view"] = self.sidebar.folder_view
+        self.config["tree_view"] = self.sidebar.view_mode
         self.config.save()
         # Dragging only means anything in folder view.
         self._update_dnd_indicator()

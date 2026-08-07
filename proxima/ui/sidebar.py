@@ -1,6 +1,6 @@
 """The inventory tree.
 
-Two shapes, switched by the button beside the search box:
+Three shapes, cycled by the button beside the search box:
 
   * node view    -- server -> node -> guest, which is how Proxmox itself
                     organises things.
@@ -8,6 +8,14 @@ Two shapes, switched by the button beside the search box:
                     client-side idea stored in each guest's notes, so they
                     span the whole datacenter and a guest appears once
                     regardless of which node happens to be running it.
+  * tag view     -- server -> tag -> guest, from the tags Proxmox itself
+                    keeps. Unlike the other two this one repeats guests:
+                    tags are not a hierarchy and a guest with 'prod' and
+                    'web' belongs under both. Grouping by the combination
+                    instead would make a separate group for every set of
+                    tags anyone had ever used, which is the arrangement
+                    that stops being useful the moment it is populated.
+                    Guests with no tags collect under "Untagged", last.
 
 Rebuilt from scratch on each poll. An earlier version updated rows in place
 to preserve expansion and selection, but with two view shapes, folders that
@@ -22,7 +30,7 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk
 
 from ..api.connection import CONNECTED, CONNECTING, FAILED
-from ..api.models import GUEST_NAME_CHARS, format_guest_name
+from ..api.models import GUEST_NAME_CHARS, format_guest_name, guest_tags
 from . import actions as action_defs
 from .status_icons import ICON_SIZE, PALETTES, IconCache, guest_icon
 
@@ -31,8 +39,45 @@ COL_KEY = 0  # guest key, or "" for structural rows
 COL_LABEL = 1
 COL_TOOLTIP = 2
 COL_ICON = 3
-COL_KIND = 4  # "connection" | "node" | "folder" | "guest"
+COL_KIND = 4  # "connection" | "node" | "folder" | "tag" | "guest"
 COL_ID = 5  # connection id, or the folder path joined by "/"
+
+# The three shapes, in the order the view button cycles them.
+NODE_VIEW = "node"
+FOLDER_VIEW = "folder"
+TAG_VIEW = "tag"
+VIEWS = (NODE_VIEW, FOLDER_VIEW, TAG_VIEW)
+
+# The button wears the view it is in, not the one it would move to: it is
+# the only thing on screen that says how the tree is currently grouped, and
+# a control that shows its destination cannot also answer that. Where the
+# click leads is in the tooltip instead.
+VIEW_ICONS = {
+    NODE_VIEW: "computer-symbolic",
+    FOLDER_VIEW: "folder-symbolic",
+    TAG_VIEW: "user-bookmarks-symbolic",
+}
+
+VIEW_NAMES = {NODE_VIEW: "node", FOLDER_VIEW: "folder", TAG_VIEW: "tag"}
+
+# Where guests with no tags of their own collect. Named rather than left
+# out: a tag view that silently hides half the estate is a worse answer
+# than one that says where the rest went.
+UNTAGGED = "Untagged"
+
+# What each view is called where a person reads it: Preferences, and the
+# label below. Kept here so the tree and the settings dialog cannot end up
+# describing the same three things differently.
+VIEW_LABELS = (
+    (NODE_VIEW, "Node  -  server, node, guest"),
+    (FOLDER_VIEW, "Folder  -  your own folders, stored in each guest's notes"),
+    (TAG_VIEW, "Tag  -  Proxmox tags; a guest appears under each of its tags"),
+)
+
+
+def resolve_view(name):
+    """A stored view name, or the default if it is not one we know."""
+    return name if name in VIEWS else NODE_VIEW
 
 
 # How often a spinning row advances a frame.
@@ -101,7 +146,9 @@ class Sidebar(Gtk.Box):
         self._dark = False
         self._palette = PALETTES[False]
         self.filter_text = ""
-        self.folder_view = False
+        # The shape the tree is drawn in. Not self.view -- that is the
+        # GtkTreeView itself.
+        self.view_mode = NODE_VIEW
         self.name_format = name_format
         self.templates_last = templates_last
         self.dnd_enabled = bool(dnd_enabled)
@@ -282,7 +329,7 @@ class Sidebar(Gtk.Box):
             "folder-symbolic", Gtk.IconSize.MENU
         )
         self.view_button.add(self.view_image)
-        self.view_button.connect("clicked", lambda *_: self.toggle_view())
+        self.view_button.connect("clicked", lambda *_: self.cycle_view())
         box.pack_start(self.view_button, False, False, 0)
         self._update_view_button()
         return box
@@ -350,18 +397,36 @@ class Sidebar(Gtk.Box):
         self.rebuild()
 
     def _update_view_button(self):
-        if self.folder_view:
-            self.view_image.set_from_icon_name("view-list-symbolic", Gtk.IconSize.MENU)
-            self.view_button.set_tooltip_text("Switch to node view")
-        else:
-            self.view_image.set_from_icon_name("folder-symbolic", Gtk.IconSize.MENU)
-            self.view_button.set_tooltip_text("Switch to folder view")
+        current = self.view_mode
+        self.view_image.set_from_icon_name(VIEW_ICONS[current], Gtk.IconSize.MENU)
+        self.view_button.set_tooltip_text(f"Grouped by {VIEW_NAMES[current]}")
 
-    def toggle_view(self):
-        self.folder_view = not self.folder_view
+    def cycle_view(self):
+        """Move to the next shape: node, then folder, then tag, then back."""
+        self.set_view_mode(VIEWS[(VIEWS.index(self.view_mode) + 1) % len(VIEWS)])
+
+    def set_view_mode(self, view):
+        if view not in VIEWS or view == self.view_mode:
+            return
+        self.view_mode = view
         self._update_view_button()
         self.rebuild()
         self.emit("view-changed")
+
+    @property
+    def folder_view(self):
+        """Whether the folder shape is showing.
+
+        Kept as a property because folders are the only view with machinery
+        of their own -- drag and drop, the folder menu entries, the notes
+        scan -- and every one of those asks this question rather than caring
+        which of the other two is up.
+        """
+        return self.view_mode == FOLDER_VIEW
+
+    @folder_view.setter
+    def folder_view(self, on):
+        self.set_view_mode(FOLDER_VIEW if on else NODE_VIEW)
 
     def set_name_format(self, style, templates_last=None):
         if templates_last is None:
@@ -558,8 +623,10 @@ class Sidebar(Gtk.Box):
             return
 
         guests = [g for g in connection.guests.values() if self.matches_filter(g)]
-        if self.folder_view:
+        if self.view_mode == FOLDER_VIEW:
             self._add_folder_view(root, connection, guests)
+        elif self.view_mode == TAG_VIEW:
+            self._add_tag_view(root, connection, guests)
         else:
             self._add_node_view(root, connection, guests)
 
@@ -612,6 +679,79 @@ class Sidebar(Gtk.Box):
             for guest in sorted(members, key=self._guest_sort_key):
                 self._add_guest(node_iter, guest)
 
+    def _add_node_rows(self, root, connection):
+        """The server's nodes, listed but not expanded into.
+
+        Both of the views that group guests by something other than the
+        node still show them: which machines are in the cluster, and how
+        much is running on each, is worth knowing whatever the guests below
+        are sorted by. Counted over every guest rather than the filtered
+        set, so a search narrows the groups without making a node look half
+        empty.
+        """
+        for node_name in sorted({g.node for g in connection.guests.values()}):
+            members = [g for g in connection.guests.values() if g.node == node_name]
+            running = sum(1 for g in members if g.running)
+            self.store.append(
+                root,
+                [
+                    "",
+                    f"{node_name}  ({running}/{len(members)})",
+                    f"{node_name}\n{running} of {len(members)} running",
+                    self.icons.get("computer-symbolic", self._palette["group"]),
+                    "node",
+                    f"{connection.id}/{node_name}",
+                ],
+            )
+
+    def _add_tag_view(self, root, connection, guests):
+        """A group per tag, and guests under every tag they carry.
+
+        The repetition is the design, not an oversight -- see the module
+        docstring. Each group counts its own members, so the numbers add up
+        to more than the estate and are meant to: they say how many guests
+        carry that tag, which is the question a tag group answers.
+        """
+        self._add_node_rows(root, connection)
+
+        # Grouped case-insensitively: Proxmox accepts 'Prod' and 'prod' as
+        # two tags, and nobody reading a tree thinks of them as two things.
+        # The spelling shown is the first one seen in guest order, so it is
+        # one somebody actually typed and it does not change between polls.
+        #
+        # Untagged is keyed by None rather than by its own name, so a guest
+        # genuinely tagged "untagged" keeps a group of its own.
+        by_tag = {}
+        # Sorted once, here: the members of every group then come out in
+        # order without sorting each of them again, and the spelling picked
+        # for a group is decided by the same stable order.
+        for guest in sorted(guests, key=self._guest_sort_key):
+            for tag in guest_tags(guest.tags) or [None]:
+                key = tag.casefold() if tag else None
+                by_tag.setdefault(key, (tag or UNTAGGED, []))[1].append(guest)
+
+        ordered = sorted(key for key in by_tag if key is not None)
+        if None in by_tag:
+            ordered.append(None)
+
+        for key in ordered:
+            tag, members = by_tag[key]
+            running = sum(1 for g in members if g.running)
+            colour = "stopped" if key is None else "group"
+            tag_iter = self.store.append(
+                root,
+                [
+                    "",
+                    f"{tag}  ({running}/{len(members)})",
+                    f"{tag}\n{running} of {len(members)} running",
+                    self.icons.get("user-bookmarks-symbolic", self._palette[colour]),
+                    "tag",
+                    f"{connection.id}#{tag}",
+                ],
+            )
+            for guest in members:
+                self._add_guest(tag_iter, guest)
+
     def _add_folder_view(self, root, connection, guests):
         """Nodes first, then the folder tree; guests live only in folders.
 
@@ -638,21 +778,7 @@ class Sidebar(Gtk.Box):
             return
         guests = known
 
-        nodes = sorted({g.node for g in connection.guests.values()})
-        for node_name in nodes:
-            members = [g for g in connection.guests.values() if g.node == node_name]
-            running = sum(1 for g in members if g.running)
-            self.store.append(
-                root,
-                [
-                    "",
-                    f"{node_name}  ({running}/{len(members)})",
-                    f"{node_name}\n{running} of {len(members)} running",
-                    self.icons.get("computer-symbolic", self._palette["group"]),
-                    "node",
-                    f"{connection.id}/{node_name}",
-                ],
-            )
+        self._add_node_rows(root, connection)
 
         # Every folder that any guest claims, including intermediate levels,
         # so "Production/Customer A" creates "Production" too.

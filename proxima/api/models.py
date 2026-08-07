@@ -330,6 +330,22 @@ def audio_is_spice(audio_value):
     return "driver=spice" in str(audio_value).replace(" ", "").lower()
 
 
+def guest_tags(value):
+    """A guest's tags, in order, without duplicates or empties.
+
+    Proxmox stores them as one string. The separator is a semicolon in
+    current releases and was a comma in older ones, and both turn up in
+    configs that have been through an upgrade, so both are accepted.
+    """
+    parts = str(value or "").replace(",", ";").split(";")
+    tags = []
+    for part in parts:
+        tag = part.strip()
+        if tag and tag not in tags:
+            tags.append(tag)
+    return tags
+
+
 def spice_usb_ports(config):
     """The 'usbN' config keys that are SPICE redirection ports.
 

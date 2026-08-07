@@ -15,6 +15,29 @@ On Windows this must run under the MSYS2 UCRT64 Python
 (`C:/msys64/ucrt64/bin/python.exe`), not a python.org install: PyGObject and
 spice-gtk come from pacman and will not load anywhere else.
 
+## The inventory tree
+
+Three shapes, cycled by the button beside the search box or chosen in
+Preferences -> Behaviour; both write the same setting.
+
+| | |
+| --- | --- |
+| Node | Server, node, guest -- how Proxmox itself organises things. |
+| Folder | Your own folders, stored in each guest's notes, so they span the datacenter and follow a guest between nodes. |
+| Tag | The tags Proxmox keeps. |
+
+Tag view repeats guests, deliberately: tags are not a hierarchy, so a guest
+tagged `prod` and `web` appears under both. Grouping by the *combination*
+instead would make a separate group for every set of tags anyone had ever
+used, which stops being useful the moment it is populated. Tags differing
+only in case are one group, spelled the way the first guest to use it spells
+it, and guests with no tags collect under **Untagged** at the end. The node
+rows stay at the top in folder and tag view, since what is in the cluster is
+worth knowing whatever the guests below are sorted by.
+
+The search box already matches tags, so filtering to one is a matter of
+typing it.
+
 ## Certificates
 
 Proxmox signs its own certificate, so there is no public authority to vouch

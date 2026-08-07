@@ -114,7 +114,10 @@ DEFAULTS = {
     # Saved servers, reconnected at startup. Passwords are stored through
     # secrets.encode(), which is DPAPI on Windows and obfuscation elsewhere.
     "connections": [],
-    "folder_view": False,
+    # How the inventory tree groups guests: by node, by client-side folder,
+    # or by the tags Proxmox keeps. Changed from the button beside the
+    # search box or from Preferences; both write here.
+    "tree_view": "node",  # "node" | "folder" | "tag"
 }
 
 

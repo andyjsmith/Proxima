@@ -693,3 +693,163 @@ def test_a_second_server_is_listed_separately(window, api):
         "disconnect did not remove the server"
     )
     assert CONN_ID in str(window.sidebar.visible_keys())
+
+
+# -- tag view -------------------------------------------------------------
+
+
+@pytest.fixture
+def tagged(window):
+    """A few guests wearing tags, and the tree grouped by them."""
+    tags = {100: "prod;web", 101: "prod;db", 102: "dev", 200: "", 201: "Prod"}
+    for vmid, value in tags.items():
+        sample_row(vmid)["tags"] = value
+    window.refresh()
+    pump_until(lambda: window.sidebar.guests[RUNNING].tags == "prod;web", 8)
+    window.sidebar.set_view_mode(sidebar_mod.TAG_VIEW)
+    pump(0.4)
+    yield window.sidebar
+    window.sidebar.set_view_mode(sidebar_mod.NODE_VIEW)
+    for vmid in tags:
+        sample_row(vmid).pop("tags", None)
+    window.refresh()
+    pump(0.5)
+
+
+def groups_in(sidebar, kind="tag"):
+    """Group rows and the guest labels under each, in tree order."""
+    store = sidebar.store
+    found = {}
+
+    def walk(parent):
+        row = store.iter_children(parent)
+        while row is not None:
+            if store.get_value(row, sidebar_mod.COL_KIND) == kind:
+                label = store.get_value(row, sidebar_mod.COL_LABEL)
+                children = []
+                child = store.iter_children(row)
+                while child is not None:
+                    children.append(store.get_value(child, sidebar_mod.COL_LABEL))
+                    child = store.iter_next(child)
+                found[label.split("  (")[0]] = children
+            walk(row)
+            row = store.iter_next(row)
+
+    walk(None)
+    return found
+
+
+def test_the_view_button_cycles_through_all_three(window):
+    sidebar = window.sidebar
+    start = sidebar.view_mode
+    try:
+        seen = [sidebar.view_mode]
+        for _ in range(3):
+            sidebar.cycle_view()
+            pump(0.2)
+            seen.append(sidebar.view_mode)
+        assert seen == [
+            sidebar_mod.NODE_VIEW,
+            sidebar_mod.FOLDER_VIEW,
+            sidebar_mod.TAG_VIEW,
+            sidebar_mod.NODE_VIEW,
+        ], f"the view button does not cycle: {seen}"
+    finally:
+        sidebar.set_view_mode(start)
+        pump(0.3)
+
+
+def test_the_button_shows_the_view_it_is_in(window):
+    sidebar = window.sidebar
+    start = sidebar.view_mode
+    try:
+        for view in sidebar_mod.VIEWS:
+            sidebar.set_view_mode(view)
+            pump(0.2)
+            assert (
+                sidebar.view_image.get_property("icon-name")
+                == (sidebar_mod.VIEW_ICONS[view])
+            ), f"{view} view is not wearing its own icon"
+            tooltip = sidebar.view_button.get_tooltip_text()
+            assert tooltip.startswith(f"Grouped by {sidebar_mod.VIEW_NAMES[view]}"), (
+                f"the tooltip does not say where we are: {tooltip!r}"
+            )
+    finally:
+        sidebar.set_view_mode(start)
+        pump(0.3)
+
+
+def test_a_guest_appears_under_every_tag_it_carries(tagged):
+    groups = groups_in(tagged)
+    assert "prod" in groups, f"no prod group: {sorted(groups)}"
+    assert any("web01" in label for label in groups["prod"]), groups["prod"]
+    assert any("web01" in label for label in groups["web"]), groups["web"]
+
+
+def test_tags_that_differ_only_in_case_share_one_group(tagged):
+    """'Prod' and 'prod' are the same tag to a person reading the tree."""
+    groups = groups_in(tagged)
+    names = [g for g in groups if g.lower() == "prod"]
+    assert len(names) == 1, f"case split the group in two: {names}"
+
+
+def test_guests_with_no_tags_are_collected_rather_than_hidden(tagged):
+    groups = groups_in(tagged)
+    assert sidebar_mod.UNTAGGED in groups, f"untagged guests vanished: {sorted(groups)}"
+    assert groups[sidebar_mod.UNTAGGED], "the untagged group is empty"
+
+
+def test_untagged_sorts_last(tagged):
+    order = list(groups_in(tagged))
+    assert order[-1] == sidebar_mod.UNTAGGED, f"untagged is not last: {order}"
+
+
+def test_every_guest_is_somewhere_in_the_tag_view(tagged, window):
+    shown = {label for labels in groups_in(tagged).values() for label in labels}
+    assert len(shown) == len(window.sidebar.guests), (
+        f"{len(window.sidebar.guests) - len(shown)} guest(s) are in no group"
+    )
+
+
+def test_the_tag_view_survives_a_search(tagged):
+    tagged.search_entry.set_text("web01")
+    pump(0.8)
+    try:
+        groups = groups_in(tagged)
+        shown = {label for labels in groups.values() for label in labels}
+        assert shown, "searching in tag view emptied the tree"
+        assert all("web01" in label for label in shown), shown
+        # It carries two tags, so it is under both -- and only those.
+        assert set(groups) == {"prod", "web"}, sorted(groups)
+    finally:
+        tagged.search_entry.set_text("")
+        pump(0.8)
+
+
+def test_the_tag_view_lists_the_nodes_above_the_tags(tagged):
+    """Same as folder view: what is in the cluster is worth knowing whatever
+    the guests below happen to be grouped by."""
+    nodes = groups_in(tagged, kind="node")
+    assert nodes, "the tag view dropped the node rows"
+    assert set(nodes) >= {"pve-node-01", "pve-node-02"}, sorted(nodes)
+    assert all(not children for children in nodes.values()), (
+        "the node rows should be a summary, not a second copy of the tree"
+    )
+
+    # And they come first, above the tag groups.
+    store = tagged.store
+    kinds = []
+
+    def walk(parent):
+        row = store.iter_children(parent)
+        while row is not None:
+            kind = store.get_value(row, sidebar_mod.COL_KIND)
+            if kind in ("node", "tag"):
+                kinds.append(kind)
+            walk(row)
+            row = store.iter_next(row)
+
+    walk(None)
+    assert kinds == sorted(kinds, key=lambda k: 0 if k == "node" else 1), (
+        f"nodes and tags are interleaved: {kinds}"
+    )
