@@ -34,7 +34,7 @@ def test_a_slow_detail_fetch_survives_the_polls_that_land_on_it():
     # every few seconds, and that used to cancel the in-flight reply while the
     # cache still claimed the request had been made.
     api = SlowAPI(delay=1.2)
-    window = build_window(api, make_config(refresh_seconds=1))
+    window = build_window(api, make_config(poll_idle_seconds=1, poll_active_seconds=1))
     try:
         # The inventory has to be in before a guest can be opened, and this
         # server is slow enough that it does not always arrive in one pump.

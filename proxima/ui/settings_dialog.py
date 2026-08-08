@@ -316,40 +316,53 @@ class SettingsDialog(Gtk.Dialog):
         self._spin(
             grid,
             0,
-            "Inventory",
-            "refresh_seconds",
+            "Inventory, at rest",
+            "poll_idle_seconds",
             1,
-            120,
-            "How often guest status is polled, in seconds",
+            300,
+            "How often guest status is polled when nothing is expected to "
+            "change, in seconds",
         )
         self._spin(
             grid,
             1,
+            "Inventory, while waiting",
+            "poll_active_seconds",
+            1,
+            120,
+            "How often it is polled while a change this window asked for has "
+            "not been reported yet",
+        )
+        self._spin(
+            grid,
+            2,
+            "Keep waiting for",
+            "poll_active_for",
+            0,
+            300,
+            "How long to keep watching closely after an action that leaves "
+            "nothing else to wait for",
+        )
+        self._spin(
+            grid,
+            3,
             "Task list",
             "task_refresh_seconds",
             1,
             120,
             "How often the task pane refreshes while it is open",
         )
-        self._spin(
-            grid,
-            2,
-            "Fast refresh",
-            "burst_seconds",
-            0,
-            120,
-            "After a power or snapshot action, poll every second for this many seconds",
-        )
 
         note = Gtk.Label(xalign=0.0)
         note.get_style_context().add_class("dim")
         note.set_line_wrap(True)
         note.set_text(
-            "Proxmox takes a few seconds to report a power action. Fast "
-            "refresh shortens the wait; the console says what was asked for "
-            "in the meantime."
+            "The window moves between the two by itself. Start a guest, "
+            "rename one, or reconnect a server and it watches closely until "
+            "the cluster reports the change; with nothing outstanding it "
+            "drops back to the resting interval, which is most of the time."
         )
-        grid.attach(note, 0, 3, 2, 1)
+        grid.attach(note, 0, 4, 2, 1)
         return grid
 
     def _spin(self, grid, row, label, key, lower, upper, tooltip=None):

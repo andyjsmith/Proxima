@@ -39,7 +39,13 @@ def label_texts(widget):
 
 
 @pytest.mark.parametrize(
-    "key", ["refresh_seconds", "task_refresh_seconds", "burst_seconds"]
+    "key",
+    [
+        "poll_idle_seconds",
+        "poll_active_seconds",
+        "poll_active_for",
+        "task_refresh_seconds",
+    ],
 )
 def test_the_polling_intervals_are_configurable(config, key):
     assert key in config

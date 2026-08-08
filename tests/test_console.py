@@ -154,7 +154,7 @@ def test_the_summary_holds_its_detail_across_polls(window, config, api):
     # reaches the summary it discards its detail and re-fetches, which reads
     # as agent/IP/OS blinking to "-" every refresh.
     summary = open_summary(window, RUNNING)
-    was = config.get("refresh_seconds", 4)
+    was = (config.get("poll_idle_seconds"), config.get("poll_active_seconds"))
     handler = None
     try:
         watched = ("agent", "address", "os")
@@ -174,7 +174,8 @@ def test_the_summary_holds_its_detail_across_polls(window, config, api):
         # the summary, so the measure is how many rebuilds it survives. At
         # the default four-second cadence a five-second watch caught barely
         # one; driving the poll at a second covers three in less time.
-        config["refresh_seconds"] = 1
+        config["poll_idle_seconds"] = 1
+        config["poll_active_seconds"] = 1
         window._restart_poll()
         first = api.calls.count("guests")
         blanks = {f: 0 for f in watched}
@@ -190,7 +191,7 @@ def test_the_summary_holds_its_detail_across_polls(window, config, api):
     finally:
         if handler is not None:
             window.sidebar.disconnect(handler)
-        config["refresh_seconds"] = was
+        config["poll_idle_seconds"], config["poll_active_seconds"] = was
         window._restart_poll()
         window.close_console(RUNNING)
         pump(0.3)

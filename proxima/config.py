@@ -101,12 +101,22 @@ DEFAULTS = {
     # tree you click around all day, a slipped drag silently rewrites a
     # guest's notes on the server.
     "enable_dnd": True,
-    # Polling. The inventory drives everything the tree and toolbar show,
-    # so it is the one worth tuning; the burst is what covers the few
-    # seconds Proxmox takes to report a power action.
-    "refresh_seconds": 2,
+    # Polling. Two cadences rather than one, because the two situations are
+    # not alike: with nothing outstanding the inventory is being watched in
+    # case somebody else changes something, and once a second is a lot of
+    # traffic to spend on that; with a change asked for and not yet
+    # reported, every second counts because the window is standing still
+    # until the cluster admits it happened.
+    #
+    # The window moves between them by itself -- see _waiting_for_something
+    # -- so what these two settings decide is how patient each state is.
+    "poll_idle_seconds": 6,
+    "poll_active_seconds": 2,
+    # How long the faster cadence outlives an action that has nothing left
+    # to watch for. Actions that do leave something -- a status to change, a
+    # rename to land -- hold it open by themselves for as long as they take.
+    "poll_active_for": 15,
     "task_refresh_seconds": 5,
-    "burst_seconds": 15,
     # Per-guest console settings, keyed by "<node>/<kind>/<vmid>". Consoles
     # differ enough (a 4K desktop vs a serial-ish text console) that one
     # global scaling choice is the wrong answer for at least one of them.

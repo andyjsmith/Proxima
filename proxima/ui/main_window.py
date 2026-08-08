@@ -27,7 +27,7 @@ from .. import APP_NAME, __version__, logs, secrets, update
 from ..api import AuthError, ProxmoxError, certs
 from ..api import notes as notes_meta
 from ..api.client import CertificateMismatch, CertificateUntrusted
-from ..api.connection import FAILED, Connection, ConnectionManager
+from ..api.connection import CONNECTING, FAILED, Connection, ConnectionManager
 from ..api.models import (
     audio_is_spice,
     spice_usb_ports,
@@ -154,8 +154,10 @@ class MainWindow(Gtk.Window):
         self._popouts = {}  # guest key -> ConsoleWindow
         self._popout_pages = {}  # guest key -> notebook index
         self._console_offline = {}  # guest key -> status when it stopped
-        self._burst_source = None
-        self._burst_until = 0.0
+        # The poll's own cadence: which interval the timer is currently on,
+        # and how long a recent action keeps it on the faster one.
+        self._poll_every = 0
+        self._active_until = 0.0
         self._folder_scan = False
         # guest key -> (status when asked, deadline). Purely client side.
         self._pending_actions = {}
@@ -2271,40 +2273,81 @@ class MainWindow(Gtk.Window):
     # Inventory
     # ------------------------------------------------------------------
 
-    def burst_poll(self, seconds=None, interval=1):
-        """Poll hard for a while after an action.
+    def burst_poll(self, seconds=None):
+        """Watch closely for a while, and look now.
 
-        A power action takes a few seconds to show up in /cluster/resources,
-        and the normal interval makes the UI look like it ignored the click.
+        Called after anything the cluster will take a few seconds to report.
+        It does not start a timer of its own any more: it says that a change
+        is expected, and the one poll timer moves to its faster cadence for
+        as long as that holds. Two timers meant an action was answered with
+        both of them at once, which is most of the traffic this used to
+        cost.
         """
         if seconds is None:
-            seconds = int(self.config.get("burst_seconds", 15))
-        if seconds <= 0:
-            self.refresh()
-            return
-        self._burst_until = time.monotonic() + seconds
-        if self._burst_source is None:
-            self._burst_source = GLib.timeout_add_seconds(interval, self._burst_tick)
+            seconds = int(self.config.get("poll_active_for", 15))
+        if seconds > 0:
+            self._active_until = max(self._active_until, time.monotonic() + seconds)
+            self._schedule_poll()
         self.refresh()
 
-    def _burst_tick(self):
-        if self._closing or time.monotonic() >= self._burst_until:
-            self._burst_source = None
-            return False
-        self.refresh()
-        return True
+    def poll_intervals(self):
+        """(while waiting, at rest) in seconds, as configured.
+
+        The resting cadence is never faster than the active one: two
+        settings that can be put the wrong way round would otherwise make
+        the window poll harder for doing nothing.
+        """
+        active = max(1, int(self.config.get("poll_active_seconds", 2)))
+        idle = max(active, int(self.config.get("poll_idle_seconds", 6)))
+        return active, idle
+
+    def _waiting_for_something(self):
+        """Whether a change is expected that only the inventory can confirm.
+
+        Everything here is something this window asked for and has not seen
+        answered yet -- a power action, a rename, a console being restored,
+        a server still connecting. While one of those is outstanding the
+        poll is what ends the wait, so it runs at the faster cadence; with
+        none of them outstanding the poll is only watching in case somebody
+        else changes something, which does not need the same hurry.
+
+        A guest that merely carries a lock is deliberately not counted: a
+        backup can hold one for an hour, and an hour of fast polling is not
+        what anybody meant by "waiting".
+        """
+        if time.monotonic() < self._active_until:
+            return True
+        if self._busy or self._pending_actions:
+            return True
+        if self._restore_keys or self._restore_nodes:
+            return True
+        return any(c.state == CONNECTING for c in self.connections.all)
+
+    def _poll_interval(self):
+        active, idle = self.poll_intervals()
+        return active if self._waiting_for_something() else idle
 
     def _schedule_poll(self):
+        """Arm the poll timer, or move it to the cadence now wanted."""
+        interval = self._poll_interval()
         if self._poll_source is not None:
+            if interval == self._poll_every:
+                return
             GLib.source_remove(self._poll_source)
-        interval = max(1, int(self.config.get("refresh_seconds", 4)))
+        self._poll_every = interval
         self._poll_source = GLib.timeout_add_seconds(interval, self._on_poll)
 
     def _restart_poll(self):
+        """Re-arm from scratch, for when the numbers themselves changed."""
+        if self._poll_source is not None:
+            GLib.source_remove(self._poll_source)
+            self._poll_source = None
+        self._poll_every = 0
         self._schedule_poll()
 
     def _on_poll(self):
         if self._closing:
+            self._poll_source = None
             return False
         self.refresh()
         return True
@@ -2360,6 +2403,10 @@ class MainWindow(Gtk.Window):
         self._update_popouts()
         self._refresh_open_summaries()
         self._refresh_open_node_summaries()
+        # This poll is what answers most of what the cadence depends on, so
+        # the next interval is decided here rather than guessed at when the
+        # request went out.
+        self._schedule_poll()
         return False
 
     def _refresh_open_summaries(self):
@@ -2407,6 +2454,9 @@ class MainWindow(Gtk.Window):
         self.sidebar.set_busy(
             {key: (change.label, change.name) for key, change in self._busy.items()}
         )
+        # Something started or stopped being waited on, which is exactly
+        # what decides how hard the inventory is polled.
+        self._schedule_poll()
 
     def _resolve_busy(self):
         """Drop every wait the freshly polled inventory has answered.
@@ -5271,12 +5321,6 @@ class MainWindow(Gtk.Window):
         if self._poll_source is not None:
             GLib.source_remove(self._poll_source)
             self._poll_source = None
-        if self._burst_source is not None:
-            GLib.source_remove(self._burst_source)
-            self._burst_source = None
-        if self._burst_source is not None:
-            GLib.source_remove(self._burst_source)
-            self._burst_source = None
         if self._telemetry_source is not None:
             GLib.source_remove(self._telemetry_source)
             self._telemetry_source = None

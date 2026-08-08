@@ -38,6 +38,28 @@ worth knowing whatever the guests below are sorted by.
 The search box already matches tags, so filtering to one is a matter of
 typing it.
 
+## Polling
+
+The inventory is polled at two speeds and the window picks between them.
+
+| | | |
+| --- | --- | --- |
+| At rest | 6s | Nothing outstanding; watching in case somebody else changes something. |
+| While waiting | 2s | A change this window asked for has not been reported yet. |
+
+"Waiting" is a state, not a countdown: a power action, a rename, a console
+being restored at startup or a server still connecting all hold the faster
+cadence for exactly as long as they take. **Keep waiting for** (15s) only
+covers actions that leave nothing else to watch. A guest merely carrying a
+lock does not count -- a backup can hold one for an hour.
+
+All three are in **Preferences -> Polling**, along with the task pane's own
+interval. The task pane polls only while it is open.
+
+This replaced a fixed 2s interval with a second once-a-second timer laid
+over it after every action, which meant an idle window talking to the
+server thirty times a minute and an action answered by both timers at once.
+
 ## Nodes
 
 A node opens like a guest does -- double-click it in the tree, or right-click
