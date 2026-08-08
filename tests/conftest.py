@@ -309,6 +309,27 @@ class FakeAPI:
             "host-subject": "OU=PVE Cluster Node",
         }
 
+    # A termproxy ticket is answered, unlike a VNC one: planning a container
+    # console has to get far enough to choose the serial branch, and the
+    # widget is never built in these tests, so nothing dials the URL.
+    def term_ticket(self, node, vmid=None, kind="lxc"):
+        self.calls.append(("term", vmid))
+        return {
+            "user": self.username,
+            "ticket": "PVEVNC:fake",
+            "port": "5900",
+            "upid": "UPID:fake",
+        }
+
+    def term_websocket_url(self, node, vmid, port, ticket, kind="lxc"):
+        return (
+            f"wss://{self.host}:{self.port}/api2/json"
+            f"/nodes/{node}/{kind}/{vmid}/vncwebsocket?port={port}"
+        )
+
+    def basic_ws_headers(self):
+        return {"Cookie": "PVEAuthCookie=fake"}
+
     def power(self, node, vmid, action, kind="qemu"):
         self.calls.append(("power", vmid, action))
         return "UPID:fake"
@@ -517,6 +538,11 @@ class FailingConsoleAPI(FakeAPI):
         from proxima.api import ProxmoxError
 
         raise ProxmoxError("vncproxy refused: no such VM")
+
+    def term_ticket(self, node, vmid=None, kind="lxc"):
+        from proxima.api import ProxmoxError
+
+        raise ProxmoxError("termproxy refused: no such container")
 
 
 class FakeEditable:

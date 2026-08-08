@@ -76,6 +76,15 @@ PROTOCOL_CHOICES = [
     ("vnc", "VNC only"),
 ]
 
+# Containers get a different pair. "Default" already means the serial
+# console for them, so the entry that earns its place is the one that pins it
+# there against the global "always use VNC" preference.
+CONTAINER_PROTOCOL_CHOICES = [
+    ("default", "Default  -  the serial console"),
+    ("serial", "Serial only"),
+    ("vnc", "VNC only"),
+]
+
 
 class VMSettingsDialog(Gtk.Dialog):
     """Hardware / Options / Proxmox Manager for one guest."""
@@ -693,10 +702,14 @@ class VMSettingsDialog(Gtk.Dialog):
             grid,
             2,
             "Protocol",
-            PROTOCOL_CHOICES,
+            CONTAINER_PROTOCOL_CHOICES if container else PROTOCOL_CHOICES,
             "protocol",
             tooltip=(
-                "Which console protocol to open. VNC only is worth "
+                "Which console to open. Serial is a real text terminal; "
+                "VNC is a picture of one, and worth setting for a "
+                "container whose serial console misbehaves."
+                if container
+                else "Which console protocol to open. VNC only is worth "
                 "setting for a guest whose SPICE display misbehaves."
             ),
         )

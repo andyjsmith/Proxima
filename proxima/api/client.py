@@ -844,6 +844,46 @@ class ProxmoxAPI:
             f"/nodes/{node}/{kind}/{vmid}/vncwebsocket?{query}"
         )
 
+    @staticmethod
+    def _console_base(node, vmid=None, kind="lxc"):
+        """Where a console endpoint lives for a guest, or for a node itself.
+
+        vmid=None is the node's own shell, which Proxmox hangs directly off
+        /nodes/<node>. Nothing calls it yet, but every other method here
+        would have to grow a special case later if the path were assembled
+        inline, so it is one function from the start.
+        """
+        if vmid is None:
+            return f"/nodes/{node}"
+        return f"/nodes/{node}/{kind}/{vmid}"
+
+    def term_ticket(self, node, vmid=None, kind="lxc"):
+        """A termproxy session: a character terminal rather than a picture.
+
+        This is the console the Proxmox web UI opens with xterm.js. It
+        returns 'user' as well as 'ticket', and both are needed -- unlike
+        the VNC path, termproxy wants an authentication line of its own once
+        the websocket is up. See console/termproxy.py.
+        """
+        path = f"{self._console_base(node, vmid, kind)}/termproxy"
+        data = self.post(path, {})
+        if not data or not {"port", "ticket", "user"} <= set(data):
+            raise ProxmoxError("termproxy returned an unusable response")
+        return data
+
+    def term_websocket_url(self, node, vmid, port, ticket, kind="lxc"):
+        """The socket a termproxy ticket is redeemed on.
+
+        The same vncwebsocket endpoint the VNC console uses, and the same
+        query parameters: what decides which protocol comes back down it is
+        which proxy minted the ticket, not the URL.
+        """
+        query = urllib.parse.urlencode({"port": port, "vncticket": ticket})
+        return (
+            f"wss://{self.host}:{self.port}/api2/json"
+            f"{self._console_base(node, vmid, kind)}/vncwebsocket?{query}"
+        )
+
     def auth_cookie_header(self):
         # PVE uri-unescapes the cookie server side, but a ticket is only
         # base64 and punctuation, so it round-trips either way. Sent raw to

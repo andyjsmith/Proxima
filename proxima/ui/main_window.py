@@ -34,10 +34,18 @@ from ..api.models import (
     valid_guest_name,
     vga_is_spice,
 )
-from ..console import SPICE_AVAILABLE, SpiceConsole, VncConsole
+from ..console import (
+    SERIAL_AVAILABLE,
+    SPICE_AVAILABLE,
+    SerialConsole,
+    SpiceConsole,
+    VncConsole,
+)
 from ..console import keys as console_keys
 from ..console.placeholder import PlaceholderConsole
+from ..console.serial import DEFAULT_FONT_SIZE
 from ..console.spice import IMAGE_COMPRESSION, VIDEO_CODECS
+from ..console.termproxy import open_session as open_term_session
 from ..theme import apply as apply_theme
 from ..theme import css as theme_css
 from ..theme import decorate as theme_decorate
@@ -153,6 +161,9 @@ class MainWindow(Gtk.Window):
         # that is what makes them useful as a way out of a bad console.
         self._force_vnc = set()
         self._force_spice = set()
+        # The same idea for containers, which choose between a serial console
+        # and VNC rather than between SPICE and VNC.
+        self._force_serial = set()
         # Clipboard and audio switched from the status bar, per guest, for
         # as long as the console is open. Deliberately not persisted: the
         # buttons are helpers for the session in front of you, and the
@@ -2041,8 +2052,16 @@ class MainWindow(Gtk.Window):
             console is not None
             and key not in self._force_vnc
             and key not in self._force_spice
+            and key not in self._force_serial
         ):
-            if settings.get("protocol") == "vnc":
+            if guest.is_container:
+                # "Default" means the serial console for a container, so the
+                # only setting that asks for VNC is the one that says VNC.
+                wanted = "vnc" if settings.get("protocol") == "vnc" else "serial"
+                mismatch = console.protocol != wanted and (
+                    wanted == "vnc" or SERIAL_AVAILABLE
+                )
+            elif settings.get("protocol") == "vnc":
                 mismatch = console.protocol != "vnc"
             else:
                 # "Default" only implies SPICE where SPICE is actually on
@@ -3192,6 +3211,21 @@ class MainWindow(Gtk.Window):
         key = getattr(console, "guest_key", None) if console else None
         if not key:
             return
+        guest = self.sidebar.guests.get(key)
+        if guest is not None and guest.is_container:
+            # A container's pair is serial and VNC. Same rule as the VM one:
+            # the choice belongs to this tab and dies with it.
+            if console.protocol == "serial":
+                self._force_vnc.add(key)
+                self._force_serial.discard(key)
+                self.set_status("Reopening on VNC...")
+            else:
+                self._force_vnc.discard(key)
+                self._force_serial.add(key)
+                self.set_status("Reopening on the serial console...")
+            self.reconnect_console(key)
+            return
+
         if console.protocol == "spice":
             self._force_vnc.add(key)
             self._force_spice.discard(key)
@@ -3280,8 +3314,49 @@ class MainWindow(Gtk.Window):
                 ours = 1
         return max(0, count - ours), addresses
 
+    def _plan_container_console(self, guest, protocol_setting):
+        """Decide between a serial console and VNC for a container.
+
+        Containers have no SPICE display, so the choice they have is a
+        different one: Proxmox's termproxy gives a real character terminal,
+        and vncterm gives a picture of one. The terminal is the better answer
+        by default -- its text can be selected, it uses the whole tab rather
+        than a fixed 80x24, and it is a fraction of the traffic -- but VNC
+        stays one menu entry away, because a container whose console is
+        wedged is exactly when a second opinion is worth having.
+
+        Returns (plan, reason). A plan of None means fall through to VNC,
+        and the reason is what to tell the user about why.
+        """
+        if not SERIAL_AVAILABLE:
+            return None, "pycairo is not installed"
+        if guest.key in self._force_vnc:
+            return None, "VNC chosen for this console"
+
+        forced_serial = guest.key in self._force_serial
+        if not forced_serial:
+            if protocol_setting == "vnc":
+                return None, "VNC only in this container's settings"
+            if protocol_setting != "serial" and self.config.get("prefer_vnc"):
+                return None, "VNC forced in preferences"
+
+        try:
+            session = open_term_session(
+                self.api_for(guest), guest.node, guest.vmid, guest.kind
+            )
+        except ProxmoxError as exc:
+            # Same reasoning as the SPICE path: a console you can use beats a
+            # correct error message. The commonest cause is an API token
+            # without VM.Console, which VNC will refuse too -- but that is
+            # for the VNC attempt to discover and report.
+            reason = f"termproxy refused: {exc}"
+            log.info("%s: %s", guest.label, reason)
+            return None, reason
+
+        return dict(session, protocol="serial"), ""
+
     def _plan_console(self, guest, takeover=False):
-        """Decide between SPICE and VNC, and fetch whatever that needs.
+        """Decide between SPICE, VNC and a serial console, and fetch what that needs.
 
         Runs on a worker thread. Returns a dict the main thread can turn
         into a widget without any further network access.
@@ -3308,9 +3383,21 @@ class MainWindow(Gtk.Window):
 
         forced_vnc = guest.key in self._force_vnc
         forced_spice = guest.key in self._force_spice
-        settings_vnc = (
-            self.guest_settings(guest).get("protocol") == "vnc" and not forced_spice
-        )
+        protocol_setting = self.guest_settings(guest).get("protocol")
+        settings_vnc = protocol_setting == "vnc" and not forced_spice
+
+        # Containers never reach the SPICE question at all, so they are
+        # settled first rather than threaded through a decision about a
+        # display they do not have.
+        container_reason = ""
+        if guest.is_container:
+            plan, container_reason = self._plan_container_console(
+                guest, protocol_setting
+            )
+            if plan is not None:
+                guest.console_note = ""
+                return plan
+
         prefer_vnc = bool(self.config.get("prefer_vnc")) and not forced_spice
 
         spice_possible = (
@@ -3321,8 +3408,11 @@ class MainWindow(Gtk.Window):
             and not prefer_vnc
         )
 
-        reason = ""
-        if forced_vnc:
+        # A container that got here has already been asked and answered; the
+        # SPICE reasoning below is about VMs and would overwrite it with
+        # something that is not about this guest at all.
+        reason = container_reason
+        if forced_vnc and not guest.is_container:
             reason = "VNC chosen for this console"
 
         if spice_possible:
@@ -3393,6 +3483,12 @@ class MainWindow(Gtk.Window):
             ),
             "codec_index": stored.get("codec_index", 0),
             "compression_index": stored.get("compression_index", 0),
+            # How big the text is on a serial console. This machine's
+            # business, like the two above it: the same container read on a
+            # laptop and on a 27" monitor wants different answers.
+            "font_size": stored.get(
+                "font_size", self.config.get("font_size", DEFAULT_FONT_SIZE)
+            ),
             # Clipboard sharing, audio and the console protocol are NOT
             # here: they are the guest's own settings and live in its notes
             # on the server. What is left in this dict is genuinely about
@@ -3463,6 +3559,27 @@ class MainWindow(Gtk.Window):
                     self._on_console_usb_plugged(k, device_key, label)
                 ),
             )
+        elif plan["protocol"] == "serial":
+            console = SerialConsole(
+                plan["url"],
+                plan["headers"],
+                plan["user"],
+                plan["ticket"],
+                title=title,
+                on_status=lambda text: self._console_status(guest, text),
+                # Same certificate the API session was approved against; a
+                # console ticket is not something to hand to a server whose
+                # identity has changed since.
+                fingerprint=getattr(self.api_for(guest), "fingerprint", None),
+                font_size=prefs["font_size"],
+                on_disconnect=lambda reason, k=guest.key: self._on_console_disconnected(
+                    k, reason
+                ),
+                on_reconnect=lambda k=guest.key: self.reconnect_console(k),
+                on_font_size=lambda size, k=guest.key: self._save_guest_pref(
+                    "font_size", size, key=k
+                ),
+            )
         else:
             console = VncConsole(
                 plan["url"],
@@ -3499,6 +3616,11 @@ class MainWindow(Gtk.Window):
         if plan["protocol"] == "vnc" and not guest.is_container:
             reason = plan.get("reason") or "no SPICE display configured"
             self.set_status(f"{guest.label}: VNC - {reason}")
+        elif plan["protocol"] == "vnc" and plan.get("reason"):
+            # A container on VNC used to be the only possibility and needed
+            # no explanation. Now that it is the second choice, say which of
+            # the several reasons it was.
+            self.set_status(f"{guest.label}: VNC - {plan['reason']}")
         elif (
             plan["protocol"] == "spice"
             and self.config.get("enable_audio", True)
@@ -4156,6 +4278,7 @@ class MainWindow(Gtk.Window):
         """
         self._force_vnc.discard(key)
         self._force_spice.discard(key)
+        self._force_serial.discard(key)
         for name in ("clipboard", "audio"):
             self._session_switches.pop((key, name), None)
 
@@ -4287,8 +4410,11 @@ class MainWindow(Gtk.Window):
             self.popout_item.set_sensitive(console is not None)
             # One capability, three controls: the menu entry, the submenu
             # and the toolbar button all need a console that can be typed at.
-            can_type = bool(supports.get("ctrl_alt_del"))
-            self.ctrl_alt_del_item.set_sensitive(can_type)
+            # Two capabilities, not one. A serial console takes typing but
+            # has no keyboard controller to send Ctrl+Alt+Del to, so the
+            # entries that used to move together now ask separately.
+            can_type = bool(supports.get("send_keys", supports.get("ctrl_alt_del")))
+            self.ctrl_alt_del_item.set_sensitive(bool(supports.get("ctrl_alt_del")))
             self.send_key_item.set_sensitive(can_type)
             self.send_key_item_tb.set_sensitive(can_type)
             self.screenshot_item.set_sensitive(
@@ -4301,6 +4427,12 @@ class MainWindow(Gtk.Window):
 
             if console is None:
                 self.protocol_label.set_text("")
+            elif console.protocol == "serial":
+                self.protocol_label.set_text("Serial")
+                self.protocol_label.set_tooltip_text(
+                    "A text console. Select with the mouse, Ctrl+Shift+C to "
+                    "copy, Ctrl+Shift+V to paste."
+                )
             elif console.protocol == "vnc":
                 self.protocol_label.set_markup("<span foreground='#e5a50a'>VNC</span>")
                 self.protocol_label.set_tooltip_text(
@@ -4324,6 +4456,24 @@ class MainWindow(Gtk.Window):
             item.set_label("Reopen Console with VNC")
             item.set_sensitive(False)
             item.set_tooltip_text("")
+            return
+
+        if guest.is_container:
+            if console.protocol == "serial":
+                item.set_label("Reopen Console with VNC")
+                item.set_sensitive(True)
+                item.set_tooltip_text(
+                    "Reconnect this console over VNC. It stays on VNC until "
+                    "the tab is closed."
+                )
+            else:
+                item.set_label("Reopen Console with Serial")
+                item.set_sensitive(SERIAL_AVAILABLE)
+                item.set_tooltip_text(
+                    ""
+                    if SERIAL_AVAILABLE
+                    else guest.console_note or "The serial console is not available"
+                )
             return
 
         if console.protocol == "spice":

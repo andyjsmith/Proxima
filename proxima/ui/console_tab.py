@@ -28,6 +28,7 @@ class ConsoleTabLabel(Gtk.EventBox):
         self.icon = Gtk.Image.new_from_icon_name(
             "video-display-symbolic", Gtk.IconSize.MENU
         )
+        self._icon_name = "video-display-symbolic"
         box.pack_start(self.icon, False, False, 0)
 
         # No ellipsizing. An ellipsizing label reports a minimum width of
@@ -73,15 +74,27 @@ class ConsoleTabLabel(Gtk.EventBox):
     def set_protocol(self, protocol):
         """Say which kind of console the tab holds, once one exists.
 
-        The same icon either way. A warning triangle on every VNC tab
-        overstates it -- VNC is a working console, just a plainer one --
-        and the status bar already names the protocol in the corner.
+        The same icon for SPICE and VNC. A warning triangle on every VNC tab
+        overstates it -- VNC is a working console, just a plainer one -- and
+        the status bar already names the protocol in the corner. A serial
+        console does get its own icon, because it is not a lesser version of
+        the same thing: it is text rather than a picture, and which one a tab
+        holds decides whether the mouse works in it at all.
         """
-        if protocol == "vnc":
+        if protocol == "serial":
+            icon = "utilities-terminal-symbolic"
+            tooltip = "Serial console: text only, with selectable output"
+        elif protocol == "vnc":
+            icon = "video-display-symbolic"
             tooltip = "VNC: no guest resize, clipboard or audio"
         elif protocol:
+            icon = "video-display-symbolic"
             tooltip = "SPICE"
         else:
+            icon = "video-display-symbolic"
             tooltip = "No console open"
+        if icon != self._icon_name:
+            self.icon.set_from_icon_name(icon, Gtk.IconSize.MENU)
+            self._icon_name = icon
         self.icon.set_tooltip_text(tooltip)
         self.label.set_tooltip_text(tooltip)

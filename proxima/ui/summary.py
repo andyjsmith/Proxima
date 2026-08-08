@@ -621,7 +621,15 @@ class GuestSummary(Gtk.ScrolledWindow):
             self._show_placeholder(f"Guest is {guest.status}")
 
         if guest.is_container:
-            self._set("console", "VNC (containers have no SPICE)")
+            # A note is only ever set when opening a console actually fell
+            # back, so it beats the prediction -- which is the whole reason
+            # the field is not simply hard-coded.
+            self._set(
+                "console",
+                f"VNC  ({guest.console_note})"
+                if guest.console_note
+                else "Serial (containers have no SPICE)",
+            )
             self._set("display", "-")
             self._set("agent", "-")
         elif not guest.config_loaded:

@@ -255,6 +255,21 @@ class WebSocketStream:
         del self._buffer[:count]
         return chunk
 
+    def read_some(self, limit=65536):
+        """Block for at least one byte, then return everything already here.
+
+        The counterpart to read() for a protocol with no fixed message
+        length. RFB always knows how many bytes it wants next; a terminal
+        never does -- output arrives in whatever sizes the guest produced it
+        -- and reading it a byte at a time would put a syscall and a decode
+        pass behind every character of a kernel boot log.
+        """
+        if not self._buffer:
+            self._buffer += self._pump()
+        chunk = bytes(self._buffer[:limit])
+        del self._buffer[:limit]
+        return chunk
+
     def write(self, data):
         if self._base64:
             data = base64.b64encode(data)

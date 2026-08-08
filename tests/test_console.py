@@ -61,6 +61,69 @@ def test_an_unknown_display_type_attempts_spice(window, api):
         guest.kind = "lxc"
 
 
+# -- containers, which choose between serial and VNC -----------------------
+
+CONTAINER = key_for(202, node="pve-node-02", kind="lxc")
+
+
+@pytest.fixture
+def container(window):
+    """The container, with every per-session override cleared afterwards.
+
+    The window is shared by the whole file, so a test that forces a protocol
+    and walks away decides the answer for the next one.
+    """
+    guest = window.sidebar.guests[CONTAINER]
+    yield guest
+    window._force_vnc.discard(CONTAINER)
+    window._force_serial.discard(CONTAINER)
+    window.config["prefer_vnc"] = False
+    guest.settings = {}
+    guest.console_note = ""
+
+
+def test_a_container_opens_on_the_serial_console(window, container):
+    assert plan_protocol(window, CONTAINER) == "serial"
+
+
+def test_reopen_with_vnc_overrules_the_serial_default(window, container):
+    window._force_vnc.add(CONTAINER)
+    assert plan_protocol(window, CONTAINER) == "vnc"
+
+
+def test_the_container_protocol_setting_is_honoured(window, container):
+    container.settings = {"protocol": "vnc"}
+    assert plan_protocol(window, CONTAINER) == "vnc"
+
+    # And "serial only" holds against the global preference, which is the
+    # only thing that setting is for.
+    container.settings = {"protocol": "serial"}
+    window.config["prefer_vnc"] = True
+    assert plan_protocol(window, CONTAINER) == "serial"
+
+
+def test_always_use_vnc_covers_containers_too(window, container):
+    window.config["prefer_vnc"] = True
+    assert plan_protocol(window, CONTAINER) == "vnc"
+
+
+def test_a_container_falls_back_to_vnc_when_termproxy_refuses(
+    window, container, monkeypatch
+):
+    from proxima.api import ProxmoxError
+
+    def refuse(*_args, **_kwargs):
+        raise ProxmoxError("termproxy refused: no permission")
+
+    monkeypatch.setattr(window.api_for(container), "term_ticket", refuse)
+    assert plan_protocol(window, CONTAINER) == "vnc", (
+        "a refused termproxy ticket did not fall back to VNC"
+    )
+    assert "termproxy refused" in container.console_note, (
+        "the fallback did not say why it happened"
+    )
+
+
 @pytest.mark.parametrize(
     ("key", "expected"),
     [

@@ -1,7 +1,7 @@
 # Proxima
 
-A VMware Workstation style client for Proxmox VE, built on GTK 3, SPICE and
-VNC.
+A VMware Workstation style client for Proxmox VE, built on GTK 3, SPICE,
+VNC and a serial console for containers.
 
 ```
 python3 proxima.py                 normal start
@@ -68,6 +68,36 @@ cannot end up less checked than the API call that opened it. To be asked
 again about a server, delete its entry from `trusted_certs` in
 `settings.json`.
 
+## Which console you get
+
+| Guest | Default | The other option |
+| --- | --- | --- |
+| VM with a SPICE display | SPICE | VNC |
+| VM without one | VNC | - |
+| Container | Serial | VNC |
+
+**VM -> Reopen Console with...** switches for as long as the tab is open;
+the guest's own **Protocol** setting, in VM Settings -> Proxmox Manager,
+makes it stick for everyone.
+
+The serial console is Proxmox's `termproxy` -- the same thing the web UI
+opens with xterm.js, and what the `pct console` command attaches to. It is
+a real character terminal rather than a picture of one, which is what a
+container's VNC console actually is:
+
+* the text can be selected with the mouse, **Ctrl+Shift+C** copies and
+  **Ctrl+Shift+V** pastes (middle click pastes the primary selection)
+* the terminal is as wide as the tab, not a fixed 80x24, and the container
+  is told when that changes
+* there is scrollback -- the wheel, the scrollbar, or Shift+Page Up
+* **Ctrl+plus** and **Ctrl+minus** change the font size, per container
+* it costs a few hundred bytes a screen rather than a framebuffer
+
+VNC stays one menu entry away, because a container whose serial console is
+wedged is exactly when a second opinion is worth having. The emulator is
+ours (`proxima/console/vt.py`): VTE is the obvious answer on Linux and does
+not exist on Windows, since MSYS2 ships no `vte3` for any mingw target.
+
 ## Sending keys the host swallows
 
 Ctrl+Alt+Del is a toolbar button; its arrow, and **VM -> Send Key**, carry
@@ -75,9 +105,15 @@ the rest -- Ctrl+Alt+Backspace, the twelve virtual terminals, Alt+Tab,
 Alt+F4, Ctrl+Esc and PrintScreen. These exist because pressing them does
 not work: the window manager on *this* computer takes Alt+Tab, a Linux
 desktop takes Ctrl+Alt+F2, and something is usually listening for
-PrintScreen, so none of them ever reach the guest. Both protocols carry
+PrintScreen, so none of them ever reach the guest. SPICE and VNC both carry
 them -- keysyms go over SPICE and RFB alike -- so the menu works on a VNC
 console too.
+
+On a serial console the menu only offers what a character terminal can
+express, and the entries that cannot are refused by name rather than
+quietly doing something else: Ctrl+Alt+F2 switches virtual terminals on a
+machine with a console driver, and there is no console driver behind a pty.
+Ctrl+Alt+Del is greyed out there for the same reason.
 
 ## Logs
 
