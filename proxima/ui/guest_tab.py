@@ -7,6 +7,12 @@ the tab is not, and it has something to show.
 
 Which view a tab is on is the tab's own business. Flipping one leaves every
 other tab where it was.
+
+The stack machinery is in ViewTab, because a node's tab is the same
+arrangement -- a summary and a shell, one showing at a time -- and the window
+drives both through the same handful of methods. What belongs to a guest and
+not to a node (the picture of its screen, following its power state) stays in
+GuestTab.
 """
 
 import gi
@@ -25,24 +31,29 @@ def console_of(page):
     pop-out being returned, the tests), so a page is either a tab with a
     console in it or a console itself.
     """
-    if isinstance(page, GuestTab):
+    if isinstance(page, ViewTab):
         return page.console
     return page if hasattr(page, "protocol") else None
 
 
 def tab_of(page):
-    return page if isinstance(page, GuestTab) else None
+    return page if isinstance(page, ViewTab) else None
 
 
-class GuestTab(Gtk.Stack):
-    """A guest's console and its summary, one showing at a time."""
+class ViewTab(Gtk.Stack):
+    """A summary and a console, one showing at a time."""
 
-    def __init__(self, guest_key, summary, view=SUMMARY):
+    # What the page is about, for the window to look up. A guest tab fills in
+    # guest_key and a node tab node_key; both attributes exist on both so
+    # nothing has to ask which kind of tab it is holding before reading one.
+    guest_key = None
+    node_key = None
+
+    def __init__(self, summary, view=SUMMARY):
         super().__init__()
         self.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.set_transition_duration(100)
 
-        self.guest_key = guest_key
         self.summary = summary
         self.console = None
         # The console side is a permanent child of the stack and consoles are
@@ -76,7 +87,6 @@ class GuestTab(Gtk.Stack):
         # state clears it: an explicit choice is about the guest as it is
         # now, not a standing instruction to ignore it booting.
         self.chosen = False
-        self._last_running = None
 
     # -- views ---------------------------------------------------------
 
@@ -98,37 +108,16 @@ class GuestTab(Gtk.Stack):
         if self.view == name:
             return
         if name == SUMMARY:
-            # Grab the last frame before it goes, so the summary has
-            # something better to show than a placeholder.
-            self.capture_preview()
+            self._leaving_console()
         self.set_visible_child_name(name)
         if name == CONSOLE:
             self.focus_console()
 
+    def _leaving_console(self):
+        """A hook for whatever a subclass wants to keep from the last frame."""
+
     def toggle(self, by_user=True):
         self.show_view(SUMMARY if self.view == CONSOLE else CONSOLE, by_user=by_user)
-
-    def follow_guest_state(self, guest):
-        """Powering off shows the summary; coming back shows the console.
-
-        A guest whose power state changed overrides a view the user picked
-        for how it used to be.
-        """
-        if guest is None:
-            return
-        # has_console, not running: a guest QEMU stopped on an I/O error is
-        # not executing but its screen is still there, and yanking the user
-        # to the summary would hide the very thing they need to look at.
-        running = guest.has_console and not guest.template
-        wanted = CONSOLE if running else SUMMARY
-        if self._last_running is not None and self._last_running == running:
-            # Nothing changed, so a hand-picked view stands.
-            if self.chosen:
-                return
-        else:
-            self.chosen = False
-        self._last_running = running
-        self.show_view(wanted)
 
     # -- the console ---------------------------------------------------
 
@@ -168,7 +157,43 @@ class GuestTab(Gtk.Stack):
         if release is not None:
             release()
 
+
+class GuestTab(ViewTab):
+    """A guest's console and its summary, one showing at a time."""
+
+    def __init__(self, guest_key, summary, view=SUMMARY):
+        super().__init__(summary, view=view)
+        self.guest_key = guest_key
+        self._last_running = None
+
+    def follow_guest_state(self, guest):
+        """Powering off shows the summary; coming back shows the console.
+
+        A guest whose power state changed overrides a view the user picked
+        for how it used to be.
+        """
+        if guest is None:
+            return
+        # has_console, not running: a guest QEMU stopped on an I/O error is
+        # not executing but its screen is still there, and yanking the user
+        # to the summary would hide the very thing they need to look at.
+        running = guest.has_console and not guest.template
+        wanted = CONSOLE if running else SUMMARY
+        if self._last_running is not None and self._last_running == running:
+            # Nothing changed, so a hand-picked view stands.
+            if self.chosen:
+                return
+        else:
+            self.chosen = False
+        self._last_running = running
+        self.show_view(wanted)
+
     # -- preview -------------------------------------------------------
+
+    def _leaving_console(self):
+        # Grab the last frame before it goes, so the summary has something
+        # better to show than a placeholder.
+        self.capture_preview()
 
     def capture_preview(self):
         """Photograph the console, for the summary to show while it is away.

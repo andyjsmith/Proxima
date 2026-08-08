@@ -115,12 +115,14 @@ def test_clipboard_toggles_live_and_saves_nothing(window, config, switch_console
 def test_audio_reconnects_rather_than_claiming_success(window, config, switch_console):
     # Audio cannot be changed on a live SPICE session, so the toggle has to
     # rebuild the console.
-    window._reconnecting = None
     window._toggle_audio()
     # Read before pumping: the rebuilt console's own status messages overwrite
     # the status bar a moment later.
     status = window.status_label_main.get_text()
-    reconnecting = getattr(window, "_reconnecting", None) == RUNNING
+    # The rebuild is recorded per guest, with a deadline. Nothing has to
+    # clear it first any more: the guard only holds off the poll's own
+    # reconnects, and flipping a switch is not the poll.
+    reconnecting = RUNNING in window._reconnecting
     stored = (config.get("guest_prefs") or {}).get(RUNNING, {})
     try:
         assert "audio" not in stored, (

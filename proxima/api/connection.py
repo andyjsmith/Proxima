@@ -61,6 +61,7 @@ class Connection:
         self.state = DISCONNECTED
         self.error = ""
         self.guests = {}  # key -> Guest
+        self.nodes = {}  # key -> Node
         # False until the first poll returns. The tree shows "Loading..."
         # rather than a half-populated server whose guests would briefly
         # appear with the wrong actions enabled.
@@ -117,6 +118,7 @@ class Connection:
         self.state = DISCONNECTED
         self.loaded = False
         self.guests.clear()
+        self.nodes.clear()
 
     # -- inventory -----------------------------------------------------
 
@@ -136,7 +138,36 @@ class Connection:
                     merged[guest.key] = guest
             self.guests = merged
             self.loaded = True
+        self.poll_nodes()
+        with self.lock:
             return list(self.guests.values())
+
+    def poll_nodes(self):
+        """Refresh the cluster's node list. Never fails the guest poll.
+
+        A second request per poll, which /cluster/resources cannot answer:
+        it reports guests, and asking it for nodes as well means a second
+        call either way. A login without permission on /nodes still has a
+        perfectly usable inventory of guests, so this is best effort.
+        """
+        try:
+            nodes = self.api.nodes()
+        except Exception as exc:
+            log.debug("%s: could not list nodes: %s", self.id, exc)
+            return list(self.nodes.values())
+        for node in nodes:
+            node.connection = self.id
+        with self.lock:
+            merged = {}
+            for node in nodes:
+                existing = self.nodes.get(node.key)
+                if existing is not None:
+                    existing.merge_live(node)
+                    merged[node.key] = existing
+                else:
+                    merged[node.key] = node
+            self.nodes = merged
+            return list(self.nodes.values())
 
     def cluster_tasks(self, limit=50):
         return self.api.cluster_tasks(limit)
@@ -236,8 +267,22 @@ class ConnectionManager:
                 return found
         return None
 
+    def nodes(self):
+        """Every node across every connected server."""
+        result = []
+        for connection in self._connections:
+            result.extend(connection.nodes.values())
+        return result
+
+    def node(self, key):
+        for connection in self._connections:
+            found = connection.nodes.get(key)
+            if found is not None:
+                return found
+        return None
+
     def api_for(self, key_or_guest):
-        """The client that owns a guest, by key or by Guest."""
+        """The client that owns a guest or a node, by key or by object."""
         connection_id = getattr(key_or_guest, "connection", None)
         if connection_id is None and isinstance(key_or_guest, str):
             connection_id = key_or_guest.split("/", 1)[0]

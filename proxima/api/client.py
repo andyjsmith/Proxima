@@ -456,6 +456,33 @@ class ProxmoxAPI:
             Guest.from_api(row) for row in rows if row.get("type") in ("qemu", "lxc")
         ]
 
+    def node_status(self, node):
+        """Everything the node knows about itself: load, memory, versions.
+
+        The per-node counterpart of /cluster/resources, which carries only
+        enough about a node to draw a row in a tree. Load average, IO delay,
+        swap, the root filesystem and the kernel and manager versions exist
+        nowhere else.
+        """
+        return self.get(f"/nodes/{node}/status") or {}
+
+    # What Proxmox's own graphs offer, shortest first.
+    RRD_TIMEFRAMES = ("hour", "day", "week", "month", "year")
+
+    def node_rrd(self, node, timeframe="hour", cf="AVERAGE"):
+        """The node's round-robin history, one row per sample.
+
+        Each row carries a 'time' and whichever series the server recorded --
+        cpu, iowait, loadavg, memused, memtotal, netin, netout, rootused and
+        so on. Rows with a gap in them simply omit the key, which is why
+        nothing here fills anything in: a missing sample is missing, and a
+        graph that invents a zero for it draws a cliff that never happened.
+        """
+        if timeframe not in self.RRD_TIMEFRAMES:
+            raise ValueError(f"unknown timeframe {timeframe!r}")
+        rows = self.get(f"/nodes/{node}/rrddata", {"timeframe": timeframe, "cf": cf})
+        return [row for row in (rows or []) if isinstance(row, dict)]
+
     def guest_config(self, node, vmid, kind="qemu"):
         return self.get(f"/nodes/{node}/{kind}/{vmid}/config") or {}
 

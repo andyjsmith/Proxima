@@ -97,6 +97,22 @@ def palette_for(dark):
     return PALETTES[bool(dark)]
 
 
+def node_icon(node, dark=False, size=ICON_SIZE, cache=None):
+    """The icon for a cluster node, in the structural colour unless it is down.
+
+    Deliberately not the green a running guest gets. A node being up is the
+    ordinary state of affairs and colouring it as an event makes the whole
+    tree look like a status board; a node is furniture, so it wears the same
+    colour the server row does. What is worth a colour is a node that has
+    dropped out of the cluster, which is red.
+    """
+    icons = cache if cache is not None else _ICONS
+    palette = palette_for(dark)
+    status = getattr(node, "status", "unknown")
+    down = status not in ("online", "unknown", "")
+    return icons.get("computer-symbolic", palette["failed" if down else "group"], size)
+
+
 def guest_icon(guest, dark=False, size=ICON_SIZE, cache=None):
     """The status icon for a guest, recoloured for the palette in use.
 

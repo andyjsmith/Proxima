@@ -441,10 +441,79 @@ class FakeAPI:
         from proxima.api.models import Node
 
         return [
-            Node(name="pve-node-01", status="online"),
-            Node(name="pve-node-02", status="online"),
+            Node(
+                name="pve-node-01",
+                status="online",
+                uptime=1043400,
+                cpu=0.14,
+                maxcpu=16,
+                mem=34359738368,
+                maxmem=68719476736,
+                disk=42949672960,
+                maxdisk=107374182400,
+            ),
+            Node(
+                name="pve-node-02",
+                status="online",
+                uptime=259200,
+                cpu=0.05,
+                maxcpu=8,
+                mem=8589934592,
+                maxmem=34359738368,
+                disk=21474836480,
+                maxdisk=107374182400,
+            ),
+            # A node the cluster cannot reach, which is the case the tree and
+            # the summary both have to say something honest about.
             Node(name="pve-node-03", status="offline"),
         ]
+
+    def node_status(self, node):
+        self.calls.append(("node-status", node))
+        return {
+            "uptime": 1043400,
+            "cpu": 0.1425,
+            "wait": 0.0032,
+            "loadavg": ["1.24", "0.98", "0.75"],
+            "cpuinfo": {
+                "cpus": 16,
+                "sockets": 1,
+                "cores": 8,
+                "model": "AMD Ryzen 7 5800X",
+                "mhz": "3800.000",
+            },
+            "memory": {"total": 68719476736, "used": 34359738368, "free": 34359738368},
+            "swap": {"total": 8589934592, "used": 1073741824, "free": 7516192768},
+            "rootfs": {
+                "total": 107374182400,
+                "used": 42949672960,
+                "avail": 64424509440,
+            },
+            "kversion": "Linux 6.8.12-2-pve",
+            "pveversion": "pve-manager/8.2.4/faa83925c9641325",
+        }
+
+    # A short history, spaced as the server spaces its finest resolution.
+    def node_rrd(self, node, timeframe="hour", cf="AVERAGE"):
+        self.calls.append(("node-rrd", node, timeframe))
+        base = 1750000000
+        rows = []
+        for step in range(20):
+            row = {
+                "time": base + step * 60,
+                "cpu": 0.10 + step * 0.01,
+                "iowait": 0.002,
+                "memused": 30000000000 + step * 100000000,
+                "memtotal": 68719476736,
+                "netin": 120000.0 + step * 1000,
+                "netout": 90000.0 + step * 800,
+            }
+            if step == 7:
+                # A gap, which Proxmox sends as missing keys rather than as
+                # zeroes -- the graph has to draw it as one.
+                row = {"time": row["time"]}
+            rows.append(row)
+        return rows
 
     def node_storages(self, node, content=None):
         self.calls.append(("storages", node, content))

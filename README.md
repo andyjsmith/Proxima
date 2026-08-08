@@ -38,6 +38,40 @@ worth knowing whatever the guests below are sorted by.
 The search box already matches tags, so filtering to one is a matter of
 typing it.
 
+## Nodes
+
+A node opens like a guest does -- double-click it in the tree, or right-click
+it for **Open Node** -- and gets a tab of its own with two sides.
+
+The summary is what Proxmox's own node Summary shows:
+
+* **meters** for CPU usage, IO delay, load average, RAM, swap and the root
+  filesystem. Load is drawn against the processor count, so a full bar means
+  a machine with no idle capacity left rather than an arbitrary ceiling.
+* **graphs** of CPU (with IO delay over it), memory used against installed,
+  and network traffic in and out, over the hour, day, week, month or year.
+  Hovering reads off the sample under the pointer. They come from the
+  node's round-robin history, which records a sample a minute, so the page
+  re-reads it once a minute and no faster.
+* status, uptime, how many guests are on it, the processor, and the kernel
+  and pve-manager versions.
+
+There is deliberately no picture of the console on this page, unlike a
+guest's: a thumbnail of a shell prompt is not worth the width.
+
+**Open Shell** is the node's own terminal -- `termproxy` on
+`/nodes/<node>`, which is what the web interface's Shell button opens, and
+the same emulator the container consoles use. It is not opened for you: a
+node page that comes back with the session on the next start brings the
+figures, not a root shell.
+
+The graphs are drawn with cairo (`proxima/ui/graphs.py`) rather than by a
+charting library, for the same reason the terminal emulator and the RFB
+client are ours: nothing new to install, on either platform.
+
+A node the cluster cannot reach says so in the tree and on its page, and its
+Shell is greyed out rather than offered and then refused.
+
 ## Certificates
 
 Proxmox signs its own certificate, so there is no public authority to vouch

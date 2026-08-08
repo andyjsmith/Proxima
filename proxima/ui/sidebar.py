@@ -32,7 +32,7 @@ from gi.repository import Gdk, GdkPixbuf, GLib, GObject, Gtk
 from ..api.connection import CONNECTED, CONNECTING, FAILED
 from ..api.models import GUEST_NAME_CHARS, format_guest_name, guest_tags
 from . import actions as action_defs
-from .status_icons import ICON_SIZE, PALETTES, IconCache, guest_icon
+from .status_icons import ICON_SIZE, PALETTES, IconCache, guest_icon, node_icon
 
 # Model columns
 COL_KEY = 0  # guest key, or "" for structural rows
@@ -110,6 +110,14 @@ class Sidebar(Gtk.Box):
     __gsignals__ = {
         "guest-selected": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         "guest-activated": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        # The same three for a node row. A node is a thing you can open --
+        # it has a summary worth reading and a shell worth opening -- so its
+        # row behaves like a guest's rather than like a heading.
+        # (node_key), where a node key is "<server>/<node>"
+        "node-selected": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "node-activated": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        # (node_key, action_name)
+        "node-action": (GObject.SignalFlags.RUN_FIRST, None, (str, str)),
         # (guest_key, action_name)
         "guest-action": (GObject.SignalFlags.RUN_FIRST, None, (str, str)),
         # (action_name) applied to every selected guest
@@ -141,6 +149,12 @@ class Sidebar(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.guests = {}
+        # node key -> Node, filled from the same update() the guests are.
+        # Empty on a server whose login cannot read /nodes, which is why
+        # every node row is still drawn from the guests' own node names as
+        # well: the tree must not lose a machine because a figure about it
+        # could not be fetched.
+        self.nodes = {}
         self.renderers = []
         self.icons = IconCache()
         self._dark = False
@@ -529,15 +543,18 @@ class Sidebar(Gtk.Box):
         """Take the current connection list and redraw the tree."""
         self._connections = list(connections)
         self.guests = {}
+        self.nodes = {}
         for connection in self._connections:
             for key, guest in connection.guests.items():
                 self.guests[key] = guest
+            for key, node in getattr(connection, "nodes", {}).items():
+                self.nodes[key] = node
         self.rebuild()
 
     def rebuild(self):
         if self._editing_key is not None:
             return  # an inline rename is open; leave it alone
-        selected = self.selected_keys()
+        selected = self.selected_keys() + self.selected_node_keys()
         expanded = self._expanded_ids() or self._saved_expanded
 
         # Clearing the store empties the selection, which would otherwise
@@ -569,8 +586,8 @@ class Sidebar(Gtk.Box):
 
         # Only tell anyone if the selection genuinely moved -- a guest that
         # vanished from the tree, say.
-        if self.selected_keys() != selected:
-            self.emit("guest-selected", self.selected_key() or "")
+        if self.selected_keys() + self.selected_node_keys() != selected:
+            self._announce_selection()
 
     def _add_connection(self, connection):
         icon_colour = {
@@ -657,25 +674,55 @@ class Sidebar(Gtk.Box):
         """
         return tuple(part.lower() for part in path)
 
+    def _node_names(self, connection):
+        """Every node this server has, however we came to hear of it.
+
+        The union of what /nodes reported and what the guests say they are
+        running on: a login that cannot read /nodes still gets its nodes
+        listed, and a node with nothing on it is still a node.
+        """
+        names = {g.node for g in connection.guests.values() if g.node}
+        names.update(node.name for node in getattr(connection, "nodes", {}).values())
+        return sorted(names)
+
+    def _add_node_row(self, root, connection, node_name, members):
+        """One node row: its name, what it is running, and whether it is up."""
+        key = f"{connection.id}/{node_name}"
+        node = self.nodes.get(key)
+        running = sum(1 for g in members if g.running)
+
+        label = f"{node_name}  ({running}/{len(members)})"
+        tooltip = f"{node_name}\n{running} of {len(members)} running"
+        if node is not None:
+            if not node.online:
+                # The count is about guests the cluster last saw; the node
+                # not answering is the more important half, so it leads.
+                label = f"{node_name}  ({node.status})"
+                tooltip = f"{node_name}\n{node.status}"
+            else:
+                tooltip += f"\nCPU {node.cpu_text}\nMemory {node.memory_text}"
+                tooltip += f"\nUptime {node.uptime_text}"
+        icon = (
+            node_icon(node, dark=self._dark, cache=self.icons)
+            if node is not None
+            else self.icons.get("computer-symbolic", self._palette["group"])
+        )
+        return self.store.append(root, [key, label, tooltip, icon, "node", key])
+
     def _add_node_view(self, root, connection, guests):
         by_node = {}
         for guest in guests:
             by_node.setdefault(guest.node, []).append(guest)
 
-        for node_name in sorted(by_node):
-            members = by_node[node_name]
-            running = sum(1 for g in members if g.running)
-            node_iter = self.store.append(
-                root,
-                [
-                    "",
-                    f"{node_name}  ({running}/{len(members)})",
-                    f"{node_name}\n{running} of {len(members)} running",
-                    self.icons.get("computer-symbolic", self._palette["group"]),
-                    "node",
-                    f"{connection.id}/{node_name}",
-                ],
-            )
+        for node_name in self._node_names(connection):
+            members = by_node.get(node_name, [])
+            # A search is mostly a search for guests, so a node with no
+            # match under it drops out -- unless the node itself is what was
+            # typed, which is the one case where an empty branch is the
+            # answer.
+            if not members and self.filter_text not in node_name.lower():
+                continue
+            node_iter = self._add_node_row(root, connection, node_name, members)
             for guest in sorted(members, key=self._guest_sort_key):
                 self._add_guest(node_iter, guest)
 
@@ -689,20 +736,9 @@ class Sidebar(Gtk.Box):
         set, so a search narrows the groups without making a node look half
         empty.
         """
-        for node_name in sorted({g.node for g in connection.guests.values()}):
+        for node_name in self._node_names(connection):
             members = [g for g in connection.guests.values() if g.node == node_name]
-            running = sum(1 for g in members if g.running)
-            self.store.append(
-                root,
-                [
-                    "",
-                    f"{node_name}  ({running}/{len(members)})",
-                    f"{node_name}\n{running} of {len(members)} running",
-                    self.icons.get("computer-symbolic", self._palette["group"]),
-                    "node",
-                    f"{connection.id}/{node_name}",
-                ],
-            )
+            self._add_node_row(root, connection, node_name, members)
 
     def _add_tag_view(self, root, connection, guests):
         """A group per tag, and guests under every tag they carry.
@@ -907,7 +943,7 @@ class Sidebar(Gtk.Box):
             row = self.store.iter_children(parent)
             while row is not None:
                 key = self.store.get_value(row, COL_KEY)
-                if key:
+                if key and self.store.get_value(row, COL_KIND) == "guest":
                     keys.append(key)
                 walk(row)
                 row = self.store.iter_next(row)
@@ -918,18 +954,41 @@ class Sidebar(Gtk.Box):
     def visible_guests(self):
         return [self.guests[k] for k in self.visible_keys() if k in self.guests]
 
-    def selected_keys(self):
+    def _selected_of_kind(self, kind):
+        """Selected rows of one kind, in the order the tree holds them.
+
+        Node rows carry a key of their own, so the selection can hold both
+        kinds at once -- a rubber band over a node and the guests under it,
+        say. Everything that acts on a selection wants one kind or the
+        other, and never both, so they are separated here rather than in
+        every caller.
+        """
         model, paths = self.view.get_selection().get_selected_rows()
         keys = []
         for path in paths:
-            key = model.get_value(model.get_iter(path), COL_KEY)
-            if key:
+            row = model.get_iter(path)
+            key = model.get_value(row, COL_KEY)
+            if key and model.get_value(row, COL_KIND) == kind:
                 keys.append(key)
         return keys
+
+    def selected_keys(self):
+        return self._selected_of_kind("guest")
 
     def selected_key(self):
         keys = self.selected_keys()
         return keys[0] if keys else None
+
+    def selected_node_keys(self):
+        return self._selected_of_kind("node")
+
+    def selected_node_key(self):
+        keys = self.selected_node_keys()
+        return keys[0] if keys else None
+
+    def selected_node(self):
+        key = self.selected_node_key()
+        return self.nodes.get(key) if key else None
 
     def selected_guest(self):
         key = self.selected_key()
@@ -960,7 +1019,15 @@ class Sidebar(Gtk.Box):
         if row is None:
             return False
         path = self.store.get_path(row)
-        self.view.expand_to_path(path)
+        # Ancestors only. gtk_tree_view_expand_to_path() expands every row
+        # along the path *including the last one*, which is invisible on a
+        # guest -- it has no children -- and made a node impossible to
+        # collapse: the row is selected, every poll rebuilds the tree and
+        # restores the selection through here, and the row sprang open again
+        # a second later.
+        parent = path.copy()
+        if parent.up() and parent.get_depth() > 0:
+            self.view.expand_to_path(parent)
         selection = self.view.get_selection()
         if not add:
             if selection.count_selected_rows() == 1 and selection.path_is_selected(
@@ -1023,13 +1090,31 @@ class Sidebar(Gtk.Box):
     def _on_selection(self, _selection):
         if self._suppress_selection:
             return
+        self._announce_selection()
+
+    def _announce_selection(self):
+        """Say what is selected, in both currencies.
+
+        Both signals go out every time, including the empty ones: what the
+        window shows for a node has to be taken down when a guest is
+        clicked, and the only thing that says so is guest-selected arriving
+        with a key while a node is still remembered.
+        """
         self.emit("guest-selected", self.selected_key() or "")
+        self.emit("node-selected", self.selected_node_key() or "")
 
     def _on_row_activated(self, view, path, _column):
         row = self.store.get_iter(path)
         key = self.store.get_value(row, COL_KEY)
-        if key:
+        kind = self.store.get_value(row, COL_KIND)
+        if key and kind == "guest":
             self.emit("guest-activated", key)
+        elif key and kind == "node":
+            # Opening the node, not folding the branch. A node is now a
+            # thing with a page of its own, and double-click is how every
+            # other row in this tree is opened; the expander arrow and the
+            # keyboard still fold it.
+            self.emit("node-activated", key)
         elif view.row_expanded(path):
             view.collapse_row(path)
         else:
@@ -1056,23 +1141,30 @@ class Sidebar(Gtk.Box):
         if kind == "connection":
             self._show_connection_menu(self.store.get_value(row, COL_ID), event)
             return True
+        if kind == "node":
+            self._show_node_menu(self.store.get_value(row, COL_KEY), event)
+            return True
 
         guests = self.selected_guests()
         if not guests:
-            # A node, a folder or the "Loading..." placeholder. None of them
-            # has an action of its own, and adding a server has nothing to do
-            # with the row that was clicked -- that belongs to the server row
-            # and to the empty space below the tree.
+            # A folder or the "Loading..." placeholder. Neither has an action
+            # of its own, and adding a server has nothing to do with the row
+            # that was clicked -- that belongs to the server row and to the
+            # empty space below the tree.
             return True
         self._show_menu(guests, event)
         return True
 
     def _on_popup_menu_key(self, _view):
         guests = self.selected_guests()
-        if not guests:
-            return False
-        self._show_menu(guests, None)
-        return True
+        if guests:
+            self._show_menu(guests, None)
+            return True
+        node_key = self.selected_node_key()
+        if node_key:
+            self._show_node_menu(node_key, None)
+            return True
+        return False
 
     # -- menus ---------------------------------------------------------
 
@@ -1114,6 +1206,32 @@ class Sidebar(Gtk.Box):
         add = Gtk.MenuItem(label="Connect...")
         add.connect("activate", lambda *_: self.emit("connect-requested"))
         menu.append(add)
+        self._popup(menu, event)
+
+    def _show_node_menu(self, key, event):
+        """What there is to do with a node: read it, or get a shell on it."""
+        node = self.nodes.get(key)
+        online = node is None or node.online
+
+        menu = Gtk.Menu()
+        summary = Gtk.MenuItem(label="Open Node")
+        summary.connect("activate", lambda *_: self.emit("node-activated", key))
+        menu.append(summary)
+
+        shell = Gtk.MenuItem(label="Open Shell")
+        shell.set_sensitive(online)
+        shell.set_tooltip_text(
+            "A terminal on the node itself, as the web interface's Shell is"
+            if online
+            else "The node is not answering."
+        )
+        shell.connect("activate", lambda *_: self.emit("node-action", key, "shell"))
+        menu.append(shell)
+
+        menu.append(Gtk.SeparatorMenuItem())
+        refresh = Gtk.MenuItem(label="Refresh")
+        refresh.connect("activate", lambda *_: self.emit("node-action", key, "refresh"))
+        menu.append(refresh)
         self._popup(menu, event)
 
     def _show_menu(self, guests, event):

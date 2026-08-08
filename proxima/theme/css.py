@@ -131,6 +131,13 @@ scrollbar slider  { min-width: 9px; min-height: 9px; }
    tight fit they are drawn for. */
 .labelled-icon image { margin-right: 6px; }
 
+/* A node summary's meters. GTK draws a progress bar three pixels high,
+   which at a glance reads as a hairline rather than as a proportion --
+   and these are the fastest thing on the page to read when they are
+   readable at all. */
+.meter trough,
+.meter progress { min-height: 9px; border-radius: 4px; }
+
 /* The summary page's key column. */
 .summary-key      { opacity: 0.7; }
 .summary-value    { font-family: "JetBrains Mono", "Cascadia Mono",

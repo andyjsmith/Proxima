@@ -436,6 +436,87 @@ def test_a_spice_console_can_be_reopened_with_vnc(window, live_console):
     assert window.switch_protocol_item.get_sensitive()
 
 
+def test_reopen_works_twice_in_a_row(window, live_console, monkeypatch):
+    """Two switches, one after the other, as somebody trying them out does.
+
+    The second used to do nothing at all. reconnect_console marked a rebuild
+    as in flight and only a timer cleared the mark, so a click inside the
+    next eight seconds returned without opening anything -- after the status
+    bar had already said "Reopening on SPICE...". Nothing else wrote to the
+    status bar afterwards, so the window sat on that line having done
+    nothing, and clicking again did nothing again.
+    """
+    if live_console is None or live_console.protocol != "spice":
+        pytest.skip(
+            f"no live SPICE console (got {getattr(live_console, 'protocol', None)})"
+        )
+    api = window.api_for(window.sidebar.guests[RUNNING])
+    monkeypatch.setattr(
+        api,
+        "vnc_ticket",
+        lambda node, vmid, kind="qemu": {"port": "5900", "ticket": "PVEVNC:fake"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        api,
+        "vnc_websocket_url",
+        lambda node, vmid, port, ticket, kind="qemu": (
+            f"wss://{api.host}:{api.port}/api2/json"
+            f"/nodes/{node}/{kind}/{vmid}/vncwebsocket"
+        ),
+        raising=False,
+    )
+
+    def protocol():
+        return getattr(window.consoles.get(RUNNING), "protocol", None)
+
+    try:
+        window._switch_console_protocol()
+        assert pump_until(lambda: protocol() == "vnc", 8), (
+            f"the first switch did not reach VNC (on {protocol()})"
+        )
+
+        # Straight away, with no pause: this is the one that was swallowed.
+        window._switch_console_protocol()
+        assert pump_until(lambda: protocol() == "spice", 8), (
+            f"the second switch was ignored -- still on {protocol()}, and the "
+            f"status bar reads {window.status_label_main.get_text()!r}"
+        )
+        assert "Reopening" not in window.status_label_main.get_text(), (
+            "the status bar was left saying it was reopening something"
+        )
+    finally:
+        window._force_vnc.discard(RUNNING)
+        window._force_spice.discard(RUNNING)
+
+
+def test_an_automatic_reconnect_waits_but_a_click_never_does(window, monkeypatch):
+    """The guard is for the poll, which asks again every few seconds."""
+    asked = []
+    monkeypatch.setattr(
+        type(window),
+        "open_console",
+        lambda self, key, **kwargs: asked.append((key, kwargs.get("automatic", False))),
+    )
+    window._reconnecting.pop(RUNNING, None)
+    try:
+        window.reconnect_console(RUNNING)
+        window.reconnect_console(RUNNING)
+        assert len(asked) == 2, f"a second click was dropped: {asked}"
+
+        # The poll's own attempts, while a rebuild is still in flight, are
+        # what the guard exists for.
+        window.reconnect_console(RUNNING, automatic=True)
+        assert len(asked) == 2, f"an automatic reconnect piled on: {asked}"
+
+        # ...and once the rebuild finishes, the poll may ask again.
+        window._reconnect_finished(RUNNING)
+        window.reconnect_console(RUNNING, automatic=True)
+        assert len(asked) == 3, "the guard outlived the rebuild it was guarding"
+    finally:
+        window._reconnecting.pop(RUNNING, None)
+
+
 def test_closing_the_tab_forgets_the_vnc_choice(window):
     window.open_console(RUNNING)
     pump(1.0)

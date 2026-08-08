@@ -455,7 +455,16 @@ def test_connect_is_on_the_server_row_not_on_nodes(window, right_click):
     assert any("Connect" in e for e in connection_menu), (
         f"the server row lost Connect...: {connection_menu}"
     )
-    assert node_menu == [], f"a node row opened a menu: {node_menu}"
+    assert not any("Connect" in e for e in node_menu), (
+        f"a node row is offering to add a server: {node_menu}"
+    )
+
+
+def test_a_node_row_offers_the_node_and_its_shell(window, right_click):
+    node_menu = right_click("node")
+    assert node_menu, "a node row has no menu at all"
+    assert "Open Node" in node_menu, node_menu
+    assert "Open Shell" in node_menu, node_menu
 
 
 def has_row_of_kind(sidebar, kind):

@@ -99,6 +99,12 @@ class Node:
     maxcpu: int = 0
     mem: int = 0
     maxmem: int = 0
+    disk: int = 0
+    maxdisk: int = 0
+    level: str = ""
+    # Which server this node came from. Part of the key, exactly as it is for
+    # a guest: two clusters both containing a node called "pve" stay distinct.
+    connection: str = ""
 
     @classmethod
     def from_api(cls, row):
@@ -110,7 +116,221 @@ class Node:
             maxcpu=int(row.get("maxcpu") or 0),
             mem=int(row.get("mem") or 0),
             maxmem=int(row.get("maxmem") or 0),
+            disk=int(row.get("disk") or 0),
+            maxdisk=int(row.get("maxdisk") or 0),
+            level=row.get("level") or "",
         )
+
+    # -- identity ------------------------------------------------------
+
+    @property
+    def key(self):
+        """Same shape as a guest key, and deliberately shorter than one.
+
+        A guest is "<server>/<node>/<kind>/<vmid>", so a node key can never
+        collide with one -- which is what lets the two kinds of tab share a
+        notebook without a type tag on every lookup.
+        """
+        return f"{self.connection}/{self.name}"
+
+    @property
+    def label(self):
+        return self.name
+
+    @property
+    def online(self):
+        return self.status == "online"
+
+    def merge_live(self, other):
+        """Copy the volatile figures from a freshly polled copy."""
+        for attr in (
+            "status",
+            "uptime",
+            "cpu",
+            "maxcpu",
+            "mem",
+            "maxmem",
+            "disk",
+            "maxdisk",
+            "level",
+            "connection",
+        ):
+            setattr(self, attr, getattr(other, attr))
+
+    # -- display -------------------------------------------------------
+
+    @property
+    def uptime_text(self):
+        return _human_uptime(self.uptime) if self.online else "-"
+
+    @property
+    def cpu_text(self):
+        if not self.online:
+            return "-"
+        return f"{self.cpu * 100:.1f}% of {self.maxcpu or '?'}"
+
+    @property
+    def memory_text(self):
+        if not self.maxmem:
+            return "-"
+        return f"{_human_bytes(self.mem)} / {_human_bytes(self.maxmem)}"
+
+    @property
+    def disk_text(self):
+        if not self.maxdisk:
+            return "-"
+        return f"{_human_bytes(self.disk)} / {_human_bytes(self.maxdisk)}"
+
+
+def _fraction(used, total):
+    """used/total, clamped to 0..1, and 0 when there is no total to divide by."""
+    try:
+        used, total = float(used or 0), float(total or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if total <= 0:
+        return 0.0
+    return max(0.0, min(1.0, used / total))
+
+
+@dataclass
+class NodeStatus:
+    """What /nodes/<node>/status says, in the shape the summary draws.
+
+    The endpoint returns nested dictionaries with a couple of spellings that
+    have changed across releases, so the parsing lives here rather than in a
+    widget: the page then reads plain numbers and cannot be broken by a
+    server that words something differently.
+    """
+
+    uptime: int = 0
+    cpu: float = 0.0  # 0..1
+    cpus: int = 0
+    # Proxmox's "IO delay": the share of CPU time spent waiting on storage.
+    # The single most useful number on the page when a node feels slow, and
+    # the one nothing else reports.
+    wait: float = 0.0
+    loadavg: tuple = (0.0, 0.0, 0.0)
+    mem_used: int = 0
+    mem_total: int = 0
+    swap_used: int = 0
+    swap_total: int = 0
+    disk_used: int = 0
+    disk_total: int = 0
+    cpu_model: str = ""
+    sockets: int = 0
+    mhz: str = ""
+    kernel: str = ""
+    pve_version: str = ""
+
+    @classmethod
+    def from_api(cls, row):
+        row = row or {}
+        cpuinfo = row.get("cpuinfo") or {}
+        memory = row.get("memory") or {}
+        swap = row.get("swap") or {}
+        rootfs = row.get("rootfs") or row.get("root") or {}
+
+        load = []
+        for value in row.get("loadavg") or []:
+            try:
+                load.append(float(value))
+            except (TypeError, ValueError):
+                load.append(0.0)
+        while len(load) < 3:
+            load.append(0.0)
+
+        def whole(value):
+            try:
+                return int(float(value or 0))
+            except (TypeError, ValueError):
+                return 0
+
+        return cls(
+            uptime=whole(row.get("uptime")),
+            cpu=float(row.get("cpu") or 0.0),
+            cpus=whole(cpuinfo.get("cpus")),
+            wait=float(row.get("wait") or 0.0),
+            loadavg=tuple(load[:3]),
+            mem_used=whole(memory.get("used")),
+            mem_total=whole(memory.get("total")),
+            swap_used=whole(swap.get("used")),
+            swap_total=whole(swap.get("total")),
+            disk_used=whole(rootfs.get("used")),
+            disk_total=whole(rootfs.get("total")),
+            cpu_model=str(cpuinfo.get("model") or ""),
+            sockets=whole(cpuinfo.get("sockets")),
+            mhz=str(cpuinfo.get("mhz") or ""),
+            # 'kversion' is the running kernel; newer servers also carry
+            # 'current-kernel', which says the same thing in pieces.
+            kernel=str(row.get("kversion") or ""),
+            pve_version=str(row.get("pveversion") or ""),
+        )
+
+    # -- what the meters need ------------------------------------------
+
+    @property
+    def memory_fraction(self):
+        return _fraction(self.mem_used, self.mem_total)
+
+    @property
+    def swap_fraction(self):
+        return _fraction(self.swap_used, self.swap_total)
+
+    @property
+    def disk_fraction(self):
+        return _fraction(self.disk_used, self.disk_total)
+
+    @property
+    def load_fraction(self):
+        """The one-minute load against the processor count.
+
+        A load equal to the number of processors is a machine with no idle
+        capacity left, which is the point the bar should be full at. Load can
+        legitimately exceed that, so the bar tops out rather than lying about
+        having room.
+        """
+        return _fraction(self.loadavg[0], self.cpus)
+
+    @property
+    def load_text(self):
+        return ", ".join(f"{value:.2f}" for value in self.loadavg)
+
+    @property
+    def memory_text(self):
+        return f"{_human_bytes(self.mem_used)} of {_human_bytes(self.mem_total)}"
+
+    @property
+    def swap_text(self):
+        if not self.swap_total:
+            return "none configured"
+        return f"{_human_bytes(self.swap_used)} of {_human_bytes(self.swap_total)}"
+
+    @property
+    def disk_text(self):
+        return f"{_human_bytes(self.disk_used)} of {_human_bytes(self.disk_total)}"
+
+    @property
+    def cpu_text(self):
+        if not self.cpus:
+            return f"{self.cpu * 100:.1f}%"
+        return f"{self.cpu * 100:.1f}% of {self.cpus} CPU(s)"
+
+    @property
+    def processors_text(self):
+        """The line Proxmox writes as "8 x AMD Ryzen ... (1 Socket)"."""
+        parts = []
+        if self.cpus:
+            parts.append(
+                f"{self.cpus} x {self.cpu_model}"
+                if self.cpu_model
+                else f"{self.cpus} CPU(s)"
+            )
+        elif self.cpu_model:
+            parts.append(self.cpu_model)
+        if self.sockets:
+            parts.append(f"({self.sockets} socket{'s' if self.sockets != 1 else ''})")
+        return "  ".join(parts) or "-"
 
     @property
     def uptime_text(self):

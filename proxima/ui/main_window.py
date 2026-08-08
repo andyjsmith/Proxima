@@ -52,7 +52,7 @@ from ..theme import decorate as theme_decorate
 from ..theme import keep_active as theme_keep_active
 from ..theme.system import DarkModeWatcher
 from . import actions as action_defs
-from . import desktop, trust_dialog
+from . import desktop, status_icons, trust_dialog
 from . import sidebar as sidebar_mod
 from . import toolbar as toolbar_defs
 from .clone import CloneDialog
@@ -64,6 +64,8 @@ from .guest_tab import SUMMARY as VIEW_SUMMARY
 from .guest_tab import GuestTab, console_of, tab_of
 from .indicators import StatusIndicator
 from .login_dialog import run_login
+from .node_summary import NodeSummary
+from .node_tab import NodeTab
 from .settings_dialog import SettingsDialog
 from .sidebar import Sidebar
 from .snapshots import SnapshotManager, TakeSnapshotDialog
@@ -130,6 +132,12 @@ class MainWindow(Gtk.Window):
         self.connections = ConnectionManager()
 
         self.consoles = {}  # guest key -> console widget
+        # Nodes are kept apart from guests rather than sharing the two
+        # dictionaries above. Everything that walks self.consoles is about a
+        # guest -- power state, SPICE occupancy, snapshots -- and a node in
+        # there would have to be skipped in every one of those loops.
+        self.node_tabs = {}  # node key -> NodeTab
+        self.node_consoles = {}  # node key -> shell widget
         self._poll_source = None
         self._poll_busy = False
         self._closing = False
@@ -169,6 +177,10 @@ class MainWindow(Gtk.Window):
         # buttons are helpers for the session in front of you, and the
         # settled answer belongs in the guest's own settings.
         self._session_switches = {}  # (guest key, name) -> bool
+        # Guests whose console is being rebuilt, and when to stop believing
+        # it. Per guest, not one for the window: two tabs reconnecting have
+        # nothing to do with each other. See reconnect_console.
+        self._reconnecting = {}  # guest key -> deadline
         # When we last tore down a live SPICE session, per guest. QEMU keeps
         # counting a client for a moment after it goes, so without this
         # every reconnect would look like somebody else was already on it.
@@ -176,6 +188,7 @@ class MainWindow(Gtk.Window):
         # Consoles to reopen from the last session, and when to give up
         # waiting for their guests to appear in the inventory.
         self._restore_keys = []
+        self._restore_nodes = []
         self._restore_until = 0.0
         # The notebook emits "switch-page" while the window is still being
         # assembled, before the status bar and menus exist. Handlers that
@@ -233,6 +246,9 @@ class MainWindow(Gtk.Window):
         self.sidebar.connect("guest-selected", self._on_guest_selected)
         self.sidebar.connect("guest-activated", self._on_guest_activated)
         self.sidebar.connect("guest-action", self._on_guest_action)
+        self.sidebar.connect("node-selected", self._on_node_selected)
+        self.sidebar.connect("node-activated", self._on_node_activated)
+        self.sidebar.connect("node-action", self._on_node_action)
         self.sidebar.connect("filter-changed", lambda *_: self.refresh())
         self.sidebar.connect("bulk-action", self._on_bulk_action)
         self.sidebar.connect("view-changed", self._on_view_changed)
@@ -461,6 +477,10 @@ class MainWindow(Gtk.Window):
         self.usb_menu_item.set_submenu(self.usb_menu)
         self.usb_menu_item.set_sensitive(False)
         vm_menu.append(self.usb_menu_item)
+        # Built when the menu opens rather than kept in step with the host:
+        # what is plugged in changes without asking us, and a stale list of
+        # devices is worse than a list that takes a moment to appear.
+        self.vm_menu = vm_menu
         vm_menu.connect("show", lambda *_: self._rebuild_usb_menu())
 
         vm_menu.append(Gtk.SeparatorMenuItem())
@@ -489,7 +509,8 @@ class MainWindow(Gtk.Window):
         vm_menu.append(agent_item)
         bar.append(vm_item)
 
-        bar.append(self._build_view_menu())
+        view_item = self._build_view_menu()
+        bar.append(view_item)
 
         help_menu = Gtk.Menu()
         help_item = Gtk.MenuItem(label="_Help", use_underline=True)
@@ -951,10 +972,9 @@ class MainWindow(Gtk.Window):
             # being rebuilt -- audio, which is fixed when the SPICE session
             # is created. Rebuild in place: the tab stays where it is.
             self.set_status(f"{guest.label}: {label} {state}, reconnecting...")
-            # An explicit toggle overrides the in-flight-reconnect guard;
-            # otherwise flipping the switch twice in a row does nothing the
-            # second time.
-            self._reconnecting = None
+            # No need to clear the in-flight guard first: it only holds off
+            # the poll's own reconnects, and this is somebody flipping a
+            # switch. See reconnect_console.
             self.reconnect_console(guest.key)
         else:
             # No console open, or one that cannot do it at all. The choice
@@ -1687,6 +1707,8 @@ class MainWindow(Gtk.Window):
             return
         for key in [k for k in self.consoles if k.startswith(connection_id + "/")]:
             self.close_console(key)
+        for key in [k for k in self.node_tabs if k.startswith(connection_id + "/")]:
+            self.close_node(key)
         self.connections.remove(connection_id)
         # A manual disconnect is a decision: stop reconnecting it at startup.
         self._save_connections()
@@ -1722,7 +1744,11 @@ class MainWindow(Gtk.Window):
             return
         self.sidebar.restore_expansion(self.config.get("session_expanded") or [])
         self._restore_keys = list(self.config.get("session_consoles") or [])
-        if self._restore_keys:
+        # Node pages come back too, and without their shells: a shell is a
+        # session on the machine, not a view of it, and silently reopening
+        # one at startup is not something to do on somebody's behalf.
+        self._restore_nodes = list(self.config.get("session_nodes") or [])
+        if self._restore_keys or self._restore_nodes:
             self._restore_until = time.monotonic() + self.RESTORE_TIMEOUT
 
     def _resume_session(self):
@@ -1732,11 +1758,19 @@ class MainWindow(Gtk.Window):
         come back as their servers finish connecting rather than all at once
         or not at all.
         """
-        if not self._restore_keys:
+        if not self._restore_keys and not self._restore_nodes:
             return
         if time.monotonic() >= self._restore_until:
             self._restore_keys = []
+            self._restore_nodes = []
             return
+
+        for key in list(self._restore_nodes):
+            if self.node_for(key) is None:
+                continue
+            self._restore_nodes.remove(key)
+            self.open_node(key, present=False)
+
         for key in list(self._restore_keys):
             guest = self.sidebar.guests.get(key)
             if guest is None:
@@ -1763,14 +1797,19 @@ class MainWindow(Gtk.Window):
         # session, and restoring into four panes on startup would be a
         # surprise rather than a convenience.
         keys = []
+        nodes = []
         for page in self.panes.all_pages():
             key = getattr(page, "guest_key", None)
             if key:
                 keys.append(key)
+            node_key = getattr(page, "node_key", None)
+            if node_key:
+                nodes.append(node_key)
         # A popped-out console is still an open console; it simply is not in
         # the notebook. It comes back as a tab, which is the honest default.
         keys.extend(k for k in self._popouts if k not in keys)
         self.config["session_consoles"] = keys
+        self.config["session_nodes"] = nodes
         self.config["session_expanded"] = self.sidebar.expanded_ids()
 
     # ------------------------------------------------------------------
@@ -2320,6 +2359,7 @@ class MainWindow(Gtk.Window):
         self._update_action_sensitivity()
         self._update_popouts()
         self._refresh_open_summaries()
+        self._refresh_open_node_summaries()
         return False
 
     def _refresh_open_summaries(self):
@@ -3530,6 +3570,10 @@ class MainWindow(Gtk.Window):
         if self._closing:
             return False
 
+        # Whatever this turns into -- a console, or the question below --
+        # the rebuild that was in flight for this guest is over.
+        self._reconnect_finished(guest.key)
+
         if plan["protocol"] == "occupied":
             self._console_occupied(guest, plan, automatic)
             return False
@@ -3864,6 +3908,269 @@ class MainWindow(Gtk.Window):
             tab.summary.notes_saved(ok=True)
         return False
 
+    # ------------------------------------------------------------------
+    # Nodes
+    # ------------------------------------------------------------------
+
+    def node_for(self, key):
+        """The Node a key names, or None if no connected server has it."""
+        return self.connections.node(key) if key else None
+
+    def guests_on(self, node):
+        """Every guest the inventory places on a node."""
+        if node is None:
+            return []
+        return [
+            guest
+            for guest in self.sidebar.guests.values()
+            if guest.node == node.name and guest.connection == node.connection
+        ]
+
+    def _on_node_selected(self, _sidebar, key):
+        """Clicking a node refreshes its page, exactly as a guest does.
+
+        And, exactly as a guest does, it does not open one: a node you have
+        not asked for has no tab.
+        """
+        node = self.node_for(key)
+        tab = self.node_tabs.get(key)
+        if node is None or tab is None or tab.view != VIEW_SUMMARY:
+            return
+        tab.summary.show_node(node, self.api_for(node), self.guests_on(node))
+
+    def _on_node_activated(self, _sidebar, key):
+        self.open_node(key)
+
+    def _on_node_action(self, _sidebar, key, action_name):
+        if action_name == "shell":
+            self.open_node_shell(key)
+        elif action_name == "refresh":
+            self.refresh()
+
+    def open_node(self, key, present=True):
+        """Open, or bring forward, a node's tab."""
+        node = self.node_for(key)
+        if node is None:
+            self.set_status(f"{key} is not a node on any connected server")
+            return None
+        return self.node_tab(node, present=present)
+
+    def node_tab(self, node, present=False):
+        """The node's tab, opening one if it has none."""
+        tab = self.node_tabs.get(node.key)
+        if tab is None:
+            summary = NodeSummary(
+                on_open_shell=lambda k=node.key: self.open_node_shell(k)
+            )
+            tab = NodeTab(node.key, summary)
+            self.node_tabs[node.key] = tab
+            label = ConsoleTabLabel(
+                node.name, None, on_close=lambda k=node.key: self.close_node(k)
+            )
+            self.panes.append(tab, label)
+            tab.show_all()
+            self._sync_node_tab_icon(tab, node)
+            summary.show_node(node, self.api_for(node), self.guests_on(node))
+        if present:
+            self.panes.focus_page(tab)
+        return tab
+
+    def _sync_node_tab_icon(self, tab, node):
+        """The tab wears the node's own icon, as the tree draws it.
+
+        Not the console's: a node's tab is the node, and opening a shell in
+        it does not turn it into a terminal. It does follow the node going
+        offline, and the theme flipping, since both change what the tree
+        shows for the same machine.
+        """
+        notebook = self.panes.notebook_of(tab)
+        label = notebook.get_tab_label(tab) if notebook is not None else None
+        if label is None or not hasattr(label, "set_icon"):
+            return
+        dark = self.sidebar._dark
+        stamp = (node.status, dark)
+        if getattr(label, "_node_stamp", None) == stamp:
+            return
+        label._node_stamp = stamp
+        label.set_icon(
+            status_icons.node_icon(node, dark=dark),
+            f"{node.name}\n{node.status}",
+        )
+
+    def open_node_shell(self, key, replace=False):
+        """Open a terminal on the node itself.
+
+        The same termproxy console a container gets, on the endpoint Proxmox
+        hangs off the node rather than off a guest -- which is what the web
+        interface's Shell button opens. There is no second protocol to fall
+        back to here: a node has no framebuffer, and the VNC shell Proxmox
+        also offers is the same text in a picture of a terminal.
+        """
+        node = self.node_for(key)
+        if node is None:
+            return
+        if not SERIAL_AVAILABLE:
+            self._error_dialog(
+                "No shell available",
+                "pycairo is required to draw a terminal.\n"
+                "Install mingw-w64-ucrt-x86_64-python-cairo.",
+            )
+            return
+        if not node.online:
+            self.set_status(f"{node.name} is {node.status}")
+            return
+
+        tab = self.node_tab(node, present=True)
+        if self.node_consoles.get(key) is not None and not replace:
+            # Already open: show it rather than dialling a second session.
+            tab.show_view(VIEW_CONSOLE, by_user=True)
+            self._sync_tab_view(tab)
+            return
+
+        waiting = PlaceholderConsole(
+            title=node.name,
+            status="connecting",
+            on_reconnect=lambda k=key: self.open_node_shell(k, replace=True),
+        )
+        self._install_node_console(node, waiting)
+        self.set_status(f"{node.name}: opening a shell...")
+        log.info("opening a shell on %s", node.key)
+
+        api = self.api_for(node)
+
+        def worker():
+            try:
+                # vmid=None is the node's own termproxy endpoint. The kind is
+                # not part of that path at all -- see _console_base.
+                session = open_term_session(api, node.name, None)
+            except ProxmoxError as exc:
+                GLib.idle_add(self._node_shell_failed, node.key, str(exc))
+                return
+            except Exception as exc:
+                log.exception("%s: opening a shell raised", node.key)
+                GLib.idle_add(
+                    self._node_shell_failed, node.key, f"{type(exc).__name__}: {exc}"
+                )
+                return
+            GLib.idle_add(self._build_node_shell, node, session)
+
+        threading.Thread(
+            target=worker, daemon=True, name=f"node-shell-{node.name}"
+        ).start()
+
+    def _build_node_shell(self, node, session):
+        if self._closing:
+            return False
+        try:
+            console = SerialConsole(
+                session["url"],
+                session["headers"],
+                session["user"],
+                session["ticket"],
+                title=node.name,
+                on_status=lambda text, k=node.key: self._node_console_status(k, text),
+                # The same certificate the API session was approved against,
+                # for the same reason the guest consoles use it.
+                fingerprint=getattr(self.api_for(node), "fingerprint", None),
+                font_size=self.guest_prefs(node.key)["font_size"],
+                on_disconnect=lambda reason, k=node.key: (
+                    self._on_node_console_disconnected(k, reason)
+                ),
+                on_reconnect=lambda k=node.key: self.open_node_shell(k, replace=True),
+                on_font_size=lambda size, k=node.key: self._save_guest_pref(
+                    "font_size", size, key=k
+                ),
+            )
+        except Exception as exc:
+            log.exception("%s: building the shell raised", node.key)
+            self._node_shell_failed(node.key, f"{type(exc).__name__}: {exc}")
+            return False
+        self._install_node_console(node, console)
+        return False
+
+    def _install_node_console(self, node, console):
+        """Put a shell into a node's tab, replacing whatever was there."""
+        console.guest_key = None
+        console.node_key = node.key
+        tab = self.node_tab(node)
+        old = self.node_consoles.get(node.key)
+        replaced = tab.set_console(console)
+        self.node_consoles[node.key] = console
+
+        notebook = self.panes.notebook_of(tab)
+        if notebook is not None:
+            # The tab label is deliberately left alone: it wears the node's
+            # icon, and a shell opening in it does not make it a terminal.
+            notebook.set_current_page(notebook.page_num(tab))
+        # Asking for a shell is asking to look at it, unlike a guest console
+        # which can be built by a poll noticing the guest came back.
+        tab.show_view(VIEW_CONSOLE)
+        self._sync_tab_view(tab)
+
+        for stale in (old, replaced):
+            if stale is not None and stale is not console:
+                self._shutdown_console(stale)
+        self._sync_view_menu()
+        return tab
+
+    def _node_console_status(self, key, text):
+        def apply():
+            node = self.node_for(key)
+            self.set_status(f"{node.name if node else key}: {text}")
+            self._sync_view_menu()
+            return False
+
+        GLib.idle_add(apply)
+
+    def _node_shell_failed(self, key, message):
+        node = self.node_for(key)
+        name = node.name if node else key
+        self.set_status(f"{name}: shell failed - {message}")
+        console = self.node_consoles.get(key)
+        if console is not None and hasattr(console, "show_error_state"):
+            console.show_error_state(message)
+        else:
+            self._error_dialog(f"Shell failed: {name}", message)
+        return False
+
+    def _on_node_console_disconnected(self, key, reason):
+        node = self.node_for(key)
+        self.set_status(f"{node.name if node else key}: {reason}")
+
+    def close_node(self, key):
+        """Close a node's tab: its summary and its shell together."""
+        tab = self.node_tabs.pop(key, None)
+        console = self.node_consoles.pop(key, None)
+        if tab is None and console is None:
+            return
+        if self.fullscreen_control.active and console is self.current_console():
+            self.fullscreen_control.leave()
+        if tab is not None:
+            tab.take_console()
+            self.panes.remove_page(tab)
+        elif console is not None:
+            self.panes.remove_page(console)
+        if console is not None:
+            self._shutdown_console(console)
+        self._after_tab_closed()
+
+    def _refresh_open_node_summaries(self):
+        """Keep the node pages that are on screen up to date.
+
+        Only the visible ones, as for guests -- and here it matters more:
+        each refresh is a per-node status call, and a hidden page's graphs
+        would be fetching history nobody is looking at.
+        """
+        for key, tab in list(self.node_tabs.items()):
+            node = self.node_for(key)
+            if node is None:
+                continue
+            self._sync_node_tab_icon(tab, node)
+            tab.follow_node_state(node)
+            if tab.view != VIEW_SUMMARY or tab is not self.panes.current_page():
+                continue
+            tab.summary.show_node(node, self.api_for(node), self.guests_on(node))
+
     def _install_console(self, guest, console):
         """Put a console into the guest's tab, replacing any existing one.
 
@@ -3951,6 +4258,13 @@ class MainWindow(Gtk.Window):
             if widget.get_active():
                 self.open_console_selected()
             return
+        if tab.node_key and tab.console is None:
+            # A node's tab only grows a shell when one is asked for, and
+            # pressing the Console button is asking.
+            if widget.get_active():
+                self.open_node_shell(tab.node_key)
+            self._sync_tab_view(tab)
+            return
         tab.show_view(
             VIEW_CONSOLE if widget.get_active() else VIEW_SUMMARY, by_user=True
         )
@@ -4011,6 +4325,7 @@ class MainWindow(Gtk.Window):
         GLib.idle_add(apply)
 
     def _console_failed(self, guest, message):
+        self._reconnect_finished(guest.key)
         self.set_status(f"{guest.label}: console failed - {message}")
         console = self.consoles.get(guest.key)
         if console is not None and hasattr(console, "show_error_state"):
@@ -4134,6 +4449,10 @@ class MainWindow(Gtk.Window):
         self.set_status(f"{guest.label}: another client took over the console")
         return False
 
+    # How long an unfinished rebuild suppresses automatic ones. A backstop
+    # only: a rebuild that lands, fails or is refused clears itself.
+    RECONNECT_GUARD = 8
+
     def reconnect_console(self, key, automatic=False):
         """Rebuild a guest's console in place.
 
@@ -4146,13 +4465,31 @@ class MainWindow(Gtk.Window):
         if guest is None:
             return
         self._console_offline.pop(key, None)
-        if getattr(self, "_reconnecting", None) == key:
-            return  # a reconnect is already in flight
-        self._reconnecting = key
-        GLib.timeout_add_seconds(
-            8, lambda: (setattr(self, "_reconnecting", None), False)[1]
-        )
+
+        # Only automatic reconnects are held off while one is in flight.
+        #
+        # The guard is here for the poll: _sync_console_states asks for a
+        # reconnect every time it sees a guest that has come back, which is
+        # every few seconds until the new console reports itself, and
+        # without this each of those would build another console.
+        #
+        # A click is different, and used to be swallowed by the same test:
+        # Reopen Console set the status line, found a rebuild still marked
+        # in flight, and returned. Nothing else wrote to the status bar
+        # after that, so the window sat on "Reopening on SPICE..." having
+        # done nothing -- and since the mark was only ever cleared by a
+        # timer, every further click inside that window went the same way.
+        # What somebody asks for by hand always happens.
+        now = time.monotonic()
+        if automatic and self._reconnecting.get(key, 0.0) > now:
+            log.debug("%s: a console rebuild is already in flight", key)
+            return
+        self._reconnecting[key] = now + self.RECONNECT_GUARD
         self.open_console(key, replace=True, automatic=automatic)
+
+    def _reconnect_finished(self, key):
+        """This guest's rebuild is over, however it turned out."""
+        self._reconnecting.pop(key, None)
 
     # -- pop out -------------------------------------------------------
 
@@ -4238,7 +4575,12 @@ class MainWindow(Gtk.Window):
             window.update_sensitivity()
 
     def close_console_widget(self, page):
-        """Close a page, whether it is a guest's tab or a bare console."""
+        """Close a page, whether it is a guest's tab, a node's or a console."""
+        node_key = getattr(page, "node_key", None)
+        if node_key:
+            self.close_node(node_key)
+            return
+
         tab = tab_of(page)
         console = console_of(page)
         if tab is not None:
@@ -4279,6 +4621,9 @@ class MainWindow(Gtk.Window):
         self._force_vnc.discard(key)
         self._force_spice.discard(key)
         self._force_serial.discard(key)
+        # A rebuild that was in flight is over too, whatever became of it:
+        # the tab it would have landed in has gone.
+        self._reconnecting.pop(key, None)
         for name in ("clipboard", "audio"):
             self._session_switches.pop((key, name), None)
 
@@ -4329,12 +4674,20 @@ class MainWindow(Gtk.Window):
 
         tab = tab_of(page_widget)
         key = getattr(page_widget, "guest_key", None)
+        node_key = getattr(page_widget, "node_key", None)
         if tab is not None and tab.view == VIEW_SUMMARY:
             guest = self.sidebar.guests.get(key)
             if guest is not None:
                 tab.summary.show_guest(guest, self.api_for(guest))
-        if key:
-            self.sidebar.select_key(key)
+            node = self.node_for(node_key)
+            if node is not None:
+                # A node page that has been sitting behind another tab is
+                # showing figures from whenever it was last in front, so it
+                # is brought up to date on the way in rather than at the
+                # next poll.
+                tab.summary.show_node(node, self.api_for(node), self.guests_on(node))
+        if key or node_key:
+            self.sidebar.select_key(key or node_key)
         # Give the console the keyboard as soon as its tab is shown, unless
         # the tab is showing its summary, which has its own focus.
         if tab is not None:
@@ -4407,7 +4760,13 @@ class MainWindow(Gtk.Window):
 
             self.fullscreen_item.set_sensitive(console is not None)
             self.fullscreen_item_tb.set_sensitive(console is not None)
-            self.popout_item.set_sensitive(console is not None)
+            # A pop-out window is built around a guest -- its toolbar is that
+            # guest's power controls, and returning it rebuilds that guest's
+            # tab. A node's shell has none of those, so it stays where it is
+            # rather than offering a button that would quietly do nothing.
+            self.popout_item.set_sensitive(
+                console is not None and bool(getattr(console, "guest_key", None))
+            )
             # One capability, three controls: the menu entry, the submenu
             # and the toolbar button all need a console that can be typed at.
             # Two capabilities, not one. A serial console takes typing but
@@ -4931,6 +5290,8 @@ class MainWindow(Gtk.Window):
         self._dark_watcher.stop()
         for key in list(self.consoles):
             self.close_console(key)
+        for key in list(self.node_tabs):
+            self.close_node(key)
         self._save_layout()
 
     def _disconnect(self):

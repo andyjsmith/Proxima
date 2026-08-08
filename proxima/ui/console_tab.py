@@ -29,6 +29,9 @@ class ConsoleTabLabel(Gtk.EventBox):
             "video-display-symbolic", Gtk.IconSize.MENU
         )
         self._icon_name = "video-display-symbolic"
+        # Set by set_icon(), after which the protocol no longer chooses the
+        # picture. False here so the constructor's own set_protocol() lands.
+        self._fixed_icon = False
         box.pack_start(self.icon, False, False, 0)
 
         # No ellipsizing. An ellipsizing label reports a minimum width of
@@ -71,6 +74,21 @@ class ConsoleTabLabel(Gtk.EventBox):
     def set_title(self, title):
         self.label.set_text(self._fit(title))
 
+    def set_icon(self, pixbuf, tooltip=""):
+        """Wear a given picture instead of one of the protocol icons.
+
+        A node's tab uses this to show exactly what the tree shows for that
+        node, colour and all. It also switches set_protocol() off for this
+        label: what tab this is does not change because a shell was opened
+        in it, and a terminal icon in the tab strip would say it had.
+        """
+        self._fixed_icon = True
+        self._icon_name = None
+        if pixbuf is not None:
+            self.icon.set_from_pixbuf(pixbuf)
+        self.icon.set_tooltip_text(tooltip)
+        self.label.set_tooltip_text(tooltip)
+
     def set_protocol(self, protocol):
         """Say which kind of console the tab holds, once one exists.
 
@@ -80,7 +98,12 @@ class ConsoleTabLabel(Gtk.EventBox):
         console does get its own icon, because it is not a lesser version of
         the same thing: it is text rather than a picture, and which one a tab
         holds decides whether the mouse works in it at all.
+
+        Ignored entirely on a label that has been given an icon of its own;
+        see set_icon.
         """
+        if self._fixed_icon:
+            return
         if protocol == "serial":
             icon = "utilities-terminal-symbolic"
             tooltip = "Serial console: text only, with selectable output"
