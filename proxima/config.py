@@ -52,6 +52,11 @@ DEFAULTS = {
     "auto_resize": True,
     "scale_to_fit": False,
     "prefer_vnc": False,  # force VNC even when SPICE is available
+    # Give the guest a display on every monitor in full screen. Off by
+    # default: it asks the guest to create heads it did not have, which is
+    # a change to the guest's own desktop layout and not something to do to
+    # somebody who only pressed Full Screen.
+    "fullscreen_all_monitors": False,
     # Ask QEMU whether anyone is already watching before opening SPICE.
     # QEMU serves one SPICE client at a time, so connecting without asking
     # silently throws whoever is there off their session.

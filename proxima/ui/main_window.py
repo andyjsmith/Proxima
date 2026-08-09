@@ -32,7 +32,9 @@ from ..api.models import (
     audio_is_spice,
     spice_usb_ports,
     valid_guest_name,
+    vga_head_limit,
     vga_is_spice,
+    vga_memory_mib,
 )
 from ..console import (
     SERIAL_AVAILABLE,
@@ -313,6 +315,7 @@ class MainWindow(Gtk.Window):
             on_ctrl_alt_del=self._send_ctrl_alt_del,
             on_enter=lambda: self.panes.set_show_tabs(False),
             on_leave=lambda: self.panes.set_show_tabs(True),
+            all_monitors=self.all_monitors_enabled,
         )
 
         root.pack_start(self.paned, True, True, 0)
@@ -549,6 +552,18 @@ class MainWindow(Gtk.Window):
         self.fullscreen_item = self._menu_item(
             menu, "Full Screen", self._toggle_fullscreen, accel="<Control><Alt>Return"
         )
+
+        # Only ever sensitive for a guest that has a second head to show and
+        # a second monitor to show it on, which is why it says "monitors"
+        # rather than "displays": the ones it means are yours, not the
+        # guest's.
+        self.all_monitors_item = Gtk.CheckMenuItem(label="Use All Monitors")
+        self.all_monitors_item.set_active(
+            bool(self.config.get("fullscreen_all_monitors", True))
+        )
+        self.all_monitors_item.connect("toggled", self._on_all_monitors_toggled)
+        menu.append(self.all_monitors_item)
+
         menu.append(Gtk.SeparatorMenuItem())
 
         self.auto_resize_item = Gtk.CheckMenuItem(label="Auto-resize Guest")
@@ -599,6 +614,7 @@ class MainWindow(Gtk.Window):
 
         self._view_items = [
             self.fullscreen_item,
+            self.all_monitors_item,
             self.auto_resize_item,
             self.scaling_item,
             self.codec_item,
@@ -2760,6 +2776,14 @@ class MainWindow(Gtk.Window):
         if guest is None or not config:
             return False
         self.absorb_config(guest, config)
+        # The display adapter can be changed under a console that is already
+        # open -- it needs a stop and start to take, but the config says so
+        # straight away, and what it says decides whether extra monitors are
+        # on offer.
+        console = self.consoles.get(key)
+        if console is not None and hasattr(console, "set_head_limit"):
+            console.set_head_limit(vga_head_limit(guest.display))
+            console.video_memory = max(1, vga_memory_mib(guest.display))
         current = self.context_guest()
         if current is not None and current.key == key:
             self._update_audio_indicator()
@@ -3649,6 +3673,16 @@ class MainWindow(Gtk.Window):
                 ),
                 on_reconnect=lambda k=guest.key: self.reconnect_console(k),
                 on_usb=lambda k=guest.key: self._on_console_usb(k),
+                on_monitors=lambda count, k=guest.key: self._on_console_monitors(
+                    self.consoles.get(k), count
+                ),
+                # How many displays this guest's adapter can be asked for.
+                # QXL is four whether or not it is spelled 'qxl2'; VirtIO-GPU
+                # is one, and Proxmox offers no way to raise it.
+                head_limit=vga_head_limit(guest.display),
+                # QXL holds every head in this one allocation, so it is what
+                # decides whether a second full-screen display can exist.
+                video_memory=vga_memory_mib(guest.display),
                 on_usb_plugged=lambda device_key, label, k=guest.key: (
                     self._on_console_usb_plugged(k, device_key, label)
                 ),
@@ -4810,6 +4844,7 @@ class MainWindow(Gtk.Window):
 
             self.fullscreen_item.set_sensitive(console is not None)
             self.fullscreen_item_tb.set_sensitive(console is not None)
+            self._sync_all_monitors_item(console)
             # A pop-out window is built around a guest -- its toolbar is that
             # guest's power controls, and returning it rebuilds that guest's
             # tab. A node's shell has none of those, so it stays where it is
@@ -5045,6 +5080,64 @@ class MainWindow(Gtk.Window):
 
     def _toggle_fullscreen(self):
         self.fullscreen_control.toggle()
+
+    def all_monitors_enabled(self):
+        """Whether full screen should use every monitor when it can.
+
+        A preference, not a promise: a console with one head, or a desktop
+        with one monitor, goes full screen on the one screen regardless.
+        """
+        return bool(self.config.get("fullscreen_all_monitors", True))
+
+    def _on_all_monitors_toggled(self, item):
+        if self._updating_view_menu:
+            return
+        self.config["fullscreen_all_monitors"] = item.get_active()
+        self.config.save()
+
+    def _sync_all_monitors_item(self, console):
+        """Offer 'Use All Monitors' only where it would do something."""
+        item = self.all_monitors_item
+        # Called from outside _sync_view_menu too, and set_active emits
+        # 'toggled' exactly as a click does.
+        guarded, self._updating_view_menu = self._updating_view_menu, True
+        try:
+            item.set_active(self.all_monitors_enabled())
+        finally:
+            self._updating_view_menu = guarded
+        can = self.fullscreen_control.can_span_monitors(console)
+        item.set_sensitive(can)
+        if can:
+            item.set_tooltip_text(
+                "Full screen gives the guest a display on each of your monitors"
+            )
+        elif console is None:
+            item.set_tooltip_text("")
+        elif not getattr(console, "supports", {}).get("multi_monitor"):
+            item.set_tooltip_text(
+                "Only a SPICE console can put a guest's displays on separate monitors"
+            )
+        elif self.fullscreen_control.spare_monitors() < 1:
+            item.set_tooltip_text("There is only one monitor to show it on")
+        elif not getattr(console, "connected", False):
+            item.set_tooltip_text("The console is not connected")
+        else:
+            # The remaining case is an adapter that has one head and cannot
+            # be asked for another, which in Proxmox means VirtIO-GPU.
+            item.set_tooltip_text(
+                "This guest's display adapter has one display. SPICE (qxl), "
+                "under Hardware -> Display, offers up to four."
+            )
+
+    def _on_console_monitors(self, console, _count):
+        """A guest's second head can appear well after its console does."""
+
+        def update():
+            if console is self.current_console():
+                self._sync_all_monitors_item(console)
+            return False
+
+        GLib.idle_add(update)
 
     def _on_key_press(self, _widget, event):
         return self.fullscreen_control.handle_key_press(event)

@@ -50,6 +50,11 @@ class ConsoleWindow(Gtk.Window):
             chrome=lambda: [self.toolbar],
             on_ctrl_alt_del=self._send_ctrl_alt_del,
             title=guest.name,
+            # A popped-out console has no menu of its own to offer the
+            # choice in, and it is a client-wide preference rather than a
+            # property of this window, so it reads the one the main window
+            # keeps.
+            all_monitors=self.main.all_monitors_enabled,
         )
 
         theme_decorate(self)

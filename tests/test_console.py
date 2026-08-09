@@ -661,6 +661,9 @@ def test_hovering_an_inactive_window_does_not_take_the_keyboard():
     console._pointer_inside = False
     display = _FakeDisplay()
     console._display = display
+    # No extra heads: this console is not in fullscreen across monitors.
+    console._head_displays = {}
+    console._head_windows = {}
     console._toplevel = _FakeToplevel(active=False)
 
     console._apply_keyboard_grab()
@@ -695,6 +698,9 @@ def test_returning_to_the_window_regrabs_under_the_pointer():
     console._pointer_inside = True
     display = _FakeDisplay()
     console._display = display
+    # No extra heads: this console is not in fullscreen across monitors.
+    console._head_displays = {}
+    console._head_windows = {}
     console._toplevel = _FakeToplevel(active=True)
 
     console._on_window_active_changed()
@@ -705,6 +711,83 @@ def test_returning_to_the_window_regrabs_under_the_pointer():
     console._on_window_active_changed()
     assert not display.focused, "leaving the window handed the keyboard back over"
     assert display.properties["grab-keyboard"] is False
+
+
+# Where head N is, when the guest has not made head N yet. A client asks for
+# a head and the guest then creates it, so the address has to be worked out
+# before there is anything at it -- and QXL puts the extra heads in a
+# different place depending on how many devices the VM was given.
+
+
+def _head_console(heads, channel_ids):
+    from proxima.console.spice import SpiceConsole
+
+    console = SpiceConsole.__new__(SpiceConsole)
+    console._heads = heads
+    console._display_channels = dict.fromkeys(channel_ids, object())
+    return console
+
+
+def test_an_unmade_head_is_another_monitor_on_a_single_device():
+    """'vga: qxl' -- one QXL device that splits itself into four monitors."""
+    console = _head_console([(0, 0)], [0])
+    assert console.head_address(1) == (0, 1)
+    assert console.head_address(3) == (0, 3)
+
+
+def test_an_unmade_head_is_another_channel_when_the_vm_has_several_devices():
+    """'vga: qxl2' -- a device each, so a head each on its own channel."""
+    console = _head_console([(0, 0), (1, 0)], [0, 1])
+    assert console.head_address(1) == (1, 0), "head 2 is not the second channel"
+    assert console.head_address(2) == (2, 0)
+
+
+class _FakeHeadDisplay:
+    """A SpiceDisplay bound to one channel and monitor."""
+
+    def __init__(self, channel_id, monitor_id=0):
+        self._properties = {"channel-id": channel_id, "monitor-id": monitor_id}
+
+    def get_property(self, name):
+        return self._properties[name]
+
+
+def _channel_console(heads, channel_ids, shown_channel=0):
+    console = _head_console(heads, channel_ids)
+    console._display = _FakeHeadDisplay(shown_channel)
+    return console
+
+
+def test_the_tabs_own_head_is_not_assumed_to_be_head_zero():
+    """A two-device guest can announce channel 1 first, and the tab takes it.
+
+    The index of a head is its display id -- the number the guest's agent
+    uses for it -- so the list stays in channel order and the tab's head is
+    found in it rather than being put at the front. Renumbering around the
+    tab is how switching off "the second head" switched off the one on
+    screen, leaving the console black until it went full screen again.
+    """
+    console = _channel_console([(0, 0), (1, 0)], [0, 1], shown_channel=1)
+    assert console.primary_head_index() == 1, "the tab's head was not found"
+    # Which leaves display 0 as the one with a monitor to spare.
+    assert console.head_address(0) == (0, 0)
+
+
+def test_the_head_the_tab_is_showing_is_never_switched_off():
+    """The last line of defence, whatever the numbering says."""
+    console = _channel_console([(0, 0), (1, 0)], [0, 1], shown_channel=1)
+    console._main_channel = object()
+    console._head_sizes = {}
+    console._reasserts = {}
+    assert console.set_head_enabled(1, False) is False, (
+        "the console switched off the head it is showing"
+    )
+
+
+def test_a_head_that_has_connected_is_taken_from_the_channels_themselves():
+    console = _head_console([(0, 0), (0, 1), (2, 0)], [0, 2])
+    assert console.head_address(1) == (0, 1)
+    assert console.head_address(2) == (2, 0), "a connected head was guessed at instead"
 
 
 def test_emptying_a_split_pane_gives_the_window_back(window):

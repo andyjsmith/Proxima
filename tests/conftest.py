@@ -640,12 +640,17 @@ class FakeConsole(Gtk.Box):
         "ctrl_alt_del": True,
         "clipboard": True,
         "audio": True,
+        "multi_monitor": True,
     }
     agent_connected = True
 
-    def __init__(self, title="fake-guest"):
+    def __init__(self, title="fake-guest", heads=1):
         super().__init__()
         self.title = title
+        # How many heads the guest is pretending to offer, and the widgets
+        # handed out for the ones beyond the first.
+        self.heads = heads
+        self.head_displays = {}
         self.guest_key = "fake"
         self.auto_resize = True
         self.scaling = False
@@ -693,6 +698,25 @@ class FakeConsole(Gtk.Box):
 
     def telemetry(self):
         return {"rate": 2.5 * 1024 * 1024, "fps": 30.0, "size": "1920x1080"}
+
+    # -- monitors, as SpiceConsole offers them -------------------------
+
+    def monitor_count(self):
+        return self.heads
+
+    def available_heads(self):
+        return self.heads
+
+    def create_head_display(self, index):
+        if not 1 <= index < self.heads:
+            return None
+        holder = Gtk.Box()
+        holder.pack_start(Gtk.Label(label=f"head {index}"), True, True, 0)
+        self.head_displays[index] = holder
+        return holder
+
+    def release_head_display(self, index):
+        self.head_displays.pop(index, None)
 
     def grab_focus_display(self):
         pass

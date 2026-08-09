@@ -22,7 +22,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 
-from gi.repository import Gdk, GLib, Gtk
+from gi.repository import Gdk, GLib, GObject, Gtk
 
 from .decoders import gstreamer_report
 from .keys import CTRL_ALT_DEL
@@ -80,6 +80,21 @@ def session_disconnect(session):
         except Exception:
             return False
     return False
+
+
+def disconnect_signal(obj, handler):
+    """Drop a signal handler, without complaining if it is already gone.
+
+    A handler dies with the object it is on, so disconnecting one on a
+    destroyed window is both harmless and wrong: GLib prints "instance has
+    no handler with id" and carries on. Asking first keeps that out of the
+    log, where it reads like a real fault.
+    """
+    if obj is None or not handler:
+        return
+    with contextlib.suppress(Exception):
+        if GObject.signal_handler_is_connected(obj, handler):
+            obj.disconnect(handler)
 
 
 def _enum(namespace_attr, member, fallback):
@@ -213,6 +228,10 @@ class SpiceConsole(Gtk.Box):
         "clipboard": True,
         "audio": True,
         "usb": True,
+        # Whether a guest head can be given a monitor of its own. Capable in
+        # principle here; whether this guest actually has a second head is
+        # monitor_count()'s question, not this one's.
+        "multi_monitor": True,
     }
 
     def __init__(
@@ -230,6 +249,9 @@ class SpiceConsole(Gtk.Box):
         play_audio=True,
         on_usb=None,
         on_usb_plugged=None,
+        on_monitors=None,
+        head_limit=1,
+        video_memory=16,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
@@ -240,6 +262,7 @@ class SpiceConsole(Gtk.Box):
         self.on_reconnect = on_reconnect or (lambda: None)
         self.on_usb = on_usb or (lambda: None)
         self.on_usb_plugged = on_usb_plugged or (lambda key, label: None)
+        self.on_monitors = on_monitors or (lambda count: None)
         self.connected = False
         self.agent_connected = False
         self._channels = []
@@ -265,6 +288,25 @@ class SpiceConsole(Gtk.Box):
         self._holder = None
         self._display_channel = None
         self._main_channel = None
+        # Every display channel the guest offers, and the heads they add up
+        # to. The primary head keeps _display above; the rest only get a
+        # widget while something is showing them. See the monitors section.
+        self._display_channels = {}
+        self._heads = []
+        self._head_displays = {}
+        self._head_windows = {}
+        self._head_panels = {}
+        self._head_watchdogs = {}
+        self._head_sizes = {}  # head -> (width, height) of its window
+        self._reasserts = {}  # head -> how many times it has been asked for
+        self._primary_waiters = []  # callbacks due when the guest resizes
+        # How many heads this guest's display adapter can be asked for,
+        # which is a property of the adapter rather than of the session --
+        # see api.models.vga_head_limit. The memory is the other half of the
+        # same question: QXL holds every head in one allocation, so it is
+        # what decides whether a head that was asked for can exist.
+        self.head_limit = max(1, int(head_limit or 1))
+        self.video_memory = max(1, int(video_memory or 1))
         self._closed = False
         self.last_status = ""
         self.usb = None
@@ -528,12 +570,20 @@ class SpiceConsole(Gtk.Box):
 
         if isinstance(channel, SpiceGLib.DisplayChannel):
             channel_id = channel.get_property("channel-id")
-            self._display_channel = channel
+            self._display_channels[channel_id] = channel
+            # The first channel is the console's own display, and stays so:
+            # a second head arriving must not move the codec and compression
+            # controls off the picture the tab is showing.
+            if self._display_channel is None:
+                self._display_channel = channel
             self._status(f"display channel {channel_id} appeared")
             with contextlib.suppress(Exception):
                 connect_signal(
                     channel, "display-primary-create", self._on_primary_create
                 )
+            with contextlib.suppress(Exception):
+                connect_signal(channel, "notify::monitors", self._on_monitors_notify)
+            self._refresh_heads()
             GLib.idle_add(self._attach_display, channel_id)
 
         elif isinstance(channel, SpiceGLib.MainChannel):
@@ -550,6 +600,11 @@ class SpiceConsole(Gtk.Box):
         except (TypeError, ValueError):
             code = -1
         name = CHANNEL_EVENTS.get(code, f"event {code}")
+        if code < 6 and isinstance(channel, SpiceGLib.DisplayChannel):
+            # A head the guest has taken away is not one to offer a monitor to.
+            with contextlib.suppress(Exception):
+                self._display_channels.pop(channel.get_property("channel-id"), None)
+            self._refresh_heads()
         if code and code < 6:
             self._status(name)
             # 0 is a clean close, 1-5 are failures. Either way the channel
@@ -566,7 +621,759 @@ class SpiceConsole(Gtk.Box):
         """
         megabytes = (width * height * 4) / (1024 * 1024)
         self._status(f"guest framebuffer {width}x{height} ({megabytes:.1f} MiB)")
+        # This is the resize that anyone waiting for the guest to settle was
+        # waiting for -- and it is also the one that can lose a head, since
+        # the config spice-gtk sends for it is built from the displays it
+        # knows about, and a head asked for and not yet created is not one
+        # of them. The retry that follows is why full screen no longer has
+        # to be entered twice.
+        for waiter in list(self._primary_waiters):
+            GLib.idle_add(self._settle, waiter)
         return False
+
+    # -- monitors -------------------------------------------------------
+    #
+    # A head is asked for, not waited for. This is the part that is easy to
+    # get wrong, and getting it wrong reads as "this guest only has one
+    # display": the guest does not offer a second head until a client says
+    # it wants one, so counting what has turned up answers 1 for a guest
+    # that would happily give you four.
+    #
+    # What a client does instead is what virt-viewer's Displays menu does:
+    # tell the main channel that display N is enabled, send the monitor
+    # config, and let the guest's driver create the head. QXL carries up to
+    # four monitors, and it does not matter whether they arrive as four
+    # monitors on one display channel (plain 'vga: qxl', one device, the
+    # driver splitting it) or as one channel each ('vga: qxl2' and up, which
+    # is two QXL devices). Heads are therefore numbered flat, 0-3, exactly
+    # as spice_main_channel_update_display_enabled() numbers them, and the
+    # (channel, monitor) pair behind a number is worked out from whatever
+    # has actually connected.
+
+    def _on_monitors_notify(self, channel, _pspec):
+        self._log_monitors(channel)
+        self._refresh_heads()
+
+    @staticmethod
+    def _log_monitors(channel):
+        """Write down what the guest says its monitors are.
+
+        The one piece of evidence that says whether a head that was asked
+        for was created, ignored, or created at a size nobody can use.
+        """
+        try:
+            channel_id = channel.get_property("channel-id")
+        except Exception:
+            channel_id = "?"
+        try:
+            monitors = channel.get_property("monitors")
+        except Exception as exc:
+            log.info("channel %s: no monitors property (%s)", channel_id, exc)
+            return
+        described = []
+        for index, monitor in enumerate(monitors or []):
+            described.append(
+                {
+                    "id": getattr(monitor, "id", index),
+                    "x": getattr(monitor, "x", None),
+                    "y": getattr(monitor, "y", None),
+                    "w": getattr(monitor, "width", None),
+                    "h": getattr(monitor, "height", None),
+                }
+            )
+        log.info("channel %s monitors: %s", channel_id, described or "none")
+
+    @staticmethod
+    def _monitor_ids(channel):
+        """The heads one display channel is carrying.
+
+        The monitors-config only arrives once the guest sends one, and a
+        head the guest has switched off is listed at zero size. Neither is a
+        reason to believe the channel has no picture at all, so a channel
+        with nothing usable to say still counts as the one head it has.
+        """
+        try:
+            monitors = channel.get_property("monitors")
+        except Exception:
+            monitors = None
+
+        ids = []
+        for index, monitor in enumerate(monitors or []):
+            try:
+                if not (monitor.width and monitor.height):
+                    continue
+                ids.append(int(monitor.id))
+            except Exception:
+                ids.append(index)
+        return ids or [0]
+
+    def _refresh_heads(self):
+        # Channel order, always, and never the order the tab happens to
+        # like. A head's position in this list is its display id -- the
+        # number spice-gtk and the guest's agent both use to name it -- so
+        # the list has to be in the numbering they use, not ours.
+        #
+        # It is tempting to put the tab's own head first, and it is wrong:
+        # a guest with two QXL devices announces its channels in whatever
+        # order it likes, so the tab can perfectly well be showing channel
+        # 1. Reordering the list around that renumbers every head, and then
+        # switching off "the second head" on the way out switches off the
+        # one the tab is showing. See primary_head_index for the other half.
+        heads = []
+        for channel_id in sorted(self._display_channels):
+            for monitor_id in self._monitor_ids(self._display_channels[channel_id]):
+                heads.append((channel_id, monitor_id))
+        changed = heads != self._heads
+        self._heads = heads
+        if changed and len(heads) > 1:
+            self._status(f"guest is showing {len(heads)} monitors")
+        # Every time, not only when the list changes. A guest configured for
+        # two heads has both display channels from the moment it connects,
+        # so opening a window on the second one changes nothing here -- and
+        # a head confirmed only on a change is a head reported missing while
+        # it is on screen.
+        self._confirm_heads()
+        if changed:
+            self._notify_monitors()
+
+    def _notify_monitors(self):
+        """Say that the answer to 'how many monitors?' may have changed.
+
+        Connecting and disconnecting count as much as a head appearing: the
+        controls that offer to use the extra monitors are only meaningful
+        while there is a session to ask.
+        """
+        if not self._closed:
+            self.on_monitors(self.available_heads())
+
+    def monitor_count(self):
+        """How many heads the guest is showing now, 0 before it connects."""
+        return len(self._heads)
+
+    def available_heads(self):
+        """How many heads this console could show, 0 until it is connected.
+
+        Not how many the guest is showing: a client asks for heads and the
+        guest makes them, so this is the adapter's ceiling rather than a
+        count of what is already there. A guest whose driver will not make
+        the head leaves that window blank, which is what virt-viewer does
+        too, and is why a head is only asked for when somebody chooses to
+        use it.
+        """
+        if not self.connected or self._closed:
+            return 0
+        return max(self.head_limit, len(self._heads))
+
+    def set_head_limit(self, limit):
+        """Update the adapter's ceiling, e.g. after the config is re-read."""
+        limit = max(1, int(limit or 1))
+        if limit == self.head_limit:
+            return
+        self.head_limit = limit
+        self._notify_monitors()
+
+    def primary_head_index(self):
+        """Which head the tab itself is showing.
+
+        Not necessarily 0. The tab attaches to the first display channel to
+        turn up, and on a guest with two QXL devices that can be channel 1
+        -- in which case the tab's head is display 1 and the one going on
+        the second monitor is display 0. Everything that adds or removes a
+        head asks this first, because the one head that must never be
+        switched off is the one already on screen.
+        """
+        if self._display is None:
+            return 0
+        try:
+            address = (
+                self._display.get_property("channel-id"),
+                self._display_monitor_id(self._display),
+            )
+        except Exception:
+            return 0
+        for index, head in enumerate(self._heads):
+            if head == address:
+                return index
+        return 0
+
+    def head_address(self, index):
+        """(channel, monitor) for head `index`.
+
+        Straight out of the connected channels when they go that far. When
+        they do not -- the usual case for a head nobody has asked for yet --
+        the shape is guessed from what is connected: one display channel
+        means one device splitting itself into monitors, so the head is
+        another monitor on it; several means a device each, so the head is
+        another channel.
+        """
+        if index < len(self._heads):
+            return self._heads[index]
+        if len(self._display_channels) > 1:
+            return index, 0
+        base = min(self._display_channels) if self._display_channels else 0
+        return base, index
+
+    def _main_channel_call(self, names, *args):
+        """Call the first of `names` this spice-gtk build actually has.
+
+        The main channel's functions have been renamed across releases --
+        spice_main_set_display_enabled() became
+        spice_main_channel_update_display_enabled() with an extra argument --
+        and which spelling introspection exposes depends on the build.
+        """
+        if self._main_channel is None:
+            return False
+        for name in names:
+            func = getattr(self._main_channel, name, None)
+            if not callable(func):
+                continue
+            try:
+                func(*args)
+                return True
+            except TypeError:
+                continue  # a different arity of the same name
+            except Exception as exc:
+                log.info("%s failed: %s", name, exc)
+                return False
+        return False
+
+    # -- the arrangement -------------------------------------------------
+    #
+    # The whole arrangement is stated at once, every time any of it moves.
+    # Sending one head's worth of change on its own does not work, for two
+    # reasons that both showed up as a second monitor that never arrived:
+    #
+    #   * the guest is told about heads as a set, and spice-gtk builds that
+    #     set from the displays it currently knows. A config sent for the
+    #     first head while the second is enabled-but-not-yet-created drops
+    #     the second one -- which is what happens when going full screen
+    #     resizes the first head at the moment the second is asked for. So
+    #     the enable is re-stated whenever the first head resizes.
+    #
+    #   * where each head *goes* is the guest's business, not ours. It
+    #     arranges the heads it has been given, and it is good at it: given
+    #     two heads it puts the second one beside the first, at a negative
+    #     origin if that is what its desktop wants. A client that sends
+    #     positions as well is a second opinion arriving continuously --
+    #     every position it sends provokes a resize, and every resize
+    #     changes the numbers the next position is computed from. On a
+    #     two-device guest it is worse than useless: the agent matches
+    #     config entries to QXL devices in the guest's own enumeration
+    #     order, which need not be the order the display channels are in,
+    #     so a position meant for one monitor lands on the other and the
+    #     two sizes swap back and forth for as long as anyone is watching.
+    #
+    # So: say which heads exist, let the widgets report their own sizes
+    # through resize-guest, and leave the arrangement alone.
+
+    def _enable_head(self, index, enabled, update=False):
+        ok = self._main_channel_call(
+            ("update_display_enabled", "set_display_enabled"),
+            index,
+            bool(enabled),
+            update,
+        )
+        if not ok:
+            ok = self._main_channel_call(("set_display_enabled",), index, bool(enabled))
+        return ok
+
+    def _send_monitor_config(self):
+        """Nothing above reaches the guest until this goes out."""
+        return self._main_channel_call(("send_monitor_config",))
+
+    def set_head_enabled(self, index, enabled):
+        """Add or remove one head. The guest decides where it goes.
+
+        Never the tab's own head, whatever number that turns out to be:
+        switching it off leaves the console showing a monitor the guest no
+        longer has, which is a black rectangle that only comes back by
+        going full screen again.
+        """
+        if self._main_channel is None or index < 0:
+            return False
+        if index == self.primary_head_index():
+            log.info("refusing to switch off head %s: the tab is showing it", index)
+            return False
+        if not enabled:
+            self._head_sizes.pop(index, None)
+            self._cancel_head_watch(index)
+            self._reasserts.pop(index, None)
+        ok = self._enable_head(index, enabled)
+        sent = self._send_monitor_config()
+        self._status(
+            f"display {index} {'enabled' if enabled else 'disabled'}"
+            f"{'' if ok and sent else ' (spice-gtk refused)'}"
+        )
+        return ok and sent
+
+    # How long to wait for the guest to answer a resize before going ahead
+    # anyway. Long enough for a guest that is going to answer; short enough
+    # that a guest which is not leaves no impression of a stuck window.
+    PRIMARY_SETTLE_MS = 1500
+
+    def after_primary_settles(self, callback):
+        """Call back once the guest has answered the resize now in flight.
+
+        For asking for a head at a moment when the answer will survive.
+        spice-gtk describes the displays it knows about whenever the first
+        head changes size, and a head that has been asked for but not yet
+        created is not one it knows about -- so a head asked for while the
+        first one is still on its way to full screen is dropped by the very
+        next message, and only turns up if the whole thing is repeated. A
+        head asked for after the resize has landed is not dropped, because
+        by then it exists.
+
+        Always calls back exactly once: on the guest's answer if there is
+        one, and on a timer if there is not -- a guest with auto-resize off,
+        or one that simply will not resize, must not leave the caller
+        waiting for a resize that is never coming.
+        """
+        if self._closed:
+            callback()
+            return
+        waiter = {"done": False, "callback": callback}
+        self._primary_waiters.append(waiter)
+        GLib.timeout_add(self.PRIMARY_SETTLE_MS, self._settle, waiter)
+
+    def _settle(self, waiter):
+        if waiter["done"]:
+            return False
+        waiter["done"] = True
+        if waiter in self._primary_waiters:
+            self._primary_waiters.remove(waiter)
+        if not self._closed:
+            waiter["callback"]()
+        return False
+
+    def set_head_size(self, index, width, height):
+        """Note how big a head's window is. Recorded, not sent.
+
+        The widget sends its own size, and does it better -- it is told
+        first and knows the real allocation. This is only so that a head
+        that never appears can be described accurately when saying so.
+        """
+        if width > 0 and height > 0:
+            self._head_sizes[index] = (int(width), int(height))
+
+    # How many times a head is asked for again before the answer is taken
+    # to be no. Bounded because each retry is a real one -- see below --
+    # and a client that never stops asking is worse than a blank window.
+    MAX_RETRIES = 3
+
+    def retry_missing_heads(self):
+        """Ask again, properly, for any head that has not arrived.
+
+        Off, on, and a new widget: the same thing as leaving full screen
+        and going back into it, which is what people were doing by hand
+        when the first ask did not take. A bare re-enable is not enough and
+        it is worth saying why -- the size of a head is reported by its
+        widget, and only when the widget is allocated. A head dropped from
+        the guest's config and then merely re-enabled is a head with no
+        size, which the guest is entitled to ignore. Building the widget
+        again is what produces a fresh allocation, and with it a fresh
+        size.
+
+        A head that has arrived is left alone entirely.
+        """
+        if self._closed or self._main_channel is None:
+            return False
+        wanted = [
+            index
+            for index in sorted(self._head_displays)
+            if index >= len(self._heads)
+            and self._reasserts.get(index, 0) < self.MAX_RETRIES
+        ]
+        if not wanted:
+            return False
+        for index in wanted:
+            self._reasserts[index] = self._reasserts.get(index, 0) + 1
+            self._status(f"asking again for display {index}")
+            # Off and on with the config sent between: the guest is told the
+            # head has gone before being told it is back, which is what makes
+            # this a new request rather than a repeat of one it has already
+            # decided about.
+            self._enable_head(index, False)
+            self._send_monitor_config()
+            self._enable_head(index, True)
+            self._send_monitor_config()
+            self._swap_head_display(index, self.head_address(index))
+            self._watch_head(index)
+        return True
+
+    def _new_display(self, channel_id, monitor_id):
+        """A SpiceDisplay for one monitor of one channel, however it is built.
+
+        Which of these a build offers is not knowable in advance, and the
+        difference matters: showing monitor 1 of a single QXL device is the
+        plain 'vga: qxl' case, i.e. the usual one. Falling back to a
+        widget for the whole channel would show monitor 0 again -- the same
+        picture as the tab, on a second screen -- so every route to a real
+        monitor-id is tried before giving up, and the failures are logged
+        rather than swallowed.
+
+        Property construction is the reliable one: 'channel-id' and
+        'monitor-id' are construct properties of the widget, whatever the
+        introspected constructors happen to be called in this build.
+        """
+        attempts = [
+            (
+                "Display.new_with_monitor",
+                lambda: SpiceGtk.Display.new_with_monitor(
+                    self.session, channel_id, monitor_id
+                ),
+            ),
+            (
+                "display_new_with_monitor",
+                lambda: SpiceGtk.display_new_with_monitor(
+                    self.session, channel_id, monitor_id
+                ),
+            ),
+            (
+                "Display(session=, channel-id=, monitor-id=)",
+                lambda: SpiceGtk.Display(
+                    session=self.session,
+                    channel_id=channel_id,
+                    monitor_id=monitor_id,
+                ),
+            ),
+            (
+                "Display.new + monitor-id",
+                lambda: self._new_display_by_property(channel_id, monitor_id),
+            ),
+        ]
+        if not monitor_id:
+            # Only when monitor 0 is what was wanted anyway.
+            attempts.append(
+                ("Display.new", lambda: SpiceGtk.Display.new(self.session, channel_id))
+            )
+
+        for name, build in attempts:
+            try:
+                display = build()
+            except Exception as exc:
+                log.info("head %s.%s: %s failed: %s", channel_id, monitor_id, name, exc)
+                continue
+            if display is None:
+                log.info("head %s.%s: %s gave nothing", channel_id, monitor_id, name)
+                continue
+            got = self._display_monitor_id(display)
+            if got != monitor_id:
+                # A widget on the wrong monitor is a duplicate of the tab,
+                # not a second screen. Say so and keep looking.
+                log.info(
+                    "head %s.%s: %s built monitor %s instead",
+                    channel_id,
+                    monitor_id,
+                    name,
+                    got,
+                )
+                continue
+            log.info("head %s.%s: built by %s", channel_id, monitor_id, name)
+            return display
+        return None
+
+    def _new_display_by_property(self, channel_id, monitor_id):
+        display = SpiceGtk.Display.new(self.session, channel_id)
+        display.set_property("monitor-id", monitor_id)
+        return display
+
+    @staticmethod
+    def _display_monitor_id(display):
+        try:
+            return int(display.get_property("monitor-id"))
+        except Exception:
+            return 0
+
+    def create_head_display(self, index):
+        """A display widget for head `index`, packed and ready to be shown.
+
+        Nothing is reparented. The tab's own head keeps the widget it has
+        had since it connected, and every other head gets a widget of its
+        own that lives exactly as long as the window holding it -- moving a
+        live SpiceDisplay between toplevels is the thing this avoids, for
+        the same reason fullscreen.py does not reparent either.
+
+        Returns a holder to add to a container, or None when there is no
+        such head.
+        """
+        # The tab's own head already has a widget; asking for it again would
+        # put the same picture in two places. Which head that is has to be
+        # asked rather than assumed -- see primary_head_index.
+        if not AVAILABLE or self._closed:
+            return None
+        if not 0 <= index < self.available_heads():
+            return None
+        if index == self.primary_head_index():
+            return None
+        existing = self._head_displays.get(index)
+        if existing is not None:
+            holder = existing.get_parent()
+            if holder is not None:
+                return holder
+            # Its window went away without us being told. Start again.
+            self.release_head_display(index)
+
+        # Ask first. The widget below can be built for a head that does not
+        # exist yet -- spice-gtk binds it when the channel turns up -- but
+        # nothing will ever turn up unless the guest is told to make it.
+        self.set_head_enabled(index, True)
+
+        channel_id, monitor_id = self.head_address(index)
+        display = self._new_display(channel_id, monitor_id)
+        if display is None:
+            self._status(
+                f"display {index} (channel {channel_id}.{monitor_id}) could not be "
+                "built -- see the log"
+            )
+            return None
+        self._configure_head_display(display)
+
+        holder = DisplayHolder()
+        holder.add(display)
+        holder.set_hexpand(True)
+        holder.set_vexpand(True)
+
+        # A head the guest never makes is a grey rectangle and no more, which
+        # says nothing about why. The panel over it does, once it is clear
+        # the guest is not going to answer.
+        overlay = Gtk.Overlay()
+        overlay.add(holder)
+        panel = ConsoleStatusPanel()
+        overlay.add_overlay(panel)
+        panel.show_message(
+            "Adding this display...",
+            "Waiting for the guest to create it.",
+            icon=CONNECTING_ICON,
+            can_reconnect=False,
+            busy=True,
+        )
+
+        self._head_displays[index] = display
+        self._head_panels[index] = panel
+        self._status(f"display {index} on channel {channel_id}.{monitor_id}")
+        # Which starts the clock only if this head is not already there.
+        self._confirm_heads()
+        return overlay
+
+    def _configure_head_display(self, display):
+        """Everything an extra head's widget needs, wherever it came from.
+
+        resize-guest is on here whatever the tab's own setting is, and that
+        is deliberate. It is not only a convenience: it is the property that
+        makes spice-gtk drive the head itself -- sizing it and keeping it
+        enabled from the widget's allocation, on the same code path every
+        other SPICE client uses. With it off, the only thing asking for the
+        head is this class, and a head asked for once is easily lost. The
+        window is exactly one monitor, so there is nothing for the guest to
+        match but the monitor.
+        """
+        display.set_property("resize-guest", True)
+        display.set_property("scaling", self.scaling)
+        with contextlib.suppress(Exception):
+            display.set_grab_keys(
+                SpiceGtk.GrabSequence.new_from_string("Control_L+Alt_L")
+            )
+        display.set_size_request(-1, -1)
+        display.connect_after("draw", self._on_display_drawn)
+        display.add_events(
+            Gdk.EventMask.ENTER_NOTIFY_MASK | Gdk.EventMask.LEAVE_NOTIFY_MASK
+        )
+        display.connect("enter-notify-event", self._on_display_enter)
+        display.connect("leave-notify-event", self._on_display_leave)
+        display.connect("hierarchy-changed", self._on_head_hierarchy_changed)
+
+    # -- did the guest actually make it? --------------------------------
+
+    HEAD_WAIT_SECONDS = 5
+
+    def _watch_head(self, index):
+        """Give the guest a few seconds, then say what went wrong."""
+        self._cancel_head_watch(index)
+        self._head_watchdogs[index] = GLib.timeout_add_seconds(
+            self.HEAD_WAIT_SECONDS, self._head_overdue, index
+        )
+
+    def _cancel_head_watch(self, index):
+        source = self._head_watchdogs.pop(index, None)
+        if source is not None:
+            with contextlib.suppress(Exception):
+                GLib.source_remove(source)
+
+    def _head_overdue(self, index):
+        self._head_watchdogs.pop(index, None)
+        panel = self._head_panels.get(index)
+        if panel is None or self._closed:
+            return False
+        title, detail = self._head_refusal()
+        log.info("display %s never appeared: %s", index, detail)
+        panel.show_message(
+            title, detail, icon="dialog-warning-symbolic", can_reconnect=False
+        )
+        return False
+
+    def _head_refusal(self):
+        """Why a head that was asked for did not arrive.
+
+        Only what can be shown to be true. Video memory is a real cause and
+        the arithmetic is checkable -- QXL keeps every head in one
+        allocation at four bytes a pixel -- so it is named only when the
+        numbers actually say so, never as a guess. Same for the agent: it is
+        what applies the monitor config inside the guest, and whether it is
+        there is known rather than supposed.
+        """
+        needed = self._video_memory_needed()
+        if needed and needed > self.video_memory:
+            return (
+                "Not enough video memory",
+                f"These displays need about {needed} MiB and this guest has "
+                f"{self.video_memory} MiB. In Proxmox, set Hardware -> Display "
+                f"to qxl with memory {self._suggested_memory(needed)}, then stop "
+                "and start the VM.",
+            )
+        if not self.agent_connected:
+            return (
+                "The guest agent is not running",
+                "SPICE displays are added by the guest's own agent. Install or "
+                "start spice-vdagent (Linux) or the SPICE guest tools (Windows).",
+            )
+        return (
+            "The guest did not add this display",
+            "It was asked for and did not appear. The guest's display driver "
+            "decides this: check whether the guest itself can see a second "
+            "monitor in its own display settings. The log has the monitor "
+            "config that was sent.",
+        )
+
+    def _video_memory_needed(self):
+        """MiB for every head at once, or 0 when the sizes are not known."""
+        areas = []
+        if self._display_channel is not None:
+            with contextlib.suppress(Exception):
+                areas.append(
+                    int(self._display_channel.get_property("width"))
+                    * int(self._display_channel.get_property("height"))
+                )
+        areas.extend(width * height for width, height in self._head_sizes.values())
+        if not areas:
+            return 0
+        return round(sum(areas) * 4 / (1024 * 1024))
+
+    @staticmethod
+    def _suggested_memory(needed):
+        """The next size up that Proxmox offers, given what is needed."""
+        for size in (32, 64, 128, 256, 512):
+            if size >= needed:
+                return size
+        return 512
+
+    def _confirm_heads(self):
+        """Match the open head windows against what the guest is showing.
+
+        Both ways round: a head that is there stops being waited for, and a
+        head that is not there starts being waited for. The second half is
+        what starts the clock at all -- a window can be opened on a head
+        that already exists, and then there is nothing to wait for.
+        """
+        for index in list(self._head_displays):
+            if index >= len(self._heads):
+                if index not in self._head_watchdogs:
+                    self._watch_head(index)
+                continue
+            self._cancel_head_watch(index)
+            self._rebind_head(index)
+            panel = self._head_panels.get(index)
+            if panel is not None:
+                panel.hide_message()
+
+    def _rebind_head(self, index):
+        """Move a head's widget onto the address the guest actually used.
+
+        Where a head will appear has to be guessed before it exists -- a
+        second monitor on the one display channel, or a channel of its own --
+        and the guess can be wrong. This is what makes a wrong guess cost a
+        redraw rather than an evening: once the head is really there, its
+        address is known, and the widget is rebuilt on it.
+        """
+        display = self._head_displays.get(index)
+        if display is None:
+            return
+        wanted = self._heads[index]
+        current = (
+            display.get_property("channel-id"),
+            self._display_monitor_id(display),
+        )
+        if current == wanted:
+            return
+        log.info("display %s: rebinding from %s to %s", index, current, wanted)
+        self._swap_head_display(index, wanted)
+
+    def _swap_head_display(self, index, address):
+        """Put a new widget for `address` in the window head `index` is in.
+
+        The window stays; only the picture inside it is rebuilt. That is
+        what lets a head be asked for again without anything flashing on
+        screen, and what lets a wrong guess about where a head would appear
+        cost a redraw instead of the whole arrangement.
+        """
+        display = self._head_displays.get(index)
+        if display is None:
+            return False
+        holder = display.get_parent()
+        if holder is None:
+            return False
+        replacement = self._new_display(*address)
+        if replacement is None:
+            return False
+        holder.remove(display)
+        with contextlib.suppress(Exception):
+            display.destroy()
+        self._configure_head_display(replacement)
+        holder.add(replacement)
+        holder.show_all()
+        self._head_displays[index] = replacement
+        self._apply_keyboard_grab()
+        return True
+
+    def release_head_display(self, index):
+        """Give the head back: the widget goes, and so does the head itself."""
+        self._cancel_head_watch(index)
+        self._head_panels.pop(index, None)
+        self._head_sizes.pop(index, None)
+        self._reasserts.pop(index, None)
+        display = self._head_displays.pop(index, None)
+        if display is None:
+            return
+        with contextlib.suppress(Exception):
+            display.destroy()
+        self._forget_head_windows()
+        # Told, not merely dropped. A guest left with a head nobody is
+        # watching keeps it in its desktop layout, and windows go and live
+        # on it.
+        if not self._closed:
+            self.set_head_enabled(index, False)
+
+    def release_head_displays(self):
+        for index in list(self._head_displays):
+            self.release_head_display(index)
+
+    def give_back_heads(self):
+        """Hand every extra head back to the guest, widgets and all.
+
+        Every head this client ever asked for, not only the ones with a
+        widget open: the two can differ if a window went away without the
+        head being disabled, and a head nobody gives back is one the guest
+        keeps.
+        """
+        self.release_head_displays()
+        for index in sorted(self._head_sizes, reverse=True):
+            self.set_head_enabled(index, False)
+
+    def _extra_displays(self):
+        return [d for d in self._head_displays.values() if d is not None]
+
+    def _all_displays(self):
+        displays = [self._display] if self._display is not None else []
+        return displays + self._extra_displays()
 
     def _on_agent_notify(self, channel, _pspec):
         try:
@@ -675,6 +1482,9 @@ class SpiceConsole(Gtk.Box):
             display.grab_focus()
         self.status_panel.hide_message()
         self._status("connected")
+        # Only now can a head be asked for, so only now is offering to use
+        # the other monitors worth anything.
+        self._notify_monitors()
         return False
 
     # -- keyboard grab --------------------------------------------------
@@ -691,7 +1501,37 @@ class SpiceConsole(Gtk.Box):
     # are typing into your browser.
 
     def _window_active(self):
-        return self._toplevel is not None and self._toplevel.is_active()
+        """Whether any window showing this console has the focus.
+
+        Any, not just the tab's: in fullscreen across several monitors each
+        extra head is a toplevel of its own, and clicking into one of those
+        must not read as "the user has gone elsewhere" and take the guest's
+        keyboard away.
+        """
+        return any(w.is_active() for w in self._console_windows())
+
+    def _console_windows(self):
+        windows = [self._toplevel] if self._toplevel is not None else []
+        for window in self._head_windows:
+            if window not in windows:
+                windows.append(window)
+        return windows
+
+    def _on_head_hierarchy_changed(self, display, _old_toplevel):
+        """Follow the window an extra head has been put into."""
+        window = display.get_toplevel()
+        if not isinstance(window, Gtk.Window) or window in self._head_windows:
+            return
+        self._head_windows[window] = window.connect(
+            "notify::is-active", self._on_window_active_changed
+        )
+        self._apply_keyboard_grab()
+
+    def _forget_head_windows(self):
+        """Drop the windows no head is in any more."""
+        live = {d.get_toplevel() for d in self._extra_displays() if d.get_toplevel()}
+        for window in [w for w in self._head_windows if w not in live]:
+            disconnect_signal(window, self._head_windows.pop(window))
 
     def _on_hierarchy_changed(self, _widget, _old_toplevel):
         """Follow the window this console is in, tab or pop-out."""
@@ -700,9 +1540,7 @@ class SpiceConsole(Gtk.Box):
             window = None
         if window is self._toplevel:
             return
-        if self._toplevel is not None and self._toplevel_handler is not None:
-            with contextlib.suppress(Exception):
-                self._toplevel.disconnect(self._toplevel_handler)
+        disconnect_signal(self._toplevel, self._toplevel_handler)
         self._toplevel = window
         self._toplevel_handler = None
         if window is not None:
@@ -730,8 +1568,9 @@ class SpiceConsole(Gtk.Box):
         if self._display is None:
             return
         active = self._window_active()
-        with contextlib.suppress(Exception):
-            self._display.set_property("grab-keyboard", active)
+        for display in self._all_displays():
+            with contextlib.suppress(Exception):
+                display.set_property("grab-keyboard", active)
         if not active:
             self._ungrab_keyboard()
 
@@ -773,14 +1612,13 @@ class SpiceConsole(Gtk.Box):
             return False
 
     def _ungrab_keyboard(self):
-        if self._display is None:
-            return
-        func = getattr(self._display, "keyboard_ungrab", None)
-        if callable(func):
-            try:
-                func()
-            except Exception as exc:
-                log.warning("keyboard_ungrab failed: %s", exc)
+        for display in self._all_displays():
+            func = getattr(display, "keyboard_ungrab", None)
+            if callable(func):
+                try:
+                    func()
+                except Exception as exc:
+                    log.warning("keyboard_ungrab failed: %s", exc)
 
     def _on_display_drawn(self, widget, context):
         if not self.connected or self.pending:
@@ -790,15 +1628,19 @@ class SpiceConsole(Gtk.Box):
         return False
 
     def set_auto_resize(self, enabled):
-        """spice-gtk's own resize-guest, which is what virt-manager ships."""
+        """spice-gtk's own resize-guest, which is what virt-manager ships.
+
+        The tab's own head only. An extra head fills a whole monitor and
+        keeps resize-guest on regardless -- see _configure_head_display.
+        """
         self.auto_resize = enabled
         if self._display is not None:
             self._display.set_property("resize-guest", enabled)
 
     def set_scaling(self, enabled):
         self.scaling = enabled
-        if self._display is not None:
-            self._display.set_property("scaling", enabled)
+        for display in self._all_displays():
+            display.set_property("scaling", enabled)
 
     # -- actions -------------------------------------------------------
 
@@ -828,15 +1670,14 @@ class SpiceConsole(Gtk.Box):
 
     def release_input(self):
         """Hand the pointer and keyboard back to the desktop."""
-        if self._display is None:
-            return
-        for name in ("mouse_ungrab", "keyboard_ungrab"):
-            func = getattr(self._display, name, None)
-            if callable(func):
-                try:
-                    func()
-                except Exception as exc:
-                    log.warning("%s failed: %s", name, exc)
+        for display in self._all_displays():
+            for name in ("mouse_ungrab", "keyboard_ungrab"):
+                func = getattr(display, name, None)
+                if callable(func):
+                    try:
+                        func()
+                    except Exception as exc:
+                        log.warning("%s failed: %s", name, exc)
 
     # -- lifecycle -----------------------------------------------------
 
@@ -896,6 +1737,7 @@ class SpiceConsole(Gtk.Box):
         if self._closed or getattr(self, "status_panel", None) is None:
             return
         self.connected = False
+        self._notify_monitors()
         with contextlib.suppress(Exception):
             self.release_input()
         titles = {
@@ -931,6 +1773,7 @@ class SpiceConsole(Gtk.Box):
         if self._closed or getattr(self, "status_panel", None) is None:
             return
         was_connected, self.connected = self.connected, False
+        self._notify_monitors()
         self.status_panel.show_message("Connection closed", reason)
         if self._display is not None:
             self._display.queue_draw()
@@ -938,11 +1781,18 @@ class SpiceConsole(Gtk.Box):
             self.on_disconnect(reason)
 
     def shutdown(self):
+        # Heads first, and before _closed, which is the whole point of the
+        # order. A head exists because this client asked for it, and the
+        # guest keeps it until told otherwise -- so a guest left holding one
+        # has a monitor in its desktop that nothing is attached to, and a
+        # desktop that remembers such a layout can come back to it on the
+        # next boot with its session on a screen that is not there. Giving
+        # them back needs a live channel, so it has to happen while there
+        # still is one.
+        self.give_back_heads()
         self._closed = True
-        if self._toplevel is not None and self._toplevel_handler is not None:
-            with contextlib.suppress(Exception):
-                self._toplevel.disconnect(self._toplevel_handler)
-            self._toplevel_handler = None
+        disconnect_signal(self._toplevel, self._toplevel_handler)
+        self._toplevel_handler = None
         if getattr(self, "usb", None) is not None:
             # Before the session goes: a redirected device is only handed
             # back to the host while there is still a channel to say so on.

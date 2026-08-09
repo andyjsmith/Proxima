@@ -6,6 +6,7 @@ from proxima.api.models import (
     parse_spice_clients,
     spice_usb_ports,
     valid_guest_name,
+    vga_head_limit,
     vga_is_spice,
 )
 
@@ -36,6 +37,31 @@ VGA_CASES = [
 )
 def test_vga_is_spice(value, expected):
     assert vga_is_spice(value) is expected
+
+
+# How many displays a client may ask an adapter for. Plain 'qxl' is already
+# four: the qxl2/3/4 spellings add QXL devices, not the ability to have a
+# second monitor at all.
+HEAD_CASES = [
+    ("qxl", 4, "QXL"),
+    ("qxl2", 4, "QXL with two devices"),
+    ("qxl,memory=64", 4, "QXL with options"),
+    (" QXL ", 4, "case and whitespace tolerated"),
+    ("virtio", 1, "VirtIO-GPU is one head"),
+    ("virtio-gl", 1, "VirGL is one head"),
+    ("std", 1, "std"),
+    ("", 1, "unset"),
+    (None, 1, "missing"),
+]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(value, expected) for value, expected, _ in HEAD_CASES],
+    ids=[note for _, _, note in HEAD_CASES],
+)
+def test_vga_head_limit(value, expected):
+    assert vga_head_limit(value) == expected
 
 
 # Which 'usbN' lines are redirection ports. A passthrough entry shares the

@@ -145,6 +145,7 @@ class SerialConsole(Gtk.Box):
         "clipboard": False,
         "audio": False,
         "usb": False,
+        "multi_monitor": False,
     }
 
     def __init__(

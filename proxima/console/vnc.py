@@ -65,6 +65,10 @@ class VncConsole(Gtk.Box):
         "clipboard": False,
         "audio": False,
         "usb": False,
+        # RFB has one framebuffer per connection. A guest with two heads
+        # shows them side by side inside that one picture, so there is
+        # nothing here to spread across two monitors.
+        "multi_monitor": False,
     }
 
     def __init__(

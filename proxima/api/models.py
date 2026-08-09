@@ -1,5 +1,6 @@
 """Plain data holders for what /cluster/resources and /nodes return."""
 
+import contextlib
 import re
 from dataclasses import dataclass, field
 
@@ -701,3 +702,47 @@ def vga_is_spice(vga_value):
     if any(kind.startswith(prefix) for prefix in NON_SPICE_VGA_PREFIXES):
         return False
     return None
+
+
+# QXL's own ceiling, and what SPICE clients offer for a QXL guest.
+QXL_MAX_HEADS = 4
+
+# What Proxmox gives a QXL display when the config does not say. Small
+# enough that two full-screen monitors do not fit in it, which is the usual
+# reason a second display stays blank.
+DEFAULT_VGA_MEMORY_MIB = 16
+
+
+def vga_memory_mib(vga_value):
+    """The 'memory=' on a vga line in MiB, or the Proxmox default.
+
+    QXL keeps every head in this one allocation, so it is the ceiling on
+    how much screen a guest can show at once: four bytes a pixel, across
+    all displays together.
+    """
+    if vga_value:
+        match = re.search(r"\bmemory=(\d+)", str(vga_value))
+        if match:
+            with contextlib.suppress(ValueError):
+                return int(match.group(1))
+    return DEFAULT_VGA_MEMORY_MIB
+
+
+def vga_head_limit(vga_value):
+    """How many displays a client may ask this adapter for. At least 1.
+
+    QXL carries up to four monitors and a client asks for them one at a
+    time, so 'vga: qxl' is already a four-head adapter -- the qxl2/qxl3/qxl4
+    spellings add QXL *devices*, which is a different thing and not needed
+    to get a second monitor.
+
+    VirtIO-GPU is one head as Proxmox configures it: QEMU's virtio-gpu
+    defaults to max_outputs=1 and there is no Proxmox setting for it, so
+    asking for a second head there is asking for nothing.
+    """
+    if not vga_value:
+        return 1
+    kind = str(vga_value).split(",")[0].strip().lower()
+    if kind.startswith("qxl"):
+        return QXL_MAX_HEADS
+    return 1

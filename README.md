@@ -154,6 +154,77 @@ wedged is exactly when a second opinion is worth having. The emulator is
 ours (`proxima/console/vt.py`): VTE is the obvious answer on Linux and does
 not exist on Windows, since MSYS2 ships no `vte3` for any mingw target.
 
+## Full screen, on more than one monitor
+
+**Ctrl+Alt+Enter** puts the console in front full screen, with a floating
+bar at the top edge for the way back out.
+
+**View -> Use All Monitors**, off by default, spreads the guest over every
+monitor instead: the tab's window takes the monitor it is already on, and
+each further display gets a bare window on the next monitor along, ordered
+by where the monitors actually sit rather than by how the desktop numbers
+them. Leaving full screen closes them again.
+
+A head is *asked for*, not waited for, which is the part that is easy to
+get wrong. A guest does not offer a second display until a client says it
+wants one, so counting the SPICE display channels that have turned up
+answers "one" for a guest that would happily give you four. Proxima says
+what virt-viewer's Displays menu says -- display N is enabled -- and the
+guest's driver makes the head. Giving the head back on the way out disables
+it again, so the guest is not left with a monitor nobody is watching and
+windows living on it. That also matters more than it sounds: a desktop that
+is left with a monitor it cannot see can save that layout and come back to
+it after a reboot, with the session on a screen that is not there.
+
+**And it is asked for twice.** Going full screen resizes the first head,
+and the message describing that resize does not mention a head that has
+been asked for and not yet created -- so on some guests the first request
+is dropped, which is what "it works if I go full screen twice" was. Asking
+*only* after the resize is not the answer either: other guests make the
+head on the first ask and lose it when the ask is delayed. So every window
+opens at once, showing a message where the picture will be, and any head
+the guest has not produced by the time the resize lands is asked for again
+-- off, on, and a new widget, which is what going full screen twice did by
+hand. Three attempts, then the window says what it knows instead.
+
+The retry rebuilds the widget rather than just re-enabling the head,
+because a head's size is reported by its widget and only when the widget is
+allocated: a head that was dropped and merely re-enabled has no size, and
+the guest is entitled to ignore it.
+
+**Where the heads go is the guest's business.** It arranges the displays it
+has been given, and it is good at it. A client that sends positions as well
+argues with it continuously: every position provokes a resize and every
+resize changes the numbers the next position would be computed from. On a
+guest with two QXL devices it is worse than useless, because the agent
+matches monitor-config entries to devices in the guest's own enumeration
+order, which need not match the display channels -- so a position meant for
+one monitor lands on the other, and the two sizes swap back and forth
+forever. Proxima sends no positions and no sizes. Each head's widget
+reports its own size through `resize-guest`, which is exactly one monitor,
+and the guest lays them out.
+
+**`vga: qxl` is already enough.** QXL carries up to four monitors on one
+device; `qxl2`/`qxl3`/`qxl4` add QXL *devices*, which is a different thing
+and is not needed for a second monitor. Either way it is up to four, and
+the difference is only whether the extra heads arrive as monitors on one
+display channel or as a channel each -- Proxima works out which from what
+has connected.
+
+The entry is disabled where it would do nothing, and the tooltip says which
+reason applies: a VNC console (one framebuffer with the guest's heads side
+by side inside it, so there is nothing to spread), a desktop with one
+monitor, a console that is not connected, or a single-head adapter. In
+Proxmox that last one means VirtIO-GPU: QEMU's `virtio-gpu` defaults to one
+output and Proxmox exposes no setting to raise it, so SPICE (`qxl`) is the
+adapter to pick for multiple monitors.
+
+Nothing is reparented on either path. A `SpiceDisplay` moved between
+toplevels has its `GdkWindow` destroyed and rebuilt underneath a live
+connection, so the first head keeps the widget it has had since it
+connected and the extra heads get widgets built for the occasion and thrown
+away afterwards.
+
 ## Sending keys the host swallows
 
 Ctrl+Alt+Del is a toolbar button; its arrow, and **VM -> Send Key**, carry
