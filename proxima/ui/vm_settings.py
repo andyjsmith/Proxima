@@ -32,10 +32,10 @@ RESPONSE_APPLY = 1
 # Display adapters worth offering, and what Proxmox calls them. The first
 # entry is the empty value: Proxmox treats an absent 'vga' as std.
 VGA_CHOICES = [
-    ("", "Default  -  Standard VGA, no SPICE"),
+    ("", "Default  -  Standard VGA"),
     ("qxl", "SPICE (QXL)"),
-    ("virtio", "VirtIO-GPU  -  SPICE"),
-    ("virtio-gl", "VirGL (VirtIO-GPU, 3D)  -  SPICE"),
+    ("virtio", "VirtIO-GPU"),
+    ("virtio-gl", "VirGL (VirtIO-GPU, 3D)"),
     ("std", "Standard VGA"),
     ("vmware", "VMware compatible"),
     ("cirrus", "Cirrus  -  legacy guests only"),

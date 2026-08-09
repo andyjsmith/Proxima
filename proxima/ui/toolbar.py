@@ -27,7 +27,7 @@ SNAPSHOT_BUTTONS = (
     (
         "revert",
         "Revert",
-        "document-revert-symbolic",
+        "object-rotate-left-symbolic",
         "Roll back to the most recent snapshot",
     ),
 )
@@ -44,10 +44,7 @@ def tool_button(label, icon, tooltip, important=False, sensitive=False):
 
 
 SEND_KEY_ICON = "input-keyboard-symbolic"
-SEND_KEY_TOOLTIP = (
-    "Send Ctrl+Alt+Del to the guest. The arrow has the other combinations "
-    "this computer would otherwise swallow."
-)
+SEND_KEY_TOOLTIP = "Send Ctrl+Alt+Del to the guest"
 
 
 def send_key_menu(on_send):

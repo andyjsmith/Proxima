@@ -679,7 +679,7 @@ class MainWindow(Gtk.Window):
         self.console_tool_item.set_icon_name("video-display-symbolic")
         self.console_tool_item.set_is_important(True)
         self.console_tool_item.set_tooltip_text(
-            "Show this guest's console, or its summary when up"
+            "Switch between console and summary view"
         )
         self.console_tool_item.set_sensitive(False)
         self.console_tool_item.connect("toggled", self._on_console_toggled)
@@ -703,7 +703,7 @@ class MainWindow(Gtk.Window):
         self.popout_item = Gtk.ToolButton()
         self.popout_item.set_label("Pop Out")
         self.popout_item.set_icon_name("window-new-symbolic")
-        self.popout_item.set_tooltip_text("Move this console into its own window")
+        self.popout_item.set_tooltip_text("Open this console in its own window")
         self.popout_item.set_sensitive(False)
         self.popout_item.connect("clicked", lambda *_: self.popout_console())
         bar.insert(self.popout_item, -1)

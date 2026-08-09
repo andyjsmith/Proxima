@@ -71,7 +71,7 @@ POWER_ACTIONS = [
         "suspend",
         "Suspend",
         "media-playback-pause-symbolic",
-        "Pause, keep memory",
+        "Pause",
         "Pause {name}? The guest stops running until it is resumed.",
         ("running", "io-error"),
         ("qemu", "lxc"),
