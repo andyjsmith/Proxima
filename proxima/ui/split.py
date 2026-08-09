@@ -95,9 +95,6 @@ class SplitView(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.notebooks = []
-        # Held for as long as the panes are: a gesture is only live while
-        # something has a reference to it.
-        self._click_gestures = []
         for _pane in range(MAX_PANES):
             notebook = Gtk.Notebook()
             notebook.set_scrollable(True)
@@ -106,7 +103,6 @@ class SplitView(Gtk.Box):
             notebook.connect("page-added", self._on_pages_changed)
             notebook.connect("page-removed", self._on_pages_changed)
             notebook.set_no_show_all(True)
-            self._watch_clicks(notebook)
             self.notebooks.append(notebook)
 
         self.left = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
@@ -133,6 +129,7 @@ class SplitView(Gtk.Box):
         self.notebooks[0].show()
         self.active = self.notebooks[0]
         self._suppress = False
+        self._watch_clicks()
 
     # -- structure -----------------------------------------------------
 
@@ -205,27 +202,50 @@ class SplitView(Gtk.Box):
         self.emit("pane-activated")
         return True
 
-    def _watch_clicks(self, notebook):
+    def _watch_clicks(self):
         """Make a click anywhere in a pane the way to put it in charge.
 
         Clicking is deliberate and hovering is not, which is the whole
-        reason this is a gesture and not the window's focus. A SPICE
-        console takes the focus when the pointer merely crosses it -- that
-        is how the guest gets the keyboard -- so following the focus meant
-        the toolbar changed guest under the pointer on the way to a button.
+        reason this is a gesture and not the window's focus. A SPICE console
+        takes the focus when the pointer merely crosses it -- that is how
+        the guest gets the keyboard -- so following the focus meant the
+        toolbar changed guest under the pointer on the way to a button.
 
-        In the capture phase, because the console does want the click
-        itself: the gesture sees it on the way down, before the widget it
-        lands on, and only takes note of it.
+        One gesture for the whole view, and the pane worked out from where
+        the press landed. A gesture per notebook only sees presses GTK
+        routes to a widget inside that notebook, and much of a summary page
+        is labels and blank space with no window of their own to be routed
+        to -- so clicking the background of a summary did nothing, while
+        clicking a button in it worked.
+
+        In the capture phase, because whatever was clicked still wants the
+        click: this sees it on the way down and only takes note of it.
         """
-        gesture = Gtk.GestureMultiPress.new(notebook)
-        gesture.set_button(0)  # any button, including the middle and right
-        gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        gesture.connect("pressed", self._on_pane_pressed, notebook)
-        self._click_gestures.append(gesture)
+        self._click_gesture = Gtk.GestureMultiPress.new(self)
+        self._click_gesture.set_button(0)  # any button, middle and right too
+        self._click_gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        self._click_gesture.connect("pressed", self._on_pressed)
 
-    def _on_pane_pressed(self, _gesture, _presses, _x, _y, notebook):
-        self.set_active(notebook)
+    def _on_pressed(self, _gesture, _presses, x, y):
+        notebook = self.pane_at(x, y)
+        if notebook is not None:
+            self.set_active(notebook)
+
+    def pane_at(self, x, y):
+        """Which visible pane covers a point, in this view's coordinates."""
+        for notebook in self.visible_notebooks():
+            origin = notebook.translate_coordinates(self, 0, 0)
+            if origin is None:
+                continue
+            left, top = origin
+            allocation = notebook.get_allocation()
+            inside = (
+                left <= x < left + allocation.width
+                and top <= y < top + allocation.height
+            )
+            if inside:
+                return notebook
+        return None
 
     def mark_active(self):
         """Say on the tabs themselves which console the window is acting on.

@@ -693,6 +693,31 @@ def test_the_active_pane_is_marked_on_its_tab(window):
             "the mark did not follow the pane that was clicked into"
         )
 
+        # Anywhere in a pane counts, not only the widgets that take clicks.
+        # Much of a summary page is labels and blank space with no window of
+        # their own, so a gesture per notebook saw a click on a button in it
+        # and nothing at all on the background around that button.
+        window.panes.set_active(window.panes.primary)
+        pump(0.3)
+        other = next(
+            n for n in window.panes.visible_notebooks() if n is not window.panes.primary
+        )
+        origin = other.translate_coordinates(window.panes, 0, 0)
+        assert origin is not None, "the second pane has no place on screen"
+        allocation = other.get_allocation()
+        middle = (
+            origin[0] + allocation.width // 2,
+            origin[1] + allocation.height // 2,
+        )
+        assert window.panes.pane_at(*middle) is other, (
+            "the middle of the second pane does not belong to it"
+        )
+        window.panes._on_pressed(None, 1, *middle)
+        pump(0.3)
+        assert window.panes.active is other, (
+            "pressing in the middle of a pane did not put it in charge"
+        )
+
         # But the focus alone does not. A SPICE console grabs the keyboard
         # when the pointer crosses it, so a window that followed the focus
         # changed which guest the toolbar acted on as the pointer passed
