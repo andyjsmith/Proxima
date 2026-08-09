@@ -26,6 +26,21 @@ The one thing that does not follow from that: an empty notebook draws no tab
 strip, so there would be nothing to drop onto. Splitting therefore *moves*
 the console that was in front into the new pane rather than opening an empty
 one, and a pane whose last tab is dragged away hides itself again.
+
+**One button, three arrangements.** No split, side by side, one above the
+other, and round again. Each is built from a single pane outwards, so an
+arrangement is exactly what its name says rather than that plus whatever a
+dragged tab left behind. Dragging can still make three panes or a 2x2 grid;
+that is not a step on the cycle, and cycling out of one collapses to a
+single pane first.
+
+**Which pane is in charge is visible, and clicks decide it.** Split, "the
+tab in front" stops being a single thing -- every pane has one -- so the tab
+the window is actually acting on is drawn in bold. Clicking anywhere in a
+pane puts it in charge, which is deliberate in a way that hovering is not:
+a SPICE console takes the keyboard focus when the pointer merely crosses
+it, so following the focus would change which guest the toolbar acts on
+while the pointer was on its way to a button.
 """
 
 import gi
@@ -40,6 +55,28 @@ MAX_PANES = 4
 # some other notebook in the application.
 GROUP_NAME = "proxima-consoles"
 
+# The three arrangements one button cycles through. A fourth state exists
+# and is not on the cycle: dragging tabs about can produce three panes or a
+# 2x2 grid, which is a perfectly good thing to want and not something to
+# name a step for. Cycling out of one goes back to a single pane first, so
+# the button always does something predictable rather than trying to guess
+# which of four panes was meant.
+SPLIT_NONE = "none"
+SPLIT_SIDE_BY_SIDE = "side-by-side"  # pane 0 | pane 1
+SPLIT_STACKED = "stacked"  # pane 0 over pane 2
+SPLIT_OTHER = "other"
+
+# Which notebook each arrangement puts the second console in.
+_MODE_TARGETS = {SPLIT_SIDE_BY_SIDE: 1, SPLIT_STACKED: 2}
+
+# What the button does next, from wherever it is now.
+NEXT_SPLIT_MODE = {
+    SPLIT_NONE: SPLIT_SIDE_BY_SIDE,
+    SPLIT_SIDE_BY_SIDE: SPLIT_STACKED,
+    SPLIT_STACKED: SPLIT_NONE,
+    SPLIT_OTHER: SPLIT_NONE,
+}
+
 
 class SplitView(Gtk.Box):
     """A fixed 2x2 skeleton of console notebooks, most of them hidden."""
@@ -50,12 +87,17 @@ class SplitView(Gtk.Box):
         "page-switched": (GObject.SignalFlags.RUN_FIRST, None, (object, object, int)),
         # The number of visible panes changed.
         "panes-changed": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        # A different pane is the one the window should be acting on.
+        "pane-activated": (GObject.SignalFlags.RUN_FIRST, None, ()),
     }
 
     def __init__(self):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.notebooks = []
+        # Held for as long as the panes are: a gesture is only live while
+        # something has a reference to it.
+        self._click_gestures = []
         for _pane in range(MAX_PANES):
             notebook = Gtk.Notebook()
             notebook.set_scrollable(True)
@@ -64,6 +106,7 @@ class SplitView(Gtk.Box):
             notebook.connect("page-added", self._on_pages_changed)
             notebook.connect("page-removed", self._on_pages_changed)
             notebook.set_no_show_all(True)
+            self._watch_clicks(notebook)
             self.notebooks.append(notebook)
 
         self.left = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL)
@@ -139,6 +182,10 @@ class SplitView(Gtk.Box):
             if self.active is not None and not self.active.get_visible():
                 self.active = self._first_visible()
             self.emit("panes-changed")
+        # Outside the check: splitting shows the new pane itself, on its way
+        # to putting a page in it, so by the time this runs there is often
+        # nothing left to change -- and the marks would never be redrawn.
+        self.mark_active()
 
     def _first_visible(self):
         """Somewhere to aim at, for when the pane in use has just gone."""
@@ -146,6 +193,55 @@ class SplitView(Gtk.Box):
             if notebook.get_visible():
                 return notebook
         return self.primary
+
+    # -- which pane the window is acting on -----------------------------
+
+    def set_active(self, notebook):
+        """Aim the window at a pane. True if that changed anything."""
+        if notebook is None or notebook is self.active:
+            return False
+        self.active = notebook
+        self.mark_active()
+        self.emit("pane-activated")
+        return True
+
+    def _watch_clicks(self, notebook):
+        """Make a click anywhere in a pane the way to put it in charge.
+
+        Clicking is deliberate and hovering is not, which is the whole
+        reason this is a gesture and not the window's focus. A SPICE
+        console takes the focus when the pointer merely crosses it -- that
+        is how the guest gets the keyboard -- so following the focus meant
+        the toolbar changed guest under the pointer on the way to a button.
+
+        In the capture phase, because the console does want the click
+        itself: the gesture sees it on the way down, before the widget it
+        lands on, and only takes note of it.
+        """
+        gesture = Gtk.GestureMultiPress.new(notebook)
+        gesture.set_button(0)  # any button, including the middle and right
+        gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        gesture.connect("pressed", self._on_pane_pressed, notebook)
+        self._click_gestures.append(gesture)
+
+    def _on_pane_pressed(self, _gesture, _presses, _x, _y, notebook):
+        self.set_active(notebook)
+
+    def mark_active(self):
+        """Say on the tabs themselves which console the window is acting on.
+
+        Only when there is more than one pane. With one, the tab in front is
+        the one in front and saying so twice is noise.
+        """
+        split = self.pane_count() > 1
+        for notebook in self.notebooks:
+            current = notebook.get_nth_page(notebook.get_current_page())
+            for page in notebook.get_children():
+                label = notebook.get_tab_label(page)
+                if hasattr(label, "set_current"):
+                    label.set_current(
+                        split and notebook is self.active and page is current
+                    )
 
     def _place_dividers(self):
         """Give a pane that has just appeared half of what it splits."""
@@ -158,7 +254,47 @@ class SplitView(Gtk.Box):
             if top.get_visible() and bottom.get_visible():
                 paned.set_position(height // 2)
 
-    def split(self, page):
+    def split_mode(self):
+        """Which of the named arrangements is on screen, if any."""
+        visible = [i for i, n in enumerate(self.notebooks) if n.get_visible()]
+        if len(visible) < 2:
+            return SPLIT_NONE
+        if visible == [0, 1]:
+            return SPLIT_SIDE_BY_SIDE
+        if visible == [0, 2]:
+            return SPLIT_STACKED
+        return SPLIT_OTHER
+
+    def next_split_mode(self):
+        return NEXT_SPLIT_MODE[self.split_mode()]
+
+    def set_split_mode(self, mode):
+        """Arrange the panes as `mode` says. True if anything moved.
+
+        Always from one pane outwards, whatever was on screen before: the
+        arrangement then matches its name exactly, rather than being that
+        name plus whatever a dragged tab left behind.
+        """
+        if mode == SPLIT_NONE:
+            if self.pane_count() <= 1:
+                return False
+            self.gather()
+            return True
+
+        target = _MODE_TARGETS.get(mode)
+        if target is None:
+            return False
+
+        page = self.current_page()
+        self.gather()
+        # Only worth doing with something to leave behind: moving the one
+        # console there is out of pane 0 empties it, and an empty pane
+        # hides itself, so the "split" would be one pane in a new place.
+        if page is None or self.primary.get_n_pages() < 2:
+            return False
+        return self.split(page, self.notebooks[target]) is not None
+
+    def split(self, page, target=None):
         """Move a page into a pane of its own. Returns the new notebook.
 
         The page moves rather than a blank pane opening, because an empty
@@ -167,9 +303,10 @@ class SplitView(Gtk.Box):
         source = self.notebook_of(page)
         if source is None:
             return None
-        target = self._first_hidden()
         if target is None:
-            return None  # already at four
+            target = self._first_hidden()
+        if target is None or target is source:
+            return None  # already at four, or already there
 
         label = source.get_tab_label(page)
         title = getattr(label, "title", None)
@@ -187,10 +324,13 @@ class SplitView(Gtk.Box):
             target.set_tab_detachable(page, True)
         finally:
             self._suppress = False
-        self._present(target, page)
-        self._sync_visibility()
-        target.set_current_page(target.page_num(page))
+        # Active before the sync, not after: the sync is what redraws the
+        # marks, and it can only mark the right tab if it knows which pane
+        # the page has just gone to.
         self.active = target
+        self._present(target, page)
+        target.set_current_page(target.page_num(page))
+        self._sync_visibility()
         return target
 
     def gather(self):
@@ -209,8 +349,8 @@ class SplitView(Gtk.Box):
                 finally:
                     self._suppress = False
                 self._present(self.primary, page)
-        self._sync_visibility()
         self.active = self.primary
+        self._sync_visibility()
 
     def _present(self, notebook, page):
         """Make a page and its pane visible.
@@ -322,6 +462,10 @@ class SplitView(Gtk.Box):
         if self._suppress:
             return
         self.active = notebook
+        # Before the signal: whoever handles it may read the tabs, and a
+        # stale mark on the tab that was in front is exactly the thing this
+        # is for.
+        self.mark_active()
         self.emit("page-switched", notebook, page, index)
 
     def _on_pages_changed(self, _notebook, _child, _index):

@@ -71,7 +71,25 @@ from .node_tab import NodeTab
 from .settings_dialog import SettingsDialog
 from .sidebar import Sidebar
 from .snapshots import SnapshotManager, TakeSnapshotDialog
-from .split import MAX_PANES, SplitView
+from .split import (
+    SPLIT_NONE,
+    SPLIT_SIDE_BY_SIDE,
+    SPLIT_STACKED,
+    SplitView,
+)
+
+# What the split button and its menu entry say they will do next, and the
+# picture they wear while saying it.
+SPLIT_LABELS = {
+    SPLIT_SIDE_BY_SIDE: "Split Side by Side",
+    SPLIT_STACKED: "Split Top and Bottom",
+    SPLIT_NONE: "Close Split View",
+}
+SPLIT_STATUS = {
+    SPLIT_SIDE_BY_SIDE: "Side by side - drag tabs between the panes",
+    SPLIT_STACKED: "One above the other - drag tabs between the panes",
+    SPLIT_NONE: "Back to one pane",
+}
 from .summary import GuestSummary
 from .task_feed import TaskFeed
 from .update_dialog import UpdateDialog
@@ -286,6 +304,9 @@ class MainWindow(Gtk.Window):
         self.panes = SplitView()
         self.panes.connect("page-switched", self._on_page_switched)
         self.panes.connect("panes-changed", lambda *_: self._sync_view_menu())
+        # Clicking into a pane says which console the window should be
+        # acting on, without necessarily switching tabs.
+        self.panes.connect("pane-activated", self._on_pane_activated)
         self.notebook = self.panes.primary
 
         # A tab per guest, each holding that guest's console and summary.
@@ -592,15 +613,12 @@ class MainWindow(Gtk.Window):
 
         menu.append(Gtk.SeparatorMenuItem())
 
+        # One entry, not two. Splitting and unsplitting were separate
+        # actions with separate rules about when each was allowed, and
+        # between them they were grey more often than not. This is a cycle:
+        # one pane, side by side, one above the other, back to one.
         self.split_item = self._menu_item(
-            menu, "Move Console to a New Pane", self._split_console
-        )
-        self.split_item.set_tooltip_text(
-            "Show this console beside the others. Once there is more than "
-            "one pane, tabs can be dragged between them."
-        )
-        self.gather_item = self._menu_item(
-            menu, "Close Split View", self._gather_consoles
+            menu, SPLIT_LABELS[SPLIT_SIDE_BY_SIDE], self._cycle_split
         )
 
         menu.append(Gtk.SeparatorMenuItem())
@@ -620,7 +638,6 @@ class MainWindow(Gtk.Window):
             self.codec_item,
             self.compression_item,
             self.split_item,
-            self.gather_item,
             self.refresh_frame_item,
             self.close_console_item,
         ]
@@ -710,10 +727,12 @@ class MainWindow(Gtk.Window):
 
         self.split_item_tb = Gtk.ToolButton()
         self.split_item_tb.set_label("Split")
+        # One picture for all three steps of the cycle. What the next press
+        # will do is in the tooltip and on the menu entry; the button itself
+        # stays put.
         self.split_item_tb.set_icon_name("view-dual-symbolic")
-        self.split_item_tb.set_tooltip_text("Show this console beside the others")
         self.split_item_tb.set_sensitive(False)
-        self.split_item_tb.connect("clicked", lambda *_: self._split_console())
+        self.split_item_tb.connect("clicked", lambda *_: self._cycle_split())
         bar.insert(self.split_item_tb, -1)
 
         self.fullscreen_item_tb = Gtk.ToolButton()
@@ -4821,26 +4840,12 @@ class MainWindow(Gtk.Window):
 
             self.refresh_frame_item.set_sensitive(bool(supports.get("refresh")))
 
-            # Splitting needs a console to move and somewhere to put it, and
-            # is pointless when it is the only tab in a pane -- that would
-            # just move an empty gap around.
-            #
-            # The lookup is by page, not by console: a console lives inside
-            # a GuestTab and the tab is what the notebook holds, so asking
-            # which notebook holds the *console* answered "none" every time
-            # and left the entry permanently grey.
-            panes = self.panes.pane_count()
-            page = self.panes.current_page() if console is not None else None
-            holder = self.panes.notebook_of(page) if page is not None else None
-            can_split = bool(
-                console is not None
-                and panes < MAX_PANES
-                and holder is not None
-                and holder.get_n_pages() > 1
-            )
-            self.split_item.set_sensitive(can_split)
-            self.split_item_tb.set_sensitive(can_split)
-            self.gather_item.set_sensitive(panes > 1)
+            # Two tabs and the split button works: there is something to put
+            # on each side of it. That is the whole rule. It used to depend
+            # on which pane held what, and on the console in front rather
+            # than on the tabs, which left it grey at moments when splitting
+            # was plainly reasonable.
+            self._sync_split_controls()
 
             self.fullscreen_item.set_sensitive(console is not None)
             self.fullscreen_item_tb.set_sensitive(console is not None)
@@ -4967,33 +4972,49 @@ class MainWindow(Gtk.Window):
             console.set_compression_index(index)
             self._save_guest_pref("compression_index", index)
 
-    def _split_console(self):
-        """Give the console in front a pane of its own.
+    def _on_pane_activated(self, _panes):
+        """A pane was clicked into, so the window now acts on that one.
+
+        The same refresh switching tabs does, because it is the same change:
+        which console the window is pointed at. The tree follows too, so the
+        selection agrees with the pane that is now in charge.
+        """
+        if not self._ready:
+            return
+        page = self.panes.current_page()
+        self._sync_view_menu()
+        self._context_changed()
+        key = getattr(page, "guest_key", None) or getattr(page, "node_key", None)
+        if key:
+            self.sidebar.select_key(key)
+
+    def _sync_split_controls(self):
+        """Point the split button and its menu entry at the next arrangement.
+
+        Live whenever there is more than one tab open, wherever those tabs
+        are: two tabs is what splitting needs and all it needs.
+        """
+        mode = self.panes.next_split_mode()
+        live = self.panes.total_pages() > 1
+        self.split_item.set_label(SPLIT_LABELS[mode])
+        self.split_item.set_sensitive(live)
+        self.split_item_tb.set_tooltip_text(SPLIT_LABELS[mode])
+        self.split_item_tb.set_sensitive(live)
+
+    def _cycle_split(self):
+        """One pane, side by side, one above the other, and round again.
 
         What moves is the notebook page -- the guest's tab, with its summary
         and its console in it -- not the console widget, which the notebook
         has never heard of.
         """
-        page = self.panes.current_page()
-        if page is None or console_of(page) is None:
-            return
         if self.fullscreen_control.active:
             self.fullscreen_control.leave()
-        if self.panes.pane_count() >= MAX_PANES:
-            self.set_status(f"Already showing {MAX_PANES} panes")
+        mode = self.panes.next_split_mode()
+        if not self.panes.set_split_mode(mode):
             return
-        if self.panes.split(page) is None:
-            self.set_status("Could not split this console out")
-            return
-        self.set_status(f"{self.panes.pane_count()} panes - drag tabs between them")
-
-    def _gather_consoles(self):
-        if self.panes.pane_count() <= 1:
-            return
-        if self.fullscreen_control.active:
-            self.fullscreen_control.leave()
-        self.panes.gather()
-        self.set_status("Back to one pane")
+        self.set_status(SPLIT_STATUS[mode])
+        self._sync_view_menu()
 
     def _refresh_framebuffer(self):
         console = self.current_console()

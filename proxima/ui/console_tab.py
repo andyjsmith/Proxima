@@ -7,7 +7,7 @@ no guest resize, clipboard sharing or audio.
 import gi
 
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gdk, Gtk
+from gi.repository import Gdk, GLib, Gtk
 
 
 class ConsoleTabLabel(Gtk.EventBox):
@@ -38,7 +38,13 @@ class ConsoleTabLabel(Gtk.EventBox):
         # roughly nothing, so the notebook happily shrinks it to "..." once
         # the icon and close button have taken their share. Sizing to the
         # text instead makes the tab as wide as its contents need.
-        self.label = Gtk.Label(label=self._fit(title))
+        self.label = Gtk.Label()
+        # Whether this is the tab the toolbar and menus are aimed at. Only
+        # ever true of one tab, and only worth saying at all once the window
+        # is split -- with one pane the tab in front is the one in front.
+        self._current = False
+        self._title = self._fit(title)
+        self._render()
         box.pack_start(self.label, False, False, 0)
         self.set_protocol(protocol)
 
@@ -72,7 +78,28 @@ class ConsoleTabLabel(Gtk.EventBox):
         return title[: cls.MAX_CHARS - 3] + "..."
 
     def set_title(self, title):
-        self.label.set_text(self._fit(title))
+        self._title = self._fit(title)
+        self._render()
+
+    def set_current(self, current):
+        """Mark this as the tab the window is acting on, or stop.
+
+        Split into panes, "the tab in front" stops being a single thing --
+        every pane has one -- and nothing on screen said which of them the
+        power buttons and the View menu were aimed at. This is that.
+        """
+        current = bool(current)
+        if current == self._current:
+            return
+        self._current = current
+        self._render()
+
+    def _render(self):
+        # Bold rather than a colour: it survives every theme, and it does
+        # not compete with the tab strip's own idea of which tab is
+        # selected, which is a different question with more than one pane.
+        text = GLib.markup_escape_text(self._title)
+        self.label.set_markup(f"<b>{text}</b>" if self._current else text)
 
     def set_icon(self, pixbuf, tooltip=""):
         """Wear a given picture instead of one of the protocol icons.

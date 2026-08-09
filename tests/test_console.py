@@ -7,6 +7,7 @@ from gi.repository import Gtk
 
 from proxima.console import keys as keys_mod
 from proxima.console import status_panel as status_panel_mod
+from proxima.ui import split as split_mod
 
 from .conftest import (
     FakeConsole,
@@ -583,35 +584,129 @@ def test_a_real_console_keeps_the_tabs_connecting_panel_up(window, live_console)
         )
 
 
-def test_a_second_tab_makes_the_split_entry_live(window):
-    """The split controls act on the notebook page, not on the console.
+def test_the_split_button_needs_two_tabs_and_nothing_else(window):
+    """Two tabs is the whole rule.
 
-    A console lives inside a GuestTab and the tab is what the notebook
-    holds, so looking up "which pane holds this console" answered "none"
-    every time -- which left Move Console to a New Pane permanently grey and
-    made the toolbar button do nothing on the rare path that reached it.
+    It used to depend on which pane held what and on the console in front
+    rather than on the tabs, which left it grey at moments when splitting
+    was plainly reasonable.
     """
     window.open_console(STOPPED)
     pump_until(lambda: STOPPED in window.tabs, 6)
-    window.open_console(key_for(101))
-    pump_until(lambda: key_for(101) in window.tabs, 6)
     pump(0.4)
     try:
+        window._sync_view_menu()
+        assert not window.split_item_tb.get_sensitive(), (
+            "the split button is live with one tab open"
+        )
+
+        window.open_console(key_for(101))
+        pump_until(lambda: key_for(101) in window.tabs, 6)
+        pump(0.4)
         assert window.panes.total_pages() >= 2, "the two tabs did not both open"
         window._sync_view_menu()
         assert window.split_item.get_sensitive(), (
             "the split entry is dead with two tabs open in one pane"
         )
         assert window.split_item_tb.get_sensitive(), "the split button is dead too"
+    finally:
+        window.panes.set_split_mode(split_mod.SPLIT_NONE)
+        window.close_console(key_for(101))
+        window.close_console(STOPPED)
+        pump(0.4)
 
-        panes_before = window.panes.pane_count()
-        window._split_console()
+
+def test_the_split_button_cycles_through_the_three_arrangements(window):
+    """One pane, side by side, one above the other, and back again."""
+    window.open_console(STOPPED)
+    pump_until(lambda: STOPPED in window.tabs, 6)
+    window.open_console(key_for(101))
+    pump_until(lambda: key_for(101) in window.tabs, 6)
+    pump(0.4)
+    try:
+        assert window.panes.split_mode() == split_mod.SPLIT_NONE
+
+        window._cycle_split()
         pump(0.5)
-        assert window.panes.pane_count() == panes_before + 1, (
-            "splitting did not open a second pane"
+        assert window.panes.split_mode() == split_mod.SPLIT_SIDE_BY_SIDE, (
+            "the first press did not put the panes side by side"
+        )
+        assert window.panes.pane_count() == 2
+        assert window.panes.notebooks[1].get_visible(), (
+            "pane 1 is not the right-hand one"
+        )
+
+        window._cycle_split()
+        pump(0.5)
+        assert window.panes.split_mode() == split_mod.SPLIT_STACKED, (
+            "the second press did not stack the panes"
+        )
+        assert window.panes.pane_count() == 2
+        assert window.panes.notebooks[2].get_visible(), "pane 2 is not the lower one"
+
+        window._cycle_split()
+        pump(0.5)
+        assert window.panes.split_mode() == split_mod.SPLIT_NONE, (
+            "the third press did not close the split"
+        )
+        assert window.panes.pane_count() == 1
+        assert window.panes.total_pages() == 2, "cycling lost a tab"
+    finally:
+        window.panes.set_split_mode(split_mod.SPLIT_NONE)
+        window.close_console(key_for(101))
+        window.close_console(STOPPED)
+        pump(0.4)
+
+
+def test_the_active_pane_is_marked_on_its_tab(window):
+    """Split, and which console the toolbar is aimed at has to be visible."""
+    window.open_console(STOPPED)
+    pump_until(lambda: STOPPED in window.tabs, 6)
+    window.open_console(key_for(101))
+    pump_until(lambda: key_for(101) in window.tabs, 6)
+    pump(0.4)
+    try:
+        window._cycle_split()
+        pump(0.5)
+        assert window.panes.pane_count() == 2, "the split did not open"
+
+        def marked():
+            found = []
+            for notebook in window.panes.visible_notebooks():
+                for page in notebook.get_children():
+                    label = notebook.get_tab_label(page)
+                    if getattr(label, "_current", False):
+                        found.append(page)
+            return found
+
+        assert marked() == [window.panes.current_page()], (
+            "the tab the window is acting on is not the one marked"
+        )
+
+        # Clicking into the other pane moves the mark, without switching tabs.
+        other = next(
+            n for n in window.panes.visible_notebooks() if n is not window.panes.active
+        )
+        window.panes.set_active(other)
+        pump(0.3)
+        assert marked() == [window.panes.current_page()], (
+            "the mark did not follow the pane that was clicked into"
+        )
+
+        # But the focus alone does not. A SPICE console grabs the keyboard
+        # when the pointer crosses it, so a window that followed the focus
+        # changed which guest the toolbar acted on as the pointer passed
+        # over a pane on its way to a button.
+        was = window.panes.active
+        elsewhere = next(n for n in window.panes.visible_notebooks() if n is not was)
+        page = elsewhere.get_nth_page(elsewhere.get_current_page())
+        window.set_focus(page)
+        pump(0.3)
+        assert window.panes.active is was, (
+            "moving the focus took the pane over without a click"
         )
     finally:
-        window._gather_consoles()
+        window.panes.set_split_mode(split_mod.SPLIT_NONE)
         window.close_console(key_for(101))
         window.close_console(STOPPED)
         pump(0.4)
@@ -803,7 +898,7 @@ def test_emptying_a_split_pane_gives_the_window_back(window):
     pump_until(lambda: key_for(101) in window.tabs, 6)
     pump(0.4)
     try:
-        window._split_console()
+        window._cycle_split()
         pump(0.5)
         assert window.panes.pane_count() == 2, "the split did not open"
 
@@ -834,7 +929,7 @@ def test_emptying_a_split_pane_gives_the_window_back(window):
     finally:
         for key in list(window.tabs):
             window.close_console(key)
-        window._gather_consoles()
+        window.panes.set_split_mode(split_mod.SPLIT_NONE)
         pump(0.4)
 
 
