@@ -110,6 +110,60 @@ def font_backend():
     return (name, name == "freetype")
 
 
+# The gtk-xft-* properties and the font name, as the desktop had them before
+# anything here was set. Captured once, on the first call either way round,
+# so that "use the system theme" can put them back rather than guess at
+# plausible defaults -- GNOME's hinting and subpixel settings are the user's
+# own and are not ours to invent.
+_ORIGINAL_SETTINGS = {}
+
+_FONT_PROPERTIES = (
+    "gtk-xft-antialias",
+    "gtk-xft-rgba",
+    "gtk-xft-hinting",
+    "gtk-xft-hintstyle",
+    "gtk-font-name",
+)
+
+
+def _remember(settings):
+    if _ORIGINAL_SETTINGS:
+        return
+    for name in _FONT_PROPERTIES:
+        with contextlib.suppress(TypeError, ValueError):
+            _ORIGINAL_SETTINGS[name] = settings.get_property(name)
+
+
+def restore_font_options(screen, root_widget=None):
+    """Give font rendering back to the desktop.
+
+    The mirror of apply_font_options, and it has to undo rather than skip:
+    the settings below are global to the process, so a run that has already
+    applied them keeps them until something puts them back.
+
+    Screen font options are cleared with None, which is GDK's way of saying
+    "use the default" -- the same for a widget's PangoContext, which then
+    inherits the screen's again.
+    """
+    if cairo is None:
+        return
+
+    settings = Gtk.Settings.get_default()
+    _remember(settings)
+
+    for name, value in _ORIGINAL_SETTINGS.items():
+        with contextlib.suppress(TypeError, ValueError):
+            settings.set_property(name, value)
+
+    screen.set_font_options(None)
+
+    with contextlib.suppress(TypeError, ValueError):
+        settings.set_property("gtk-fontconfig-timestamp", int(time.time()))
+
+    if root_widget is not None:
+        refresh_pango(root_widget, None)
+
+
 def apply_font_options(screen, config, root_widget=None):
     """Push the configured font rendering onto the screen and live widgets.
 
@@ -122,6 +176,7 @@ def apply_font_options(screen, config, root_widget=None):
         return
 
     settings = Gtk.Settings.get_default()
+    _remember(settings)
     antialias = config.get("antialias", "grayscale")
     hint_style = config.get("hint_style", "slight")
 

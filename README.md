@@ -343,6 +343,30 @@ for Updates**.
 
 ---
 
+## Appearance
+
+Proxima ships its own compact styling, and follows your desktop's light/dark
+setting by default. **Preferences -> Appearance** has the colour choice, the
+interface font and how text is rendered.
+
+If you would rather it simply looked like the rest of your desktop, tick
+**Use the system theme**. That drops the whole of the above: no stylesheet
+of ours, the theme and accent colour your desktop chose, the fonts it
+configured, and windows that dim when they lose focus like every other
+window does. It applies immediately, and turning it off puts everything
+back -- the settings it covers are remembered, only ignored while it is on,
+which is why they grey out rather than disappear.
+
+The trade is space. The compact styling exists because it is what fits a
+large datacenter down one side of the window; with the desktop's theme in
+charge the tree is roomier and fewer guests fit on screen. Everything else
+works exactly the same.
+
+One part cannot be changed without a restart: which backend Pango uses to
+rasterise text is read once, as the program starts.
+
+---
+
 ## Where things are kept
 
 Settings, saved connections and pinned certificates:

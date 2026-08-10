@@ -32,6 +32,17 @@ DEFAULTS = {
     # for Adwaita and it is the only one a packaged build carries. Light and
     # dark are still a choice, and both are Adwaita.
     "color_mode": "system",  # "system" | "light" | "dark"
+    # Hand the interface back to the desktop: the theme it chose, the fonts
+    # it configured, none of our stylesheet, and windows that dim when they
+    # lose focus like every other window does.
+    #
+    # Off by default because the opposite is deliberate -- the compact
+    # stylesheet is what makes a datacenter fit down one side of the window,
+    # and the symbolic icons are drawn for Adwaita. It exists for the
+    # desktop where a pinned theme is the thing that looks wrong: a GNOME
+    # session with its own theme, its own accent colour and its own font
+    # settings, where an application insisting on Adwaita is the odd one out.
+    "use_system_theme": False,
     # Draw the titlebar ourselves (GtkHeaderBar) instead of letting the OS
     # do it. Off by default, and read once at startup -- GTK will not swap a
     # window's decorations after it is on screen. See docs/header-bar.md.
@@ -218,11 +229,17 @@ def apply_environment(config):
     it, so PANGOCAIRO_BACKEND is read exactly once, very early. Same story for
     GStreamer feature ranks, which Gst.init() snapshots.
     """
+    # Left alone entirely under use_system_theme: picking the backend is
+    # picking how text is rasterised, which is exactly what that setting
+    # says to stop doing. It is also the one part of it that cannot be
+    # undone later -- see theme.apply -- because Pango has read the variable
+    # by then.
     backend = config.get("font_backend", "default")
-    if backend == "fontconfig":
-        os.environ["PANGOCAIRO_BACKEND"] = "fontconfig"
-    elif backend == "win32":
-        os.environ["PANGOCAIRO_BACKEND"] = "win32"
+    if not config.get("use_system_theme"):
+        if backend == "fontconfig":
+            os.environ["PANGOCAIRO_BACKEND"] = "fontconfig"
+        elif backend == "win32":
+            os.environ["PANGOCAIRO_BACKEND"] = "win32"
 
     if config.get("sw_decoders"):
         from .console.decoders import demote_hardware_decoders

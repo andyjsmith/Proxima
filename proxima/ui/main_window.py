@@ -55,7 +55,7 @@ from ..console.serial import DEFAULT_FONT_SIZE
 from ..console.spice import IMAGE_COMPRESSION, VIDEO_CODECS
 from ..console.termproxy import open_session as open_term_session
 from ..theme import apply as apply_theme
-from ..theme import css as theme_css
+from ..theme import current_row_ypad as theme_row_ypad
 from ..theme import decorate as theme_decorate
 from ..theme import keep_active as theme_keep_active
 from ..theme.system import DarkModeWatcher
@@ -266,7 +266,7 @@ class MainWindow(Gtk.Window):
         self.paned.set_position(int(config.get("sidebar_width", 280)))
 
         self.sidebar = Sidebar(
-            row_ypad=theme_css.ROW_YPAD,
+            row_ypad=theme_row_ypad(),
             name_format=config.get("tree_name_format", "name"),
             templates_last=bool(config.get("templates_last", True)),
             dnd_enabled=bool(config.get("enable_dnd", True)),
@@ -1588,7 +1588,8 @@ class MainWindow(Gtk.Window):
 
     def apply_appearance(self):
         dark = apply_theme(self.config, self)
-        self.sidebar.set_row_ypad(theme_css.ROW_YPAD)
+        # After apply_theme, which decides which of the two it is.
+        self.sidebar.set_row_ypad(theme_row_ypad())
         self.sidebar.set_dark(dark)
         self._update_connection_label()
 

@@ -21,8 +21,40 @@ log = logging.getLogger(__name__)
 # Compiled into GTK, so it is always there and needs no discovery.
 THEME_NAME = "Adwaita"
 
+# The tree row padding the compact stylesheet is drawn around, and GTK's own,
+# used when the desktop's theme is left in charge. A cell renderer's padding
+# is a property rather than CSS, so it does not come back on its own when the
+# stylesheet is dropped.
+COMPACT_ROW_YPAD = css.ROW_YPAD
+NATIVE_ROW_YPAD = 2
+
 _providers = []
 _dark = False
+_system_theme = False
+
+# What GTK had before anything here touched it, captured once. Restoring the
+# desktop's own theme means knowing its name, and by the time anyone asks,
+# apply() has already overwritten it.
+_original = {}
+
+
+def _remember(settings):
+    if _original:
+        return
+    _original["gtk-theme-name"] = settings.get_property("gtk-theme-name")
+    _original["gtk-application-prefer-dark-theme"] = settings.get_property(
+        "gtk-application-prefer-dark-theme"
+    )
+
+
+def current_row_ypad():
+    """Tree row padding matching the last apply()."""
+    return NATIVE_ROW_YPAD if _system_theme else COMPACT_ROW_YPAD
+
+
+def system_theme_active():
+    """Whether the desktop's own theme is currently in charge."""
+    return _system_theme
 
 
 def _load(screen, stylesheet, label):
@@ -77,7 +109,11 @@ def keep_active(window):
 
     def clear():
         state["queued"] = False
-        if state["dead"]:
+        # Checked here rather than when the handler was connected, so that
+        # turning the setting on or off reaches windows that already exist.
+        # A backdrop window really does dim on GNOME; leaving it to do so is
+        # part of what "the desktop's own theme" means.
+        if state["dead"] or _system_theme:
             return False
         if window.get_state_flags() & Gtk.StateFlags.BACKDROP:
             window.unset_state_flags(Gtk.StateFlags.BACKDROP)
@@ -138,26 +174,52 @@ def apply(config, root_widget=None):
 
     Returns whether the result is dark, which is what callers have to pass
     on to anything that draws its own colours.
+
+    With `use_system_theme` set this hands the interface back to the desktop
+    instead: no stylesheet of ours, no pinned theme, no font overrides, and
+    no backdrop clearing. Everything is undone rather than merely skipped,
+    so the setting takes effect the moment it is changed rather than at the
+    next start -- except the Pango backend, which is an environment variable
+    its library reads once (see config.apply_environment).
+
+    The dark flag still has to be answered, because widgets that draw their
+    own colours have no theme to ask. In system mode it comes from the
+    desktop rather than from our own light/dark setting, which is not
+    applying to anything any more.
     """
-    global _dark
+    global _dark, _system_theme
 
     screen = Gdk.Screen.get_default()
     settings = Gtk.Settings.get_default()
+    _remember(settings)
 
-    dark = system.resolve_dark(config.get("color_mode", "system"))
+    _system_theme = bool(config.get("use_system_theme"))
+    dark = (
+        bool(system.system_prefers_dark())
+        if _system_theme
+        else system.resolve_dark(config.get("color_mode", "system"))
+    )
     _dark = dark
 
-    settings.set_property("gtk-theme-name", THEME_NAME)
-    # Adwaita's dark variant is selected by this flag rather than by name.
-    settings.set_property("gtk-application-prefer-dark-theme", dark)
-
+    # Ours come off first either way: apply() is re-run on every settings
+    # change, and a stylesheet added twice is a stylesheet applied twice.
     for existing in _providers:
         Gtk.StyleContext.remove_provider_for_screen(screen, existing)
     _providers.clear()
 
-    _load(screen, css.build_css(dark), "compact")
-
-    fonts.apply_font_options(screen, config, root_widget)
+    if _system_theme:
+        settings.set_property("gtk-theme-name", _original["gtk-theme-name"])
+        settings.set_property(
+            "gtk-application-prefer-dark-theme",
+            _original["gtk-application-prefer-dark-theme"],
+        )
+        fonts.restore_font_options(screen, root_widget)
+    else:
+        settings.set_property("gtk-theme-name", THEME_NAME)
+        # Adwaita's dark variant is selected by this flag rather than by name.
+        settings.set_property("gtk-application-prefer-dark-theme", dark)
+        _load(screen, css.build_css(dark), "compact")
+        fonts.apply_font_options(screen, config, root_widget)
 
     # Covers the main window and any dialog that happens to be open.
     decorate_all()
@@ -166,13 +228,18 @@ def apply(config, root_widget=None):
 
 
 __all__ = [
+    "COMPACT_ROW_YPAD",
+    "NATIVE_ROW_YPAD",
     "THEME_NAME",
     "apply",
     "css",
+    "current_dark",
+    "current_row_ypad",
     "decorate",
     "decorate_all",
     "fonts",
     "keep_active",
     "native_chrome",
     "system",
+    "system_theme_active",
 ]

@@ -116,15 +116,30 @@ class SettingsDialog(Gtk.Dialog):
         grid = self._page()
         row = 0
 
+        # Everything on this page that the desktop takes over when the
+        # system theme is in charge, so it can be greyed out rather than
+        # left looking as though it still does something.
+        self._theme_widgets = []
+
         grid.attach(self._heading("Window"), 0, row, 2, 1)
         row += 1
-        self._combo(
+        self._check(
             grid,
             row,
-            "Colours",
-            COLOR_MODES,
-            "color_mode",
-            tooltip="Tracks the system light/dark setting",
+            "Use the system theme",
+            "use_system_theme",
+            tooltip="Drop Proxima's custom GTK theme and use your desktop's theme. On non-linux platforms, this will just fallback to the default Adwaita theme.",
+        )
+        row += 1
+        self._theme_widgets.append(
+            self._combo(
+                grid,
+                row,
+                "Colours",
+                COLOR_MODES,
+                "color_mode",
+                tooltip="Tracks the system light/dark setting",
+            )
         )
         row += 1
         self._check(
@@ -142,40 +157,49 @@ class SettingsDialog(Gtk.Dialog):
 
         backend, hinting_ok = fonts.font_backend()
 
-        self._combo(
-            grid,
-            row,
-            "Font backend",
-            fonts.FONT_BACKEND_CHOICES,
-            "font_backend",
-            tooltip="Restart required",
+        self._theme_widgets.append(
+            self._combo(
+                grid,
+                row,
+                "Font backend",
+                fonts.FONT_BACKEND_CHOICES,
+                "font_backend",
+                tooltip="Restart required",
+            )
         )
         row += 1
 
         font_choices = [(name, name or "Theme default") for name in fonts.FONT_CHOICES]
-        self._combo(grid, row, "Interface font", font_choices, "font_name")
+        self._theme_widgets.append(
+            self._combo(grid, row, "Interface font", font_choices, "font_name")
+        )
         row += 1
 
-        self._combo(
-            grid,
-            row,
-            "Antialiasing",
-            fonts.ANTIALIAS_CHOICES,
-            "antialias",
-            tooltip="Grayscale avoids colour fringing",
+        self._theme_widgets.append(
+            self._combo(
+                grid,
+                row,
+                "Antialiasing",
+                fonts.ANTIALIAS_CHOICES,
+                "antialias",
+                tooltip="Grayscale avoids colour fringing",
+            )
         )
         row += 1
 
         self.hint_combo = self._combo(
             grid, row, "Hinting", fonts.HINT_STYLE_CHOICES, "hint_style"
         )
+        self._theme_widgets.append(self.hint_combo)
         row += 1
-        self._check(
-            grid,
-            row,
-            "Hint metrics",
-            "hint_metrics",
-            tooltip="Snap glyph advances to whole pixels",
+        self._theme_widgets.append(
+            self._check(
+                grid,
+                row,
+                "Hint metrics",
+                "hint_metrics",
+                tooltip="Snap glyph advances to whole pixels",
+            )
         )
         row += 1
 
@@ -191,6 +215,9 @@ class SettingsDialog(Gtk.Dialog):
             )
             self.hint_combo.set_sensitive(False)
         grid.attach(status, 0, row, 2, 1)
+
+        self._hinting_ok = hinting_ok
+        self._sync_theme_sensitivity()
         return grid
 
     def _console_page(self):
@@ -416,7 +443,25 @@ class SettingsDialog(Gtk.Dialog):
         if self._loading:
             return
         self.config[key] = check.get_active()
+        if key == "use_system_theme":
+            self._sync_theme_sensitivity()
         self._changed()
+
+    def _sync_theme_sensitivity(self):
+        """Grey out the settings the desktop has taken over.
+
+        They are still stored, and come back exactly as they were when the
+        system theme is switched off again -- what the greying says is that
+        nothing is reading them at the moment, which is otherwise invisible
+        and reads as a broken setting.
+        """
+        native = bool(self.config.get("use_system_theme"))
+        for widget in self._theme_widgets:
+            widget.set_sensitive(not native)
+        # The backend's own rule still wins where it applies: hinting that
+        # the running backend ignores stays grey whatever the theme is doing.
+        if not native and not self._hinting_ok:
+            self.hint_combo.set_sensitive(False)
 
     def _on_spin_changed(self, spin, key):
         if self._loading:
