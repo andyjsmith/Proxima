@@ -3,9 +3,20 @@
 PyInstaller ships hooks for the GNOME stack but not for spice-gtk, and
 proxima/console/spicelib.py imports the namespace through importlib, so
 nothing in the module graph names it either. GiModuleInfo does the same work
-the stock gi hooks do: find the .typelib, find the shared libraries it names
--- see tools/bundle_deps.py's docstring for why a typelib without its library
-fails so obscurely -- and pull in the namespaces it depends on.
+the stock gi hooks do: find the .typelib, find the shared libraries it names,
+and pull in the namespaces it depends on.
+
+Finding the libraries is the half worth spelling out. A typelib is data, not
+code: SpiceClientGLib-2.0.typelib merely *names* libspice-client-glib, and
+nothing in the program links against it. A bundle that carries the typelib
+alone still imports -- so every "is SPICE available?" check says yes -- and
+only when something asks for an actual GType does g_typelib_symbol() come up
+empty, every type resolve to void, and constructing one raise
+
+    TypeError: could not get a reference to type class
+
+from somewhere with no obvious connection to a missing file. That is what
+--diagnose's "SPICE session usable" line exists to catch.
 
 The namespace is spelled SpiceClientGLib in most builds and SpiceClientGlib
 in some, which spicelib.py probes for rather than assuming. Both spellings

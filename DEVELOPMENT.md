@@ -128,10 +128,11 @@ checkout too -- no build needed to see it.
   for the same reason the app runs there; the macOS job builds arm64 only,
   since Homebrew has no cross-compiled bottles and the whole GTK stack there
   comes from bottles -- an Intel bundle has to be built on an Intel Mac.
-  It takes the better part of an hour,
-  so it does not run on a push: start one from **Actions -> Build -> Run
-  workflow**, or put a `build-please` label on a pull request to build that
-  branch. The release workflow calls it regardless.
+  Three runners each installing and freezing the whole GTK stack is still
+  more than a commit should wait on, so it does not run on a push: start one
+  from **Actions -> Build -> Run workflow**, or put a `build-please` label on
+  a pull request to build that branch. The release workflow calls it
+  regardless.
 * `.github/workflows/release.yml` -- everything under [Releasing](#releasing).
 
 ## Releasing
@@ -184,21 +185,55 @@ out.
 ## What is in a package
 
 Everything. None of them ask the user to install GTK, spice-gtk, GStreamer or
-Python -- and they are built `--standalone`, never `--onefile`, which would
-unpack 60 MB to a temporary directory on every start.
+Python -- and they are built `--onedir`, never `--onefile`, which would
+unpack 200 MB to a temporary directory on every start.
 
-Linux and Windows are built with Nuitka; macOS with PyInstaller, from
-`packaging/proxima.spec`. That split is not a preference. A Homebrew
-`.dylib` records its own dependencies as *absolute paths back into the
-Cellar*, unlike an ELF SONAME, which is only a name -- so copying one next
-to the executable achieves nothing on its own, and every load command in
-every copied library has to be rewritten before the bundle will run
-anywhere but the machine that built it. PyInstaller does that rewriting
-itself, and ships runtime hooks for the whole GNOME stack (`pyi_rth_gi`,
-`_gdkpixbuf`, `_gio`, `_glib`, `_gstreamer`) which set the same paths
-`proxima/bundle.py` sets by hand for the other two. So on macOS
-`bundle.py` deliberately stands aside; `pyinstaller_root()` is what it
-checks.
+All three platforms are built by PyInstaller from one spec,
+`packaging/proxima.spec`. It leaves `build/dist/proxima/` on Linux and
+Windows -- `proxima.exe` beside an `_internal/` directory holding everything
+else -- and `build/dist/Proxima.app` on macOS.
+
+PyInstaller earns that place three times over:
+
+* it ships runtime hooks for the whole GNOME stack (`pyi_rth_gi`,
+  `_gdkpixbuf`, `_gio`, `_glib`, `_gstreamer`, `_gtk`) which set
+  `GI_TYPELIB_PATH`, `GDK_PIXBUF_MODULE_FILE`, `GIO_MODULE_DIR`,
+  `XDG_DATA_DIRS` and the `GST_PLUGIN_*` variables before any of our code
+  runs -- paths that otherwise have to be worked out and set by hand,
+  because GTK loads most of itself at run time from directories that were
+  compiled into it on the build machine;
+* its binary analysis follows the shared libraries the *plugins* pull in,
+  not only what the program links against, which is what puts the codecs
+  behind the GStreamer plugins in the bundle;
+* on macOS it rewrites Mach-O load commands. A Homebrew `.dylib` records its
+  dependencies as absolute paths back into the Cellar, unlike an ELF SONAME
+  which is only a name, so copying one next to the executable achieves
+  nothing until every load command in every copied library is rewritten.
+  That is what makes a Homebrew GTK relocatable at all.
+
+It also needs no compiler on any of the three, which is most of why a build
+now takes a couple of minutes rather than the better part of an hour.
+
+Linux and Windows were built with Nuitka until they were not, and compiling
+turned out not to buy anything. Measured on one Windows machine, the same
+commit built both ways (Nuitka 4.1.3, Python 3.14, best of five, in-bundle):
+
+| | Nuitka | PyInstaller |
+| --- | --- | --- |
+| `Terminal.feed`, 1500 screens of escape sequences | 145 ms | **112 ms** |
+| `des.vnc_response` x2000 | 440 ms | **367 ms** |
+| `Guest.from_api` x4000 | 91 ms | **14 ms** |
+| `--logs` (process start to exit) | **7 ms** | 132 ms |
+| `--diagnose` (the whole GTK/SPICE stack up) | **314 ms** | 685 ms |
+| build, cold cache | 122 s | **30 s** |
+| bundle | 200 MB | **193 MB** |
+
+Compiled code is *slower* here, not faster: CPython 3.14's specialising
+interpreter beats Nuitka's C on all three hot paths, and dataclass
+construction -- which is most of what parsing an API response is -- by six
+times. What compiling did buy was startup, and only startup: about 350 ms of
+it, paid once per launch, against a bundle that takes a second and a half to
+open a window either way.
 
 Two things PyInstaller does not know about are supplied in
 `packaging/pyinstaller/hooks/`: spice-gtk, which it has no hook for and
@@ -209,21 +244,24 @@ without that first half the hidden import is reported "not found" and the
 typelib is silently left out, which produces a bundle whose SPICE console
 cannot create a single object.
 
-Getting there on Linux and Windows takes two steps beyond a plain Nuitka
-build, because Nuitka follows what the program *links against*, and GTK
-loads most of itself by hand later:
+Two more it gets wrong, both handled by `proxima/bundle.py` before anything
+imports `gi`:
 
-* the build passes `--include-raw-dir` for the pixbuf loaders, the GStreamer
-  plugins and the GIO modules. Not `--include-data-dir`, which silently drops
-  shared libraries and leaves plugin directories that do nothing;
-* `tools/bundle_deps.py` then asks every bundled plugin what it needs, copies
-  the codec libraries in beside the executable, and on Linux gives the plugins
-  an RPATH back to the top of the bundle.
+* **fontconfig.** PyInstaller looks for GTK's sysconfdir beside the GLib DLL,
+  which is where a GTK built the usual way keeps it; MSYS2 keeps it one level
+  up in `ucrt64/etc`, so its own collection finds nothing and the Windows
+  bundle comes up with *no* fontconfig configuration -- no font directories,
+  no hinting, and `Cannot load default config file` on stderr. The spec
+  carries `etc/fonts` by hand and `bundle.py` points `FONTCONFIG_FILE` at it.
+  Only Windows needs it: macOS renders through CoreText and every Linux
+  desktop has a fontconfig of its own;
+* **the GStreamer registry.** `pyi_rth_gstreamer` puts it *inside* the
+  bundle, which is fine in a downloads folder and wrong once the thing is
+  installed -- nothing writes to `Program Files` or `/opt`, so every start
+  rescans every plugin. `bundle.py` moves it to the config directory.
 
-At run time `proxima/bundle.py` points GTK at all of it -- the loader cache is
-rewritten, since the paths in it belong to the machine the build was made on
--- before anything imports `gi`. It does nothing in a source checkout.
-`proxima --diagnose` prints what a bundle carries and what it is missing.
+`proxima --diagnose` prints what a bundle carries and what it is missing,
+including which of those two variables ended up set.
 
 `packaging/` holds the installer script, the desktop entry, the icon and
 `gst-plugins.txt` -- the list of GStreamer plugins a build carries. Shipping
@@ -273,28 +311,27 @@ reason, and only its hardware-only sibling `vtdec_hw` is demoted by
 **Preferences -> software decoding only**; demoting `vtdec` as well would
 leave that setting with no H.264 at all rather than with a slower path.
 
-Windows, from the MSYS2 UCRT64 tree but *not* from an MSYS2 shell -- Nuitka's
-`gi` plugin trips over its own path handling when `MSYSTEM` is set:
+Windows, from an MSYS2 UCRT64 shell, with PyInstaller from pacman rather than
+pip (`mingw-w64-ucrt-x86_64-pyinstaller`) so that it runs under the same
+interpreter `python-gobject` was built for:
 
-```powershell
-$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
-python -m nuitka --standalone --zig --include-package=proxima proxima.py
+```sh
+python -m PyInstaller packaging/proxima.spec --noconfirm \
+    --distpath build/dist --workpath build/pyinstaller
+./build/dist/proxima/proxima.exe --diagnose
 ```
 
-`--zig` is not optional: Nuitka cannot use MinGW with Python 3.13 or newer,
-and it refuses any gcc it did not download itself. Zig has to be on PATH.
+Linux is the same command again, with `python3` from apt and PyInstaller
+from pip.
 
-If a build starts segfaulting or dies with `init_fs_encoding: failed to get
-the Python codec of the filesystem encoding`, the Zig cache is poisoned --
-a build that is interrupted or fails part-way can leave it that way, and
-every build afterwards inherits it. Nuitka's own `--disable-cache=all` does
-not cover it:
+The build writes into `build/pyinstaller/`, and a run that is interrupted can
+leave a lock behind there that fails the next one with `PermissionError:
+[WinError 5]` on `_pyi_gschema_compilation`. Delete the work directory and
+build again; `--noconfirm` does not cover it.
 
-```powershell
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Nuitka\Nuitka\Cache\zig"
-```
-
-CI never hits this, since every run starts on a clean machine.
+Check `--diagnose` output before trusting a local bundle. `[MISSING]` on any
+required line, or `SPICE session usable: False`, is the same failure CI would
+have caught -- see the smoke test in `build.yml` for what each line means.
 
 ---
 

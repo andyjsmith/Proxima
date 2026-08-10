@@ -49,16 +49,15 @@ def _read_version():
         pass
 
     here = Path(__file__).resolve().parent
-    # sys._MEIPASS is where PyInstaller unpacks the data files it was told to
-    # carry, which is not the directory holding the executable -- inside a
-    # .app it is Contents/Frameworks, while the executable is in
-    # Contents/MacOS. A Nuitka build is the other way round and has no
-    # _MEIPASS, so both are tried.
+    # sys._MEIPASS is where PyInstaller keeps the data files it was told to
+    # carry, which is not the directory holding the executable -- it is
+    # _internal beside it, and inside a .app it is Contents/Frameworks while
+    # the executable is in Contents/MacOS.
     meipass = getattr(sys, "_MEIPASS", None)
     for candidate in (
-        here.parent / "pyproject.toml",  # a source checkout
-        Path(sys.executable).resolve().parent / "pyproject.toml",  # a bundle
+        here.parent / "pyproject.toml",  # a source checkout, or the archive
         Path(meipass) / "pyproject.toml" if meipass else None,
+        Path(sys.executable).resolve().parent / "pyproject.toml",
     ):
         if candidate is None:
             continue

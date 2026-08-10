@@ -1,7 +1,7 @@
 [project]
 name = "proxima"
 version = "0.1.0"
-description = "Add your description here"
+description = "Desktop client for Proxmox VE"
 readme = "README.md"
 authors = [
     { name = "Andy Smith", email = "andy@ajsmith.org" }

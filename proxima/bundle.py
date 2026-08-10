@@ -1,11 +1,17 @@
-"""Point GTK at the copy of itself that a standalone build carries.
+"""The two things a packaged build still has to be told at run time.
 
 A packaged build ships its own GTK: the pixbuf loaders, the GSettings
 schemas, the icon themes, the GStreamer plugins. None of that is reached by
 following imports -- GTK loads it at run time from paths that were compiled
 into the libraries on the machine the build was made on, which on a user's
-computer point at nothing. So the paths are rewritten here, to the bundle,
-before anything imports gi.
+computer point at nothing.
+
+Almost all of that is PyInstaller's job, and it does it: its runtime hooks
+(pyi_rth_gi, _gdkpixbuf, _gio, _glib, _gstreamer, _gtk) set GI_TYPELIB_PATH,
+GDK_PIXBUF_MODULE_FILE, GIO_MODULE_DIR, XDG_DATA_DIRS, GTK_DATA_PREFIX and
+the GST_PLUGIN_* variables before any of our code runs. What is left is what
+they do not cover and what they get wrong on a machine where the bundle is
+not writable -- see apply().
 
 Nothing in here runs from a source checkout: there the system's own GTK is
 already right, and second-guessing it would only break a working desktop.
@@ -21,206 +27,101 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# The pixbuf loader cache names every module it knows about. The paths in it
-# are wherever the loaders were when the cache was generated -- absolute on
-# Debian, relative to the prefix on MSYS2 -- so neither survives being moved
-# into a bundle without rewriting.
-LOADER_SUFFIXES = (".so", ".dll", ".dylib")
-
 
 def is_bundled():
-    """Whether this is a compiled build rather than a source checkout."""
-    return "__compiled__" in globals() or getattr(sys, "frozen", False)
-
-
-def pyinstaller_root():
-    """Where a PyInstaller build put its data, or None if this is not one.
-
-    The macOS bundle is built by PyInstaller rather than Nuitka, and
-    PyInstaller answers this whole module's question for itself: it ships
-    runtime hooks (pyi_rth_gi, _gdkpixbuf, _gio, _glib, _gstreamer) that set
-    GI_TYPELIB_PATH, GDK_PIXBUF_MODULE_FILE, GIO_MODULE_DIR, XDG_DATA_DIRS
-    and the GST_PLUGIN_* variables before any of our code runs, at its own
-    layout (gi_typelibs/, gst_plugins/, gio_modules/) rather than the
-    prefix-shaped one the Nuitka builds keep. So everything below stands
-    aside when this returns a path: setting our own values over the top
-    would point GTK at directories that are not there.
-    """
-    return Path(sys._MEIPASS) if hasattr(sys, "_MEIPASS") else None
+    """Whether this is a packaged build rather than a source checkout."""
+    return getattr(sys, "frozen", False)
 
 
 def bundle_root():
-    """The directory the bundle was unpacked into, or None if not bundled."""
+    """Where the bundle's data went, or None if this is not a bundle.
+
+    PyInstaller's own directory, not the executable's: in a onedir build the
+    data lives under _internal, and inside a .app it is Contents/Frameworks
+    while the executable is in Contents/MacOS.
+    """
     if not is_bundled():
         return None
-    return pyinstaller_root() or Path(sys.executable).resolve().parent
+    return Path(sys._MEIPASS) if hasattr(sys, "_MEIPASS") else None
 
 
 def cache_dir():
-    """Somewhere writable to keep the caches that have to be rewritten."""
+    """Somewhere writable for the caches a bundle has to generate."""
     from .config import config_dir
 
     return config_dir() / "bundle"
 
 
-def rewrite_loader_cache(text, loaders_dir):
-    """Re-point every module path in a pixbuf loaders.cache at the bundle.
+def _fontconfig_env(root):
+    """Where the bundle's fonts.conf is, if it carries one.
 
-    Only the quoted module paths are touched. Everything else -- the
-    comments, and the mime types and extensions that follow each module --
-    is left exactly as it was.
+    The one thing no PyInstaller runtime hook does. Fontconfig on Windows
+    looks for its configuration beside the DLL that loaded it, which in a
+    bundle is nothing; without this it reports "Cannot load default config
+    file", ends up with no font directories at all, and the FreeType backend
+    theme/fonts.py deliberately asks for has nothing to draw with. Only
+    Windows carries it -- macOS renders through CoreText and every Linux
+    desktop has a fontconfig of its own.
     """
-    lines = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if (
-            len(stripped) > 2
-            and stripped.startswith('"')
-            and stripped.endswith('"')
-            and stripped[1:-1].lower().endswith(LOADER_SUFFIXES)
-        ):
-            name = stripped[1:-1].replace("\\\\", "/").replace("\\", "/")
-            name = name.rsplit("/", 1)[-1]
-            target = Path(loaders_dir) / name
-            # A loader named in the cache but missing from the bundle is
-            # left alone rather than pointed at a file that is not there.
-            if target.exists():
-                escaped = str(target).replace("\\", "\\\\")
-                lines.append(f'"{escaped}"')
-                continue
-        lines.append(line)
-    return "\n".join(lines) + "\n"
-
-
-def _cached_copy(name, text):
-    """Write text to the cache dir, and return the path.
-
-    Written only when it has changed, so a read-only or slow home directory
-    is touched once rather than on every start.
-    """
-    path = cache_dir() / name
-    try:
-        if path.exists() and path.read_text(encoding="utf-8") == text:
-            return path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-    except OSError as exc:
-        log.warning("could not write %s: %s", path, exc)
-        return None
-    return path
-
-
-def _first_existing(*paths):
-    for path in paths:
-        if path is not None and path.exists():
-            return path
-    return None
-
-
-def _pixbuf_env(root):
-    loaders = _first_existing(*root.glob("lib/gdk-pixbuf-2.0/*/loaders"))
-    if loaders is None:
-        return {}
-    env = {"GDK_PIXBUF_MODULEDIR": str(loaders)}
-    cache = loaders.parent / "loaders.cache"
-    if cache.exists():
-        try:
-            rewritten = rewrite_loader_cache(
-                cache.read_text(encoding="utf-8", errors="replace"), loaders
-            )
-        except OSError:
-            return env
-        path = _cached_copy("loaders.cache", rewritten)
-        if path is not None:
-            env["GDK_PIXBUF_MODULE_FILE"] = str(path)
-    return env
-
-
-def _gstreamer_env(root):
-    plugins = root / "lib" / "gstreamer-1.0"
-    if not plugins.is_dir():
-        return {}
-    env = {
-        "GST_PLUGIN_SYSTEM_PATH": str(plugins),
-        "GST_PLUGIN_PATH": str(plugins),
-        # The registry indexes the bundled plugins by path, so it cannot be
-        # shared with a system GStreamer's.
-        "GST_REGISTRY": str(cache_dir() / "gst-registry.bin"),
-    }
-    scanner = _first_existing(
-        plugins / "gst-plugin-scanner.exe",
-        plugins / "gst-plugin-scanner",
-        root / "libexec" / "gstreamer-1.0" / "gst-plugin-scanner",
-    )
-    if scanner is not None:
-        env["GST_PLUGIN_SCANNER"] = str(scanner)
-    return env
-
-
-def _glib_env(root):
-    env = {}
-    schemas = root / "share" / "glib-2.0" / "schemas"
-    if (schemas / "gschemas.compiled").exists():
-        env["GSETTINGS_SCHEMA_DIR"] = str(schemas)
-    modules = root / "lib" / "gio" / "modules"
-    if modules.is_dir():
-        env["GIO_MODULE_DIR"] = str(modules)
-    return env
-
-
-def _gtk_env(root):
-    env = {}
-    if (root / "share" / "icons").is_dir():
-        env["GTK_DATA_PREFIX"] = str(root)
-        env["GTK_EXE_PREFIX"] = str(root)
     fonts = root / "etc" / "fonts"
-    if (fonts / "fonts.conf").exists():
-        env["FONTCONFIG_PATH"] = str(fonts)
-        env["FONTCONFIG_FILE"] = str(fonts / "fonts.conf")
-    return env
+    if not (fonts / "fonts.conf").exists():
+        return {}
+    return {
+        "FONTCONFIG_PATH": str(fonts),
+        "FONTCONFIG_FILE": str(fonts / "fonts.conf"),
+    }
 
 
-def _data_dirs(root):
-    """The bundle's share/ goes in front of the system's, never instead.
+def _gst_registry(root):
+    """Where GStreamer may write its plugin index, or None to leave it alone.
 
-    A desktop's own icon theme and mime database are still worth having;
-    they are simply not allowed to be the only ones, or a machine without
-    them shows a window full of missing icons.
+    pyi_rth_gstreamer puts it inside the bundle, which is fine while the
+    bundle is a directory in a downloads folder and wrong the moment it is
+    installed: nothing writes to Program Files or /opt, so the registry is
+    rebuilt by scanning every plugin on every single start. Moved to the
+    config directory, which is writable by definition.
+
+    Left alone if it already points somewhere outside the bundle: that is
+    either a deliberate override or a platform whose hook did not set it.
     """
-    share = root / "share"
-    if not share.is_dir():
-        return None
-    existing = os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
-    if str(share) in existing.split(os.pathsep):
-        return None
-    return str(share) + os.pathsep + existing
+    current = os.environ.get("GST_REGISTRY")
+    if current:
+        try:
+            inside = Path(current).resolve().is_relative_to(root.resolve())
+        except (OSError, ValueError):  # pragma: no cover - unreadable path
+            return None
+        if not inside:
+            return None
+    return str(cache_dir() / "gst-registry.bin")
 
 
 def apply(root=None):
     """Put the bundle's paths into the environment. Returns what it set.
 
     Values already in the environment win: someone debugging a build with
-    GST_PLUGIN_PATH pointing somewhere else means it.
+    FONTCONFIG_FILE pointing somewhere else means it. GST_REGISTRY is the
+    exception, because PyInstaller has already set that one itself.
     """
     root = root or bundle_root()
-    if root is None or pyinstaller_root() is not None:
+    if root is None:
         return {}
 
-    wanted = {}
-    for part in (_pixbuf_env, _gstreamer_env, _glib_env, _gtk_env):
-        wanted.update(part(root))
-
     applied = {}
-    for name, value in wanted.items():
+    for name, value in _fontconfig_env(root).items():
         if os.environ.get(name):
             continue
         os.environ[name] = value
         applied[name] = value
 
-    data_dirs = _data_dirs(root)
-    if data_dirs is not None:
-        os.environ["XDG_DATA_DIRS"] = data_dirs
-        applied["XDG_DATA_DIRS"] = data_dirs
+    registry = _gst_registry(root)
+    if registry is not None:
+        try:
+            Path(registry).parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:  # a read-only home is not worth failing over
+            log.warning("could not create %s: %s", Path(registry).parent, exc)
+        else:
+            os.environ["GST_REGISTRY"] = registry
+            applied["GST_REGISTRY"] = registry
     return applied
 
 
@@ -232,31 +133,19 @@ def report(root=None):
         lines.append("running from a source checkout; using the system GTK")
         return lines
     lines.append(f"  root: {root}")
-    # Required means the program is broken without it. The optional two are
-    # supplied by any Linux desktop, so they are only bundled on Windows.
-    #
-    # PyInstaller lays the same things out its own way, so which paths are
-    # even worth looking for depends on who built the bundle.
-    if pyinstaller_root() is not None:
-        lines.append("  built by PyInstaller; its own runtime hooks set the paths")
-        contents = (
-            ("typelibs", "gi_typelibs", True),
-            ("pixbuf loaders", "lib/gdk-pixbuf", True),
-            ("gstreamer plugins", "gst_plugins", True),
-            ("gsettings schemas", "share/glib-2.0/schemas", True),
-            ("icon themes", "share/icons", True),
-            ("gio modules", "gio_modules", False),
-            ("fontconfig", "share/fontconfig", False),
-        )
-    else:
-        contents = (
-            ("pixbuf loaders", "lib/gdk-pixbuf-2.0", True),
-            ("gstreamer plugins", "lib/gstreamer-1.0", True),
-            ("gsettings schemas", "share/glib-2.0/schemas", True),
-            ("icon themes", "share/icons", True),
-            ("gio modules", "lib/gio/modules", False),
-            ("fontconfig", "etc/fonts", False),
-        )
+    # Required means the program is broken without it. The layout is
+    # PyInstaller's, not a prefix-shaped one: typelibs, GStreamer plugins and
+    # GIO modules each land in a directory of its own naming.
+    contents = (
+        ("typelibs", "gi_typelibs", True),
+        ("pixbuf loaders", "lib/gdk-pixbuf", True),
+        ("gstreamer plugins", "gst_plugins", True),
+        ("gsettings schemas", "share/glib-2.0/schemas", True),
+        ("icon themes", "share/icons", True),
+        ("gio modules", "gio_modules", False),
+        # Windows only, and required there: see _fontconfig_env.
+        ("fontconfig", "etc/fonts", sys.platform == "win32"),
+    )
     for name, path, required in contents:
         if (root / path).exists():
             state = "ok"
@@ -269,6 +158,7 @@ def report(root=None):
             "GI_TYPELIB_PATH",
             "GST_PLUGIN_PATH",
             "GST_PLUGIN_SYSTEM_PATH",
+            "GST_REGISTRY",
             "GSETTINGS_SCHEMA_DIR",
             "GIO_MODULE_DIR",
             "FONTCONFIG_PATH",

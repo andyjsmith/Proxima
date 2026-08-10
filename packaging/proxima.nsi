@@ -5,9 +5,9 @@
 ; keeps the two apart: it points SHCTX, $INSTDIR and the uninstall registry
 ; entries at the right hive for whichever was chosen.
 ;
-; Built from a finished Nuitka bundle, not from source:
+; Built from a finished PyInstaller bundle, not from source:
 ;
-;   makensis -DVERSION=1.2.3 -DDIST=../build/proxima.dist \
+;   makensis -DVERSION=1.2.3 -DDIST=../build/dist/proxima \
 ;            -DOUTFILE=proxima-1.2.3-windows-x86_64-setup.exe packaging/proxima.nsi
 ;
 ; Optionally carries the UsbDk driver, which SPICE USB redirection needs on
@@ -25,7 +25,7 @@ Unicode true
   !define VERSION "0.0.0"
 !endif
 !ifndef DIST
-  !define DIST "..\build\proxima.dist"
+  !define DIST "..\build\dist\proxima"
 !endif
 !ifndef OUTFILE
   !define OUTFILE "proxima-setup.exe"

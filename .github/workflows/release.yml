@@ -126,8 +126,8 @@ jobs:
           tar -C work/linux -xzf proxima-linux-x86_64-dist.tar.gz
           tar -C work/windows -xzf proxima-windows-x86_64-dist.tar.gz
           tar -C work/macos -xzf proxima-macos-arm64-app.tar.gz
-          test -x work/linux/proxima.dist/proxima
-          test -f work/windows/proxima.dist/proxima.exe
+          test -x work/linux/proxima/proxima
+          test -f work/windows/proxima/proxima.exe
           test -x work/macos/Proxima.app/Contents/MacOS/proxima
           mkdir -p out
 
@@ -137,7 +137,7 @@ jobs:
         # bit, so an unzipped bundle will not start until it is chmod'ed.
         run: |
           set -euo pipefail
-          cp -a work/linux/proxima.dist "work/proxima-${VERSION}"
+          cp -a work/linux/proxima "work/proxima-${VERSION}"
           tar -C work -czf "out/proxima-${VERSION}-linux-x86_64.tar.gz" \
             "proxima-${VERSION}"
 
@@ -149,7 +149,7 @@ jobs:
           mkdir -p "$appdir/usr/lib/proxima" \
                    "$appdir/usr/share/applications" \
                    "$appdir/usr/share/icons/hicolor/256x256/apps"
-          cp -a work/linux/proxima.dist/. "$appdir/usr/lib/proxima/"
+          cp -a work/linux/proxima/. "$appdir/usr/lib/proxima/"
           install -m 755 packaging/AppRun "$appdir/AppRun"
           install -m 644 packaging/proxima.desktop "$appdir/proxima.desktop"
           cp "$appdir/proxima.desktop" "$appdir/usr/share/applications/"
@@ -176,7 +176,7 @@ jobs:
                    "$root/usr/bin" \
                    "$root/usr/share/applications" \
                    "$root/usr/share/icons/hicolor/256x256/apps"
-          cp -a work/linux/proxima.dist/. "$root/opt/proxima/"
+          cp -a work/linux/proxima/. "$root/opt/proxima/"
           ln -sf /opt/proxima/proxima "$root/usr/bin/proxima"
           install -m 644 packaging/proxima.desktop \
             "$root/usr/share/applications/proxima.desktop"
@@ -206,7 +206,7 @@ jobs:
       - name: Windows archive
         run: |
           set -euo pipefail
-          (cd work/windows/proxima.dist && zip -qr9 \
+          (cd work/windows/proxima && zip -qr9 \
             "${GITHUB_WORKSPACE}/out/proxima-${VERSION}-windows-x86_64.zip" .)
 
       - name: Fetch the UsbDk driver
@@ -231,7 +231,7 @@ jobs:
           set -euo pipefail
           args=(
             "-DVERSION=${VERSION}"
-            "-DDIST=${GITHUB_WORKSPACE}/work/windows/proxima.dist"
+            "-DDIST=${GITHUB_WORKSPACE}/work/windows/proxima"
             "-DOUTFILE=${GITHUB_WORKSPACE}/out/proxima-${VERSION}-windows-x86_64-setup.exe"
           )
           if [ -f "work/usbdk/UsbDk_x64.msi" ]; then

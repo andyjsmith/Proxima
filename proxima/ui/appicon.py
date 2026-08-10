@@ -18,21 +18,29 @@ from gi.repository import Gtk
 log = logging.getLogger(__name__)
 
 ICON_NAME = "proxima.png"
+ICON_IN_THEME = Path("share/icons/hicolor/256x256/apps") / ICON_NAME
 
 
 def icon_file():
     """Wherever this copy's icon is, or None if it has none."""
     here = Path(__file__).resolve().parent
     executable = Path(sys.executable).resolve().parent
+    # A bundle's data files are not beside its executable: PyInstaller puts
+    # them under _internal on Windows and Linux, and inside Contents/
+    # Frameworks in a .app, while the executable is one directory up or over.
+    meipass = getattr(sys, "_MEIPASS", None)
     for candidate in (
         # A source checkout: the icon lives with the packaging assets.
         here.parent.parent / "packaging" / ICON_NAME,
         # A bundle: installed into the icon theme it carries.
-        executable / "share" / "icons" / "hicolor" / "256x256" / "apps" / ICON_NAME,
+        Path(meipass) / ICON_IN_THEME if meipass else None,
+        executable / ICON_IN_THEME,
         executable / ICON_NAME,
         # An installed copy on Linux.
         Path("/usr/share/icons/hicolor/256x256/apps") / ICON_NAME,
     ):
+        if candidate is None:
+            continue
         if candidate.is_file():
             return candidate
     return None

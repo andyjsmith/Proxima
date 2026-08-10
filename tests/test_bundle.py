@@ -1,72 +1,31 @@
-"""The runtime fix-ups a packaged build needs.
+"""The runtime fix-ups a packaged build still needs.
 
 None of this runs from a source checkout, so the tests drive it directly
-against a fake bundle rather than waiting for a build.
+against a fake bundle rather than waiting for a build. PyInstaller's own
+runtime hooks do nearly all of the work; what is left here is the two things
+they do not cover, so those are what is tested.
 """
 
 import os
+import sys
 
 import pytest
 
 from proxima import bundle
 
-# The two shapes that turn up in the wild: Debian writes absolute paths into
-# the loader cache, MSYS2 writes them relative to its prefix. Neither
-# survives being copied into a bundle.
-DEBIAN_CACHE = """\
-# GdkPixbuf Image Loader Modules file
-# Automatically generated file, do not edit
-#
-# LoaderDir = /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders
-#
-"/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders/libpixbufloader-png.so"
-"png" 5 "gdk-pixbuf" "PNG" "LGPL"
-"image/png" ""
-"png" ""
-"""
-
-MSYS2_CACHE = """\
-# GdkPixbuf Image Loader Modules file
-#
-"lib\\\\gdk-pixbuf-2.0\\\\2.10.0\\\\loaders\\\\libpixbufloader-png.dll"
-"png" 5 "gdk-pixbuf" "PNG" "LGPL"
-"image/png" ""
-"""
-
 
 @pytest.fixture
-def loaders(tmp_path):
-    directory = tmp_path / "lib" / "gdk-pixbuf-2.0" / "2.10.0" / "loaders"
-    directory.mkdir(parents=True)
-    (directory / "libpixbufloader-png.so").write_bytes(b"")
-    (directory / "libpixbufloader-png.dll").write_bytes(b"")
-    return directory
-
-
-@pytest.mark.parametrize("cache", [DEBIAN_CACHE, MSYS2_CACHE], ids=["debian", "msys2"])
-def test_the_loader_path_is_repointed_at_the_bundle(loaders, cache):
-    rewritten = bundle.rewrite_loader_cache(cache, loaders)
-    module_line = next(
-        line
-        for line in rewritten.splitlines()
-        if "libpixbufloader-png" in line and line.startswith('"')
-    )
-    assert str(loaders).replace("\\", "\\\\") in module_line
-
-
-def test_everything_that_is_not_a_module_path_is_left_alone(loaders):
-    rewritten = bundle.rewrite_loader_cache(DEBIAN_CACHE, loaders)
-    assert '"png" 5 "gdk-pixbuf" "PNG" "LGPL"' in rewritten
-    assert '"image/png" ""' in rewritten
-    assert rewritten.startswith("# GdkPixbuf Image Loader Modules file")
-
-
-def test_a_loader_missing_from_the_bundle_is_not_invented(loaders):
-    cache = DEBIAN_CACHE.replace("libpixbufloader-png.so", "libpixbufloader-tiff.so")
-    rewritten = bundle.rewrite_loader_cache(cache, loaders)
-    # Pointing at a file that is not there would turn a missing format into a
-    # loader that fails at run time.
-    assert str(loaders) not in rewritten
+def fake_bundle(tmp_path, monkeypatch):
+    """A bundle laid out the way PyInstaller lays one out."""
+    root = tmp_path / "_internal"
+    fonts = root / "etc" / "fonts"
+    fonts.mkdir(parents=True)
+    (fonts / "fonts.conf").write_text("<fontconfig/>", encoding="utf-8")
+    (root / "share" / "icons").mkdir(parents=True)
+    monkeypatch.setenv("PROXIMA_CONFIG_DIR", str(tmp_path / "config"))
+    for name in ("FONTCONFIG_PATH", "FONTCONFIG_FILE", "GST_REGISTRY"):
+        monkeypatch.delenv(name, raising=False)
+    return root
 
 
 def test_a_source_checkout_is_left_completely_alone(monkeypatch):
@@ -76,69 +35,71 @@ def test_a_source_checkout_is_left_completely_alone(monkeypatch):
     assert dict(os.environ) == before
 
 
-def build_fake_bundle(root):
-    (root / "lib" / "gdk-pixbuf-2.0" / "2.10.0" / "loaders").mkdir(parents=True)
-    (root / "lib" / "gdk-pixbuf-2.0" / "2.10.0" / "loaders.cache").write_text(
-        DEBIAN_CACHE, encoding="utf-8"
-    )
-    (root / "lib" / "gstreamer-1.0").mkdir(parents=True)
-    (root / "lib" / "gio" / "modules").mkdir(parents=True)
-    schemas = root / "share" / "glib-2.0" / "schemas"
-    schemas.mkdir(parents=True)
-    (schemas / "gschemas.compiled").write_bytes(b"")
-    (root / "share" / "icons").mkdir(parents=True)
-    return root
+def test_fontconfig_is_pointed_at_the_bundles_own_configuration(fake_bundle):
+    applied = bundle.apply(fake_bundle)
+
+    fonts = fake_bundle / "etc" / "fonts"
+    assert applied["FONTCONFIG_PATH"] == str(fonts)
+    assert applied["FONTCONFIG_FILE"] == str(fonts / "fonts.conf")
 
 
-def test_a_bundle_points_gtk_at_its_own_data(tmp_path, monkeypatch):
-    root = build_fake_bundle(tmp_path / "dist")
-    monkeypatch.setenv("PROXIMA_CONFIG_DIR", str(tmp_path / "config"))
-    for name in (
-        "GDK_PIXBUF_MODULE_FILE",
-        "GDK_PIXBUF_MODULEDIR",
-        "GST_PLUGIN_SYSTEM_PATH",
-        "GSETTINGS_SCHEMA_DIR",
-        "GIO_MODULE_DIR",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("XDG_DATA_DIRS", "/usr/share")
+def test_a_bundle_without_fontconfig_invents_nothing(fake_bundle):
+    (fake_bundle / "etc" / "fonts" / "fonts.conf").unlink()
 
-    applied = bundle.apply(root)
+    applied = bundle.apply(fake_bundle)
 
-    assert applied["GDK_PIXBUF_MODULEDIR"].startswith(str(root))
-    assert applied["GST_PLUGIN_SYSTEM_PATH"] == str(root / "lib" / "gstreamer-1.0")
-    assert applied["GSETTINGS_SCHEMA_DIR"].startswith(str(root))
-    assert applied["GIO_MODULE_DIR"].startswith(str(root))
-    # The rewritten cache is written somewhere writable, not into the bundle,
-    # which may sit in Program Files.
-    assert applied["GDK_PIXBUF_MODULE_FILE"].startswith(str(tmp_path / "config"))
-    # The desktop's own icons and mime types are kept, just not trusted to be
-    # the only ones.
-    assert applied["XDG_DATA_DIRS"].split(os.pathsep) == [
-        str(root / "share"),
-        "/usr/share",
-    ]
+    assert "FONTCONFIG_FILE" not in applied
 
 
-def test_an_explicit_setting_in_the_environment_wins(tmp_path, monkeypatch):
-    root = build_fake_bundle(tmp_path / "dist")
-    monkeypatch.setenv("PROXIMA_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("GST_PLUGIN_SYSTEM_PATH", "/somewhere/else")
+def test_an_explicit_setting_in_the_environment_wins(fake_bundle, monkeypatch):
+    monkeypatch.setenv("FONTCONFIG_FILE", "/somewhere/else/fonts.conf")
 
-    applied = bundle.apply(root)
+    applied = bundle.apply(fake_bundle)
 
-    assert "GST_PLUGIN_SYSTEM_PATH" not in applied
-    assert os.environ["GST_PLUGIN_SYSTEM_PATH"] == "/somewhere/else"
+    assert "FONTCONFIG_FILE" not in applied
+    assert os.environ["FONTCONFIG_FILE"] == "/somewhere/else/fonts.conf"
+
+
+def test_the_gstreamer_registry_is_moved_out_of_the_bundle(fake_bundle, monkeypatch):
+    """PyInstaller puts it inside the bundle, which may be in Program Files.
+
+    Left there, an installed copy cannot write it and rescans every plugin on
+    every start.
+    """
+    monkeypatch.setenv("GST_REGISTRY", str(fake_bundle / "registry.bin"))
+
+    applied = bundle.apply(fake_bundle)
+
+    assert applied["GST_REGISTRY"] == os.environ["GST_REGISTRY"]
+    assert applied["GST_REGISTRY"].startswith(str(fake_bundle.parent / "config"))
+    # And somewhere that exists, or GStreamer simply fails to write it.
+    assert os.path.isdir(os.path.dirname(applied["GST_REGISTRY"]))
+
+
+def test_a_registry_pointed_outside_the_bundle_is_left_alone(fake_bundle, monkeypatch):
+    """A deliberate override, or a platform whose hook did not set one."""
+    monkeypatch.setenv("GST_REGISTRY", str(fake_bundle.parent / "mine.bin"))
+
+    applied = bundle.apply(fake_bundle)
+
+    assert "GST_REGISTRY" not in applied
+    assert os.environ["GST_REGISTRY"] == str(fake_bundle.parent / "mine.bin")
 
 
 def test_the_report_names_what_is_missing(tmp_path):
-    root = tmp_path / "dist"
+    root = tmp_path / "_internal"
     (root / "share" / "icons").mkdir(parents=True)
     text = "\n".join(bundle.report(root))
     assert "[MISSING] pixbuf loaders" in text
     assert "[ok] icon themes" in text
-    # Absent on Linux by design, so it must not read as a broken build.
-    assert "[not bundled] fontconfig" in text
+    # Supplied by every desktop on Linux, so it must not read as a broken
+    # build there -- and it is the whole of font rendering on Windows.
+    expected = (
+        "[MISSING] fontconfig"
+        if sys.platform == "win32"
+        else "[not bundled] fontconfig"
+    )
+    assert expected in text
 
 
 # -- the version the bundle reports --------------------------------------
@@ -147,9 +108,9 @@ def test_the_report_names_what_is_missing(tmp_path):
 def test_the_version_is_read_out_of_pyproject():
     """A checkout reports the version pyproject carries, not the fallback.
 
-    The bundle carries pyproject.toml beside the executable for exactly this
-    read, so a build whose version came back "0.0.0+unknown" would be a
-    release that cannot say what it is.
+    The bundle carries pyproject.toml for exactly this read, so a build whose
+    version came back "0.0.0+unknown" would be a release that cannot say what
+    it is.
     """
     import pathlib
 
@@ -161,11 +122,7 @@ def test_the_version_is_read_out_of_pyproject():
 
 
 def test_only_the_project_table_supplies_the_version():
-    """No TOML parser is involved, so the table has to be tracked by hand.
-
-    tomllib is 3.11 and newer; the Linux bundle is compiled on an older
-    interpreter than that, and importing it there is what broke the build.
-    """
+    """No TOML parser is involved, so the table has to be tracked by hand."""
     from proxima import _version_in
 
     assert (
