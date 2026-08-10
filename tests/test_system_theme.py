@@ -57,22 +57,38 @@ def test_the_system_theme_removes_the_stylesheet(restore_theme):
     assert theme.system_theme_active() is True
 
 
-def test_the_pinned_theme_is_given_back_not_merely_left_alone(restore_theme):
-    """The desktop's own theme name has to be restored.
+def test_the_pinned_theme_is_given_back_not_merely_left_alone(
+    restore_theme, monkeypatch
+):
+    """The desktop's own theme name has to be put back, not just stopped.
 
-    Ours is set on every apply(), so by the time anyone asks for the
-    original it has already gone -- which is why it is captured up front
-    rather than read on demand.
+    The captured name is seeded with something that is nobody's real theme,
+    and that is the point of the test rather than an implementation detail
+    to tidy away. Read the current setting instead and the assertion is
+    vacuous wherever the desktop's own theme happens to be Adwaita -- which
+    it is on macOS and on a bare CI runner -- because "restored" and "never
+    touched" are then the same string. This failed on a GNOME runner
+    (Yaru), passed everywhere else, and was passing for the wrong reason
+    when it passed.
+
+    Captured up front rather than read on demand because ours is set on
+    every apply(): by the time anyone could ask, the real answer has gone.
     """
     settings = Gtk.Settings.get_default()
-    original = settings.get_property("gtk-theme-name")
 
+    # Applied once first, so the capture has certainly happened and the
+    # seeding below replaces a real entry rather than inventing the dict.
     theme.apply(make_config(use_system_theme=False))
     pump(0.2)
+    assert settings.get_property("gtk-theme-name") == theme.THEME_NAME
+
+    desktop_theme = "ProximaTestDesktopTheme"
+    monkeypatch.setitem(theme._original, "gtk-theme-name", desktop_theme)
+
     theme.apply(make_config(use_system_theme=True))
     pump(0.2)
 
-    assert settings.get_property("gtk-theme-name") == original
+    assert settings.get_property("gtk-theme-name") == desktop_theme
 
 
 def test_font_options_are_handed_back(restore_theme, screen):
@@ -136,10 +152,16 @@ def test_the_pango_backend_is_left_alone(monkeypatch):
     and never looks again -- so unlike everything else here this cannot be
     handed back later. It has to not be set in the first place.
     """
-    monkeypatch.delenv("PANGOCAIRO_BACKEND", raising=False)
-    apply_environment(make_config(use_system_theme=True, font_backend="fontconfig"))
     import os
 
+    # setenv before delenv, deliberately: monkeypatch only records a name it
+    # actually removed, so delenv alone on a variable that was not set leaves
+    # nothing to undo -- and the second half of this test then sets it for
+    # real and leaks it into every test that follows on this worker.
+    monkeypatch.setenv("PANGOCAIRO_BACKEND", "recorded-for-undo")
+    monkeypatch.delenv("PANGOCAIRO_BACKEND")
+
+    apply_environment(make_config(use_system_theme=True, font_backend="fontconfig"))
     assert "PANGOCAIRO_BACKEND" not in os.environ
 
     apply_environment(make_config(use_system_theme=False, font_backend="fontconfig"))
