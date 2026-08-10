@@ -511,6 +511,32 @@ class SerialConsole(Gtk.Box):
             background = SELECTION_BG
         return foreground, background
 
+    def _text_layout(self, widget):
+        """A layout that draws text the same size the cell grid was measured at.
+
+        Deliberately the widget's own PangoContext, and deliberately not
+        PangoCairo.create_layout(cr), which builds a fresh context from the
+        cairo target. That context carries no resolution, so Pango falls
+        back to its own default of 96 dpi -- while _measure_font sizes every
+        cell from the widget's context, which GTK sets from the screen.
+
+        Those two numbers happen to be the same on Linux and Windows, which
+        is why drawing through the wrong context worked for years. They are
+        not the same on macOS: GTK's quartz backend reports 72 dpi, the
+        points-per-inch the platform has used since the first Mac, so
+        `monospace 12` measured 7px per cell and drew 10px per character.
+        Every glyph then sat a little further right than the cell it
+        belonged to -- half a screen out by column 40, with the cursor and
+        the selection, which are drawn on the grid, left behind.
+
+        Using the widget's context fixes a quieter one too: the font options
+        the preferences push into widget contexts (antialiasing, hinting)
+        never reached a layout built from the cairo target.
+        """
+        layout = Pango.Layout(widget.get_pango_context())
+        layout.set_font_description(self.font)
+        return layout
+
     def _on_draw(self, widget, context):
         if self._closed:
             return False
@@ -520,8 +546,7 @@ class SerialConsole(Gtk.Box):
 
         screen = self.terminal.screen
         lines = screen.display(self._scroll_offset)
-        layout = PangoCairo.create_layout(context)
-        layout.set_font_description(self.font)
+        layout = self._text_layout(widget)
         selection = self._selection_span()
 
         for row, line in enumerate(lines):

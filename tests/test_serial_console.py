@@ -9,10 +9,15 @@ import queue
 import threading
 
 import pytest
-from gi.repository import Gdk, Gtk
+from gi.repository import Gdk, Gtk, Pango
 
 from proxima.console import serial as serial_mod
-from proxima.console.serial import SerialConsole
+from proxima.console.serial import (
+    DEFAULT_FONT_SIZE,
+    MAX_FONT_SIZE,
+    MIN_FONT_SIZE,
+    SerialConsole,
+)
 from proxima.console.termproxy import TermProxyClient, TermProxyError
 
 from .conftest import pump, pump_until
@@ -230,6 +235,34 @@ def test_the_font_size_can_be_changed_and_is_reported(console):
     pump(0.2)
     assert sizes == [console._font_size]
     assert console._cell_height > before, "a bigger font did not make a bigger cell"
+
+
+def test_text_is_drawn_at_exactly_the_width_of_the_cells_it_sits_in(console):
+    """The grid and the glyphs have to come from one set of metrics.
+
+    Everything on this widget except the text -- the cursor, the selection,
+    the background of a coloured run -- is drawn at `column * cell_width`.
+    So a font drawn at any other advance walks away from the grid, a
+    fraction of a cell per column, and the cursor ends up under the wrong
+    character.
+
+    That is what a layout from PangoCairo.create_layout(cr) did: it carries
+    no resolution, so Pango used its default 96 dpi, while the cells were
+    measured from the widget's context -- 96 dpi on Linux and Windows, and
+    72 on macOS, where `monospace 12` measured 7px and drew 10px.
+    """
+    layout = console._text_layout(console.area)
+    for size in (MIN_FONT_SIZE, DEFAULT_FONT_SIZE, MAX_FONT_SIZE):
+        console.set_font_size(size)
+        layout = console._text_layout(console.area)
+        columns = 80
+        layout.set_text("M" * columns, -1)
+        drawn = layout.get_size()[0] / Pango.SCALE
+        assert drawn == pytest.approx(columns * console._cell_width, abs=1.0), (
+            f"at font size {size}, {columns} characters are drawn "
+            f"{drawn:.1f}px wide but occupy {columns * console._cell_width}px "
+            "of cells"
+        )
 
 
 def test_a_screenshot_of_a_terminal_is_a_picture_of_the_text(console, tmp_path):

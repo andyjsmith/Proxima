@@ -200,13 +200,27 @@ class TimeSeriesGraph(Gtk.DrawingArea):
         text = (colour.red, colour.green, colour.blue)
         return text, colour.alpha
 
+    def _label_layout(self, description):
+        """A layout at the same scale as the rest of the window.
+
+        The widget's own PangoContext rather than one built from the cairo
+        target: a target context carries no resolution, so Pango uses its
+        own default of 96 dpi regardless of what the screen says. GTK's
+        quartz backend says 72, so on macOS every label here came out a
+        third larger than "Sans 8" -- overlapping its neighbours and
+        crowding the plot. See _text_layout in console/serial.py, where the
+        same mistake was doing something far more visible.
+        """
+        layout = Pango.Layout(self.get_pango_context())
+        layout.set_font_description(Pango.FontDescription(description))
+        return layout
+
     def _on_draw(self, _widget, context):
         allocation = self.get_allocation()
         width, height = allocation.width, allocation.height
         text, alpha = self._colours()
 
-        layout = PangoCairo.create_layout(context)
-        layout.set_font_description(Pango.FontDescription("Sans 8"))
+        layout = self._label_layout("Sans 8")
 
         plot_x = PAD_LEFT
         plot_y = PAD_TOP
@@ -214,8 +228,7 @@ class TimeSeriesGraph(Gtk.DrawingArea):
         plot_h = max(1, height - PAD_TOP - PAD_BOTTOM)
 
         if self.title:
-            title_layout = PangoCairo.create_layout(context)
-            title_layout.set_font_description(Pango.FontDescription("Sans Bold 8"))
+            title_layout = self._label_layout("Sans Bold 8")
             title_layout.set_text(self.title, -1)
             context.set_source_rgba(*text, alpha * 0.85)
             context.move_to(PAD_LEFT, 2)
