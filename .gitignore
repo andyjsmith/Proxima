@@ -31,6 +31,8 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...except ours, which is hand-written and is the macOS build.
+!packaging/proxima.spec
 
 # Installer logs
 pip-log.txt
@@ -226,3 +228,5 @@ __marimo__/
 nuitka-crash-report.xml
 
 .vscode/
+
+.DS_Store

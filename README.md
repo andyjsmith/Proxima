@@ -28,10 +28,12 @@ page](https://github.com/andyjsmith/proxima/releases/latest). Everything is
 self-contained: GTK, SPICE, GStreamer and Python are inside the package, so
 there is nothing else to install.
 
-Both platforms are 64-bit x86 (`x86_64`/`amd64`). There is no 32-bit or ARM
-build, and no macOS build. The Linux packages are built on Ubuntu 22.04, so
-they need its glibc (2.35) or newer -- which covers every current
-distribution.
+Windows and Linux are 64-bit x86 (`x86_64`/`amd64`) and macOS is Apple
+silicon (`arm64`); there is no 32-bit build, and no Intel Mac build --
+Homebrew, which the macOS package is built from, publishes no
+cross-compiled bottles, so an Intel bundle has to be built on an Intel Mac.
+The Linux packages are built on Ubuntu 22.04, so they need its glibc (2.35)
+or newer -- which covers every current distribution.
 
 ### Windows
 
@@ -61,6 +63,17 @@ leaves the driver alone, since virt-viewer and friends use the same one.
 The deb and rpm install to `/opt/proxima`, put `proxima` on your `PATH` and
 add a desktop entry. The AppImage and the tarball leave nothing behind and
 need no root.
+
+### macOS
+
+| File | |
+| --- | --- |
+| `proxima-<version>-macos-arm64.tar.gz` | Unpack it and drag `Proxima.app` to Applications. A tarball rather than a zip, because zip keeps neither the symlinks nor the executable bits an app bundle is made of. |
+
+Apple silicon only, and not notarized: the app carries an ad-hoc signature,
+which is enough to run but not enough for Gatekeeper. The first open is
+refused, and **System Settings -> Privacy & Security** then offers an **Open
+Anyway** button for it. That is once per download.
 
 ### Checking what you downloaded
 

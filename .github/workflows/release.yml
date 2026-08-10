@@ -115,15 +115,20 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: dist-windows
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist-macos
 
       - name: Unpack the bundles
         run: |
           set -euo pipefail
-          mkdir -p work/linux work/windows
+          mkdir -p work/linux work/windows work/macos
           tar -C work/linux -xzf proxima-linux-x86_64-dist.tar.gz
           tar -C work/windows -xzf proxima-windows-x86_64-dist.tar.gz
+          tar -C work/macos -xzf proxima-macos-arm64-app.tar.gz
           test -x work/linux/proxima.dist/proxima
           test -f work/windows/proxima.dist/proxima.exe
+          test -x work/macos/Proxima.app/Contents/MacOS/proxima
           mkdir -p out
 
       # -- Linux: archive ------------------------------------------------
@@ -236,6 +241,22 @@ jobs:
             echo "::warning::UsbDk was not fetched; the installer will not offer it"
           fi
           makensis "${args[@]}" packaging/proxima.nsi
+
+      # -- macOS: archive ------------------------------------------------
+      - name: macOS archive
+        # A tarball rather than a .dmg: this job runs on Linux, and hdiutil
+        # only exists on a Mac. tar is also the only common format that
+        # keeps a .app's symlinks and executable bits intact, which is what
+        # decides whether the thing opens at all after a download.
+        #
+        # Not notarized, and not signed with anything but the ad-hoc
+        # signature PyInstaller applies, so Gatekeeper will refuse it on the
+        # first open until it is cleared in System Settings -> Privacy &
+        # Security. Signing needs a paid Developer ID; see the README.
+        run: |
+          set -euo pipefail
+          tar -C work/macos -czf "out/proxima-${VERSION}-macos-arm64.tar.gz" \
+            Proxima.app
 
       - name: Checksums
         run: |

@@ -6,8 +6,8 @@
 # spelled out instead.
 #
 # One plugin per line, named as GStreamer names it -- "vpx" is
-# libgstvpx.so/libgstvpx.dll. Names that do not exist on a platform are
-# skipped, which is how the same list works for both.
+# libgstvpx.so/libgstvpx.dll/libgstvpx.dylib. Names that do not exist on a
+# platform are skipped, which is how the same list works for all three.
 
 # -- the pipeline itself --------------------------------------------------
 coreelements
@@ -47,6 +47,11 @@ nvcodec
 qsv
 mediafoundation
 va
+# VideoToolbox, and not only a nice-to-have on macOS: Homebrew ships no
+# openh264 plugin at all (only libav and the x264 *encoder*), so vtdec out of
+# this plugin is the sole H.264 decoder a macOS bundle can carry without
+# taking on gst-libav's ffmpeg and its licence.
+applemedia
 
 # -- audio out ------------------------------------------------------------
 wasapi2
@@ -55,3 +60,4 @@ directsound
 pulseaudio
 alsa
 pipewire
+osxaudio

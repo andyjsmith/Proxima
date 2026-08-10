@@ -27,6 +27,12 @@ HARDWARE_DECODERS = [
     "vulkanvp9dec",
     "nvvp8dec",
     "nvjpegdec",
+    # VideoToolbox's hardware-only variant. Its sibling vtdec is deliberately
+    # not here: it falls back to software, and on macOS it is the only H.264
+    # decoder in the bundle (see packaging/gst-plugins.txt), so demoting it
+    # would leave "software decoding only" with no H.264 at all rather than
+    # with a slower path.
+    "vtdec_hw",
 ]
 
 GST_ELEMENT_PACKAGES = {
@@ -80,7 +86,7 @@ def gstreamer_report():
     wanted = [
         ("VP8", ["vp8dec"]),
         ("VP9", ["vp9dec"]),
-        ("H.264", ["avdec_h264", "openh264dec", "d3d11h264dec", "nvh264dec"]),
+        ("H.264", ["avdec_h264", "openh264dec", "vtdec", "d3d11h264dec", "nvh264dec"]),
         ("MJPEG", ["jpegdec"]),
         ("audio out", ["autoaudiosink"]),
         ("audio in", ["autoaudiosrc"]),

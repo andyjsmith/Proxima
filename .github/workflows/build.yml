@@ -380,3 +380,100 @@ jobs:
           name: nuitka-report-windows
           path: build/nuitka-report.xml
           if-no-files-found: ignore
+
+  macos:
+    name: macOS (PyInstaller, standalone)
+    if: github.event_name != 'pull_request' || github.event.label.name == 'build-please'
+    # arm64. An Intel bundle has to be built on an Intel Mac -- Homebrew
+    # ships no cross-compiled bottles and the GTK stack here comes entirely
+    # from bottles, so there is nothing to point a --target-arch at.
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the GTK stack
+        # librsvg is the gdk-pixbuf SVG loader, which is what draws Adwaita's
+        # symbolic icons; adwaita-icon-theme does not pull it in on macOS the
+        # way apt's dependency chain does on Linux, and without either the
+        # toolbar comes up blank. spice-gtk brings the whole of GStreamer
+        # with it, codecs included, so nothing else is needed for video.
+        run: |
+          brew install --quiet \
+            pygobject3 \
+            gtk+3 \
+            spice-gtk \
+            adwaita-icon-theme \
+            hicolor-icon-theme \
+            librsvg
+
+      - name: Find the interpreter PyGObject was built for
+        # Homebrew builds pygobject3 against its own Python, and a
+        # separately installed PyGObject cannot find the typelibs -- the same
+        # constraint as apt on Linux and pacman on Windows. Which Python that
+        # is changes as Homebrew moves on, so it is read out of the keg
+        # rather than pinned here; the check below fails loudly if the answer
+        # is wrong.
+        run: |
+          set -euo pipefail
+          version=$(brew list pygobject3 \
+            | sed -n 's|.*/lib/\(python3\.[0-9]*\)/site-packages/.*|\1|p' \
+            | sort -V | tail -1)
+          echo "PYTHON=$(brew --prefix "python@${version#python}")/bin/$version" >> "$GITHUB_ENV"
+
+      - name: Check the stack
+        run: |
+          set -euo pipefail
+          "$PYTHON" --version
+          "$PYTHON" -c 'import gi; gi.require_version("Gtk","3.0"); from gi.repository import Gtk; print("GTK", Gtk.get_major_version(), Gtk.get_minor_version())'
+          "$PYTHON" -c 'import proxima; print("version", proxima.__version__)'
+
+      - name: Install PyInstaller
+        # --break-system-packages: this is Homebrew's Python and it is
+        # externally managed, but it has to be the one PyInstaller runs
+        # under -- it freezes the interpreter it is executed by, and only
+        # this one can import gi.
+        run: |
+          "$PYTHON" -m pip install --break-system-packages --quiet pyinstaller
+
+      - name: Build the app bundle
+        # Nuitka on the other two platforms, PyInstaller here: PyInstaller
+        # ships runtime hooks for the whole GNOME stack and rewrites Mach-O
+        # load commands itself, which is what a Homebrew GTK needs to become
+        # relocatable at all. See packaging/proxima.spec.
+        run: |
+          "$PYTHON" -m PyInstaller packaging/proxima.spec --noconfirm \
+            --distpath build/dist --workpath build/pyinstaller
+
+      - name: Smoke test the bundle
+        # The same checks as the Linux job, for the same reasons; see there.
+        run: |
+          set -euo pipefail
+          ./build/dist/Proxima.app/Contents/MacOS/proxima --diagnose | tee diagnose.txt
+          grep -q "SPICE widget available: True" diagnose.txt \
+            || { echo "::error::the build has no working SPICE widget"; exit 1; }
+          grep -q "SPICE session usable: True" diagnose.txt \
+            || { echo "::error::SPICE types cannot be created in this bundle"; exit 1; }
+          ! grep -q "0\.0\.0+unknown" diagnose.txt \
+            || { echo "::error::the bundle cannot read its own version"; exit 1; }
+          ! grep -q "\[MISSING\]" diagnose.txt \
+            || { echo "::error::the bundle is missing GTK runtime data"; exit 1; }
+          # Not a warning here, unlike Linux: Homebrew has no openh264 plugin
+          # and gst-libav is deliberately not bundled, so vtdec out of
+          # applemedia is the only H.264 decoder there is. If it is gone, it
+          # went silently.
+          grep -Eq "H\.264 +[^ ]+ +available" diagnose.txt \
+            || { echo "::error::no H.264 decoder in the bundle"; exit 1; }
+
+      - name: Pack the bundle
+        # tar, not the artifact's own zip: a .app is full of symlinks and
+        # executable bits, and the zip an artifact upload makes keeps
+        # neither -- the result downloads as an app macOS refuses to open.
+        run: tar -C build/dist -czf proxima-macos-arm64-app.tar.gz Proxima.app
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-macos
+          path: proxima-macos-arm64-app.tar.gz
+          if-no-files-found: error
+          retention-days: 7

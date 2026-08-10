@@ -33,11 +33,27 @@ def is_bundled():
     return "__compiled__" in globals() or getattr(sys, "frozen", False)
 
 
+def pyinstaller_root():
+    """Where a PyInstaller build put its data, or None if this is not one.
+
+    The macOS bundle is built by PyInstaller rather than Nuitka, and
+    PyInstaller answers this whole module's question for itself: it ships
+    runtime hooks (pyi_rth_gi, _gdkpixbuf, _gio, _glib, _gstreamer) that set
+    GI_TYPELIB_PATH, GDK_PIXBUF_MODULE_FILE, GIO_MODULE_DIR, XDG_DATA_DIRS
+    and the GST_PLUGIN_* variables before any of our code runs, at its own
+    layout (gi_typelibs/, gst_plugins/, gio_modules/) rather than the
+    prefix-shaped one the Nuitka builds keep. So everything below stands
+    aside when this returns a path: setting our own values over the top
+    would point GTK at directories that are not there.
+    """
+    return Path(sys._MEIPASS) if hasattr(sys, "_MEIPASS") else None
+
+
 def bundle_root():
     """The directory the bundle was unpacked into, or None if not bundled."""
     if not is_bundled():
         return None
-    return Path(sys.executable).resolve().parent
+    return pyinstaller_root() or Path(sys.executable).resolve().parent
 
 
 def cache_dir():
@@ -187,7 +203,7 @@ def apply(root=None):
     GST_PLUGIN_PATH pointing somewhere else means it.
     """
     root = root or bundle_root()
-    if root is None:
+    if root is None or pyinstaller_root() is not None:
         return {}
 
     wanted = {}
@@ -218,14 +234,30 @@ def report(root=None):
     lines.append(f"  root: {root}")
     # Required means the program is broken without it. The optional two are
     # supplied by any Linux desktop, so they are only bundled on Windows.
-    for name, path, required in (
-        ("pixbuf loaders", "lib/gdk-pixbuf-2.0", True),
-        ("gstreamer plugins", "lib/gstreamer-1.0", True),
-        ("gsettings schemas", "share/glib-2.0/schemas", True),
-        ("icon themes", "share/icons", True),
-        ("gio modules", "lib/gio/modules", False),
-        ("fontconfig", "etc/fonts", False),
-    ):
+    #
+    # PyInstaller lays the same things out its own way, so which paths are
+    # even worth looking for depends on who built the bundle.
+    if pyinstaller_root() is not None:
+        lines.append("  built by PyInstaller; its own runtime hooks set the paths")
+        contents = (
+            ("typelibs", "gi_typelibs", True),
+            ("pixbuf loaders", "lib/gdk-pixbuf", True),
+            ("gstreamer plugins", "gst_plugins", True),
+            ("gsettings schemas", "share/glib-2.0/schemas", True),
+            ("icon themes", "share/icons", True),
+            ("gio modules", "gio_modules", False),
+            ("fontconfig", "share/fontconfig", False),
+        )
+    else:
+        contents = (
+            ("pixbuf loaders", "lib/gdk-pixbuf-2.0", True),
+            ("gstreamer plugins", "lib/gstreamer-1.0", True),
+            ("gsettings schemas", "share/glib-2.0/schemas", True),
+            ("icon themes", "share/icons", True),
+            ("gio modules", "lib/gio/modules", False),
+            ("fontconfig", "etc/fonts", False),
+        )
+    for name, path, required in contents:
         if (root / path).exists():
             state = "ok"
         else:
@@ -234,6 +266,8 @@ def report(root=None):
     for name in sorted(
         (
             "GDK_PIXBUF_MODULE_FILE",
+            "GI_TYPELIB_PATH",
+            "GST_PLUGIN_PATH",
             "GST_PLUGIN_SYSTEM_PATH",
             "GSETTINGS_SCHEMA_DIR",
             "GIO_MODULE_DIR",

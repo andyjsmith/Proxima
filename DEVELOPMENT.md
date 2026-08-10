@@ -20,10 +20,35 @@ spice-gtk come from pacman and will not load anywhere else.
 PyGObject, pycairo and spice-gtk come from the system, never from pip -- a
 pip-installed copy cannot find the GObject typelibs.
 
-| | Linux | Windows (MSYS2 UCRT64) |
-| --- | --- | --- |
-| GTK stack | `apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-spiceclientgtk-3.0` | `pacman -S mingw-w64-ucrt-x86_64-{python-gobject,gtk3,spice-gtk}` |
-| pytest | `apt install python3-pytest python3-pytest-xdist` | `pacman -S mingw-w64-ucrt-x86_64-python-pytest{,-xdist}` |
+| | Linux | Windows (MSYS2 UCRT64) | macOS (Homebrew) |
+| --- | --- | --- | --- |
+| GTK stack | `apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-spiceclientgtk-3.0` | `pacman -S mingw-w64-ucrt-x86_64-{python-gobject,gtk3,spice-gtk}` | `brew install pygobject3 gtk+3 spice-gtk adwaita-icon-theme librsvg` |
+| pytest | `apt install python3-pytest python3-pytest-xdist` | `pacman -S mingw-w64-ucrt-x86_64-python-pytest{,-xdist}` | `pip install --break-system-packages pytest pytest-xdist` into the same interpreter (see below) |
+
+`spice-gtk` on Homebrew pulls in a full `gstreamer` -- current Homebrew
+bundles every `gst-plugins-*` set (including `gst-libav`) into that one
+formula, so nothing else needs installing for codecs. `adwaita-icon-theme`
+and `librsvg` do *not* come along for free on macOS the way they do via
+apt's dependency chain -- without the theme, toolbar and menu buttons come
+up blank, and without librsvg's gdk-pixbuf loader nothing can read the SVGs
+the symbolic ones are drawn from.
+
+Homebrew's `pygobject3` is built against a specific Homebrew Python (find it
+with `brew list pygobject3 | grep site-packages`, e.g.
+`/usr/local/Cellar/pygobject3/.../lib/python3.14/site-packages`) -- run
+Proxima with *that* interpreter, not a pip venv or a python.org install, for
+the same reason as the other two platforms: a separately installed PyGObject
+would not find the GObject typelibs. `python3 proxima.py` in a source
+checkout works from there directly, no `pip install` needed at all --
+`pyproject.toml` declares no runtime dependencies.
+
+If a console opens to warnings like `GLib-GIRepository-WARNING: Failed to
+load shared library 'libgobject-2.0.0.dylib'` from `gst-plugin-scanner`, put
+Homebrew's lib directory on the fallback library search path before
+launching: `export DYLD_FALLBACK_LIBRARY_PATH="$(brew --prefix)/lib"`. A
+plain `dlopen()` of a bare filename -- which is how GIRepository loads the
+library a `.typelib` names -- does not otherwise see it, and recent macOS no
+longer searches `/usr/local/lib` by default the way older releases did.
 
 A source checkout never checks for updates by itself: the version there
 comes from `pyproject.toml`, which is routinely behind the tree it
@@ -98,9 +123,12 @@ checkout too -- no build needed to see it.
 * `.github/workflows/ci.yml` -- format (advisory), lint, and the test suite on
   Linux under Xvfb with openbox, since the fullscreen tests wait on real
   window-state changes.
-* `.github/workflows/build.yml` -- standalone Nuitka builds for Linux and
-  Windows, uploaded as artifacts. The Windows job builds inside MSYS2 UCRT64
-  for the same reason the app runs there. It takes the better part of an hour,
+* `.github/workflows/build.yml` -- standalone builds for Linux, Windows and
+  macOS, uploaded as artifacts. The Windows job builds inside MSYS2 UCRT64
+  for the same reason the app runs there; the macOS job builds arm64 only,
+  since Homebrew has no cross-compiled bottles and the whole GTK stack there
+  comes from bottles -- an Intel bundle has to be built on an Intel Mac.
+  It takes the better part of an hour,
   so it does not run on a push: start one from **Actions -> Build -> Run
   workflow**, or put a `build-please` label on a pull request to build that
   branch. The release workflow calls it regardless.
@@ -123,7 +151,7 @@ The workflow refuses to publish a tag whose version does not match
 `pyproject.toml`. A version with a suffix (`0.2.0-rc1`) is published as a
 pre-release.
 
-Pushing the tag builds both platforms and publishes:
+Pushing the tag builds all three platforms and publishes:
 
 | Artifact | |
 | --- | --- |
@@ -133,6 +161,7 @@ Pushing the tag builds both platforms and publishes:
 | `Proxima-<v>-x86_64.AppImage` | |
 | `proxima_<v>_amd64.deb` | installs to `/opt/proxima` |
 | `proxima-<v>-1.x86_64.rpm` | the same |
+| `proxima-<v>-macos-arm64.tar.gz` | `Proxima.app`, arm64, ad-hoc signed only. A tarball for a stronger version of the same reason: zip keeps neither the symlinks nor the executable bits a `.app` is made of. The packaging job runs on Linux, which is also why it is not a `.dmg` -- `hdiutil` only exists on a Mac. |
 | `SHA256SUMS` | |
 
 `workflow_dispatch` on the release workflow rebuilds an existing tag and
@@ -158,9 +187,31 @@ Everything. None of them ask the user to install GTK, spice-gtk, GStreamer or
 Python -- and they are built `--standalone`, never `--onefile`, which would
 unpack 60 MB to a temporary directory on every start.
 
-Getting there takes two steps beyond a plain Nuitka build, because Nuitka
-follows what the program *links against*, and GTK loads most of itself by hand
-later:
+Linux and Windows are built with Nuitka; macOS with PyInstaller, from
+`packaging/proxima.spec`. That split is not a preference. A Homebrew
+`.dylib` records its own dependencies as *absolute paths back into the
+Cellar*, unlike an ELF SONAME, which is only a name -- so copying one next
+to the executable achieves nothing on its own, and every load command in
+every copied library has to be rewritten before the bundle will run
+anywhere but the machine that built it. PyInstaller does that rewriting
+itself, and ships runtime hooks for the whole GNOME stack (`pyi_rth_gi`,
+`_gdkpixbuf`, `_gio`, `_glib`, `_gstreamer`) which set the same paths
+`proxima/bundle.py` sets by hand for the other two. So on macOS
+`bundle.py` deliberately stands aside; `pyinstaller_root()` is what it
+checks.
+
+Two things PyInstaller does not know about are supplied in
+`packaging/pyinstaller/hooks/`: spice-gtk, which it has no hook for and
+which `proxima/console/spicelib.py` imports through `importlib` so nothing
+in the module graph names it either. A gi namespace is not a file on disk,
+so it needs a `pre_safe_import_module` hook as well as an ordinary one --
+without that first half the hidden import is reported "not found" and the
+typelib is silently left out, which produces a bundle whose SPICE console
+cannot create a single object.
+
+Getting there on Linux and Windows takes two steps beyond a plain Nuitka
+build, because Nuitka follows what the program *links against*, and GTK
+loads most of itself by hand later:
 
 * the build passes `--include-raw-dir` for the pixbuf loaders, the GStreamer
   plugins and the GIO modules. Not `--include-data-dir`, which silently drops
@@ -196,6 +247,31 @@ itself. (The driver's own MSI raises one when it is installed, whichever
 mode is in use -- a kernel driver is per-machine either way.)
 
 ## Building one locally
+
+macOS, with the interpreter Homebrew built `pygobject3` against (see
+[Running from source](#running-from-source) for how to find it):
+
+```sh
+python3 -m pip install --break-system-packages pyinstaller
+python3 -m PyInstaller packaging/proxima.spec --noconfirm \
+    --distpath build/dist --workpath build/pyinstaller
+./build/dist/Proxima.app/Contents/MacOS/proxima --diagnose
+```
+
+The result is signed with nothing but the ad-hoc signature PyInstaller
+applies, which is enough to *run* -- an arm64 Mach-O will not launch
+unsigned at all -- but not enough for Gatekeeper, so a downloaded copy needs
+clearing once in **System Settings -> Privacy & Security**. Notarizing
+instead would take a paid Developer ID.
+
+H.264 is the one codec worth checking in `--diagnose` output there. Homebrew
+ships no `openh264` plugin at all, only `gst-libav` (ffmpeg, left out for
+its licence and its size) and the x264 *encoder*, so the bundle's only H.264
+decoder is `vtdec` -- VideoToolbox, out of the `applemedia` plugin. It is
+listed under hardware decoding in `packaging/gst-plugins.txt` for that
+reason, and only its hardware-only sibling `vtdec_hw` is demoted by
+**Preferences -> software decoding only**; demoting `vtdec` as well would
+leave that setting with no H.264 at all rather than with a slower path.
 
 Windows, from the MSYS2 UCRT64 tree but *not* from an MSYS2 shell -- Nuitka's
 `gi` plugin trips over its own path handling when `MSYSTEM` is set:
