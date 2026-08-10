@@ -177,6 +177,30 @@ VNC console actually is:
 VNC stays one menu entry away, because a container whose serial console is
 wedged is exactly when a second opinion is worth having.
 
+### Display scaling
+
+**View -> Display Scaling**, from 100% to 200%, draws the guest larger. It
+is remembered per guest, and **Preferences -> Console** sets the default for
+guests that have no answer of their own.
+
+It is worth reaching for on a 4K or Retina screen, where it does more than
+make things readable. A SPICE console asks the guest to match the window in
+*device* pixels, so a half-screen window on a Retina display quietly asks
+the guest for four times as many pixels as it looks like it needs -- all of
+which the guest renders, the host encodes and the network carries. 200%
+asks for a quarter as many and draws each one twice the size, which is the
+difference between a console that keeps up and one that does not.
+
+VNC works differently, because RFB gives a client no way to ask the guest
+for a different resolution: there the setting magnifies what arrives. It
+costs nothing and saves nothing -- useful for reading a small guest on a
+large screen, and no faster. 200% doubles every pixel exactly and stays
+sharp; the steps in between are interpolated and will look slightly soft. If
+the magnified picture is larger than the tab, the console scrolls.
+
+A serial console is text and has its own **Ctrl+plus**/**Ctrl+minus** font
+size, so this setting is greyed out there.
+
 ### Splitting the window
 
 The **Split** button cycles: one pane, side by side, one above the other,

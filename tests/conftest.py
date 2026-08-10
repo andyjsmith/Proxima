@@ -634,6 +634,7 @@ class FakeConsole(Gtk.Box):
     supports = {
         "auto_resize": True,
         "scaling": True,
+        "console_scale": True,
         "codec": True,
         "compression": True,
         "refresh": False,
@@ -654,6 +655,7 @@ class FakeConsole(Gtk.Box):
         self.guest_key = "fake"
         self.auto_resize = True
         self.scaling = False
+        self.console_scale = 100
         self.codec_index = 0
         self.compression_index = 0
         self.ctrl_alt_del_sent = 0
@@ -677,6 +679,9 @@ class FakeConsole(Gtk.Box):
 
     def set_scaling(self, value):
         self.scaling = value
+
+    def set_console_scale(self, percent):
+        self.console_scale = percent
 
     def set_codec_index(self, index):
         self.codec_index = index

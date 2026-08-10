@@ -10,6 +10,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
+from ..console.scaling import CONSOLE_SCALES
 from ..theme import decorate as theme_decorate
 from ..theme import fonts
 from . import sidebar
@@ -81,7 +82,7 @@ class SettingsDialog(Gtk.Dialog):
         label.get_style_context().add_class("dim")
         return label
 
-    def _combo(self, grid, row, label, choices, key, tooltip=None):
+    def _combo(self, grid, row, label, choices, key, tooltip=None, cast=str):
         grid.attach(self._label(label), 0, row, 1, 1)
         combo = Gtk.ComboBoxText()
         for value, text in choices:
@@ -92,7 +93,7 @@ class SettingsDialog(Gtk.Dialog):
         combo.set_hexpand(True)
         if tooltip:
             combo.set_tooltip_text(tooltip)
-        combo.connect("changed", self._on_combo_changed, key)
+        combo.connect("changed", self._on_combo_changed, key, cast)
         grid.attach(combo, 1, row, 1, 1)
         return combo
 
@@ -212,16 +213,28 @@ class SettingsDialog(Gtk.Dialog):
             tooltip="SPICE only. Requires spice-vdagent.",
         )
         self._check(grid, 3, "Scale console to fit", "scale_to_fit")
-        self._check(
+        self._combo(
             grid,
             4,
+            "Display scaling",
+            [(str(percent), f"{percent}%") for percent in CONSOLE_SCALES],
+            "console_scale",
+            tooltip="Draw the guest larger. On SPICE this asks the guest "
+            "for proportionally fewer pixels, which is what makes a console "
+            "on a high-resolution screen keep up; on VNC it magnifies what "
+            "the guest sends, which the protocol gives no way to change.",
+            cast=int,
+        )
+        self._check(
+            grid,
+            5,
             "Always use VNC",
             "prefer_vnc",
             tooltip="Ignore SPICE even when available",
         )
         self._check(
             grid,
-            5,
+            6,
             "Ask when a USB device is plugged in",
             "usb_autoprompt",
             tooltip="Offer to hand the new device to the guest whose "
@@ -230,7 +243,7 @@ class SettingsDialog(Gtk.Dialog):
         )
         self._check(
             grid,
-            6,
+            7,
             "Check for other SPICE clients",
             "spice_session_check",
             tooltip="QEMU serves one SPICE client at a time. Ask before "
@@ -384,13 +397,19 @@ class SettingsDialog(Gtk.Dialog):
 
     # -- change handling -----------------------------------------------
 
-    def _on_combo_changed(self, combo, key):
+    def _on_combo_changed(self, combo, key, cast=str):
+        """A combo's id is always a string; some settings are not.
+
+        `cast` puts it back to the type the rest of the program expects, so
+        a numeric setting does not become the string "150" in the settings
+        file the first time anyone touches its combo.
+        """
         if self._loading:
             return
         value = combo.get_active_id()
         if value is None:
             return
-        self.config[key] = value
+        self.config[key] = cast(value)
         self._changed()
 
     def _on_check_toggled(self, check, key):

@@ -45,6 +45,12 @@ from ..console import (
 )
 from ..console import keys as console_keys
 from ..console.placeholder import PlaceholderConsole
+from ..console.scaling import (
+    CONSOLE_SCALES,
+    DEFAULT_CONSOLE_SCALE,
+    clamp_console_scale,
+    console_scale_index,
+)
 from ..console.serial import DEFAULT_FONT_SIZE
 from ..console.spice import IMAGE_COMPRESSION, VIDEO_CODECS
 from ..console.termproxy import open_session as open_term_session
@@ -596,6 +602,17 @@ class MainWindow(Gtk.Window):
         self.scaling_item.connect("toggled", self._on_scaling_toggled)
         menu.append(self.scaling_item)
 
+        self.console_scale_item, self.console_scale_items = self._radio_submenu(
+            menu,
+            "Display Scaling",
+            [f"{percent}%" for percent in CONSOLE_SCALES],
+            self._on_console_scale_selected,
+        )
+        self.console_scale_item.set_tooltip_text(
+            "Draw the guest larger. On SPICE this asks the guest for fewer "
+            "pixels, which is also less to send"
+        )
+
         menu.append(Gtk.SeparatorMenuItem())
 
         self.codec_item, self.codec_items = self._radio_submenu(
@@ -635,6 +652,7 @@ class MainWindow(Gtk.Window):
             self.all_monitors_item,
             self.auto_resize_item,
             self.scaling_item,
+            self.console_scale_item,
             self.codec_item,
             self.compression_item,
             self.split_item,
@@ -3614,6 +3632,15 @@ class MainWindow(Gtk.Window):
             "auto_resize": stored.get(
                 "auto_resize", self.config.get("auto_resize", True)
             ),
+            # Per guest for the same reason the font size is: a guest whose
+            # desktop is unreadable at 100% on this screen is not a fact
+            # about the other guests.
+            "console_scale": clamp_console_scale(
+                stored.get(
+                    "console_scale",
+                    self.config.get("console_scale", DEFAULT_CONSOLE_SCALE),
+                )
+            ),
             "codec_index": stored.get("codec_index", 0),
             "compression_index": stored.get("compression_index", 0),
             # How big the text is on a serial console. This machine's
@@ -3682,6 +3709,7 @@ class MainWindow(Gtk.Window):
                 enable_audio=bool(self.config.get("enable_audio", True)),
                 auto_resize=bool(prefs["auto_resize"]),
                 scale_to_fit=bool(prefs["scaling"]),
+                console_scale=prefs["console_scale"],
                 share_clipboard=self._guest_switch(guest, "clipboard"),
                 play_audio=self._guest_switch(guest, "audio"),
                 on_agent=lambda connected, c=None: self._on_console_agent(
@@ -3740,6 +3768,7 @@ class MainWindow(Gtk.Window):
                 # console on a self-signed Proxmox.
                 fingerprint=getattr(self.api_for(guest), "fingerprint", None),
                 scale_to_fit=bool(prefs["scaling"]),
+                console_scale=prefs["console_scale"],
                 on_disconnect=lambda reason, k=guest.key: self._on_console_disconnected(
                     k, reason
                 ),
@@ -4828,6 +4857,11 @@ class MainWindow(Gtk.Window):
                 bool(console and getattr(console, "scaling", False))
             )
 
+            self.console_scale_item.set_sensitive(bool(supports.get("console_scale")))
+            if console is not None and supports.get("console_scale"):
+                index = console_scale_index(getattr(console, "console_scale", 100))
+                self.console_scale_items[index].set_active(True)
+
             self.codec_item.set_sensitive(bool(supports.get("codec")))
             if console is not None and supports.get("codec"):
                 index = getattr(console, "codec_index", 0)
@@ -4955,6 +4989,15 @@ class MainWindow(Gtk.Window):
         if console is not None and hasattr(console, "set_scaling"):
             console.set_scaling(item.get_active())
             self._save_guest_pref("scale_to_fit", item.get_active())
+
+    def _on_console_scale_selected(self, item, index):
+        if self._updating_view_menu or not item.get_active():
+            return
+        console = self.current_console()
+        if console is not None and hasattr(console, "set_console_scale"):
+            percent = CONSOLE_SCALES[index]
+            console.set_console_scale(percent)
+            self._save_guest_pref("console_scale", percent)
 
     def _on_codec_selected(self, item, index):
         if self._updating_view_menu or not item.get_active():

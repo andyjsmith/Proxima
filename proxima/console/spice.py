@@ -26,6 +26,7 @@ from gi.repository import Gdk, GLib, GObject, Gtk
 
 from .decoders import gstreamer_report
 from .keys import CTRL_ALT_DEL
+from .scaling import clamp_console_scale
 from .spicelib import (
     AVAILABLE,
     MISSING_LIBRARY,
@@ -221,6 +222,7 @@ class SpiceConsole(Gtk.Box):
     supports = {
         "auto_resize": True,
         "scaling": True,
+        "console_scale": True,
         "codec": True,
         "compression": True,
         "refresh": False,
@@ -242,6 +244,7 @@ class SpiceConsole(Gtk.Box):
         enable_audio=True,
         auto_resize=True,
         scale_to_fit=False,
+        console_scale=100,
         on_agent=None,
         on_disconnect=None,
         on_reconnect=None,
@@ -281,6 +284,7 @@ class SpiceConsole(Gtk.Box):
         self._gtk_session = None
         self.auto_resize = auto_resize
         self.scaling = scale_to_fit
+        self.console_scale = clamp_console_scale(console_scale)
         self.codec_index = 0
         self.compression_index = 0
         self._ca_file = None
@@ -1168,7 +1172,7 @@ class SpiceConsole(Gtk.Box):
         match but the monitor.
         """
         display.set_property("resize-guest", True)
-        display.set_property("scaling", self.scaling)
+        self._apply_scaling(display)
         with contextlib.suppress(Exception):
             display.set_grab_keys(
                 SpiceGtk.GrabSequence.new_from_string("Control_L+Alt_L")
@@ -1436,7 +1440,7 @@ class SpiceConsole(Gtk.Box):
 
         display = SpiceGtk.Display.new(self.session, channel_id)
         display.set_property("resize-guest", self.auto_resize)
-        display.set_property("scaling", self.scaling)
+        self._apply_scaling(display)
 
         # spice-gtk's own release sequence. It defaults to this, but state it
         # so it cannot drift away from what the window handler advertises.
@@ -1640,7 +1644,39 @@ class SpiceConsole(Gtk.Box):
     def set_scaling(self, enabled):
         self.scaling = enabled
         for display in self._all_displays():
-            display.set_property("scaling", enabled)
+            self._apply_scaling(display)
+
+    def set_console_scale(self, percent):
+        """Ask the guest for fewer pixels and draw them larger.
+
+        spice-gtk's zoom-level, which is exactly this: with resize-guest on,
+        the size it asks the guest for is `window * scale_factor / zoom`
+        (spice-widget.c, recalc_geometry), so 200% asks for a quarter of the
+        pixels and fills the same window with them. That is the whole point
+        on a high-resolution screen -- a quarter as much for the guest to
+        render, encode and send.
+
+        Pointer input needs nothing from us: spice-gtk derives it from the
+        same geometry it draws with, in transform_input(), so the guest
+        pointer lands where the picture says it does at any zoom.
+        """
+        self.console_scale = clamp_console_scale(percent)
+        for display in self._all_displays():
+            self._apply_scaling(display)
+
+    def _apply_scaling(self, display):
+        """Put `scaling` and `console_scale` onto one display together.
+
+        They are one setting to spice-gtk even though they are two here:
+        zoom-level is only read when scaling is allowed, so a zoomed console
+        with scale-to-fit switched off would quietly stay at 100%. Zooming
+        implies scaling and turns it on; the stored scale-to-fit preference
+        is not touched, so switching back to 100% restores it.
+        """
+        zoomed = self.console_scale != 100
+        with contextlib.suppress(Exception):
+            display.set_property("scaling", self.scaling or zoomed)
+            display.set_property("zoom-level", self.console_scale)
 
     # -- actions -------------------------------------------------------
 

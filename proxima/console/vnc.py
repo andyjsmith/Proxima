@@ -12,6 +12,7 @@ frame.
 
 import contextlib
 import logging
+import math
 import time
 
 import gi
@@ -26,6 +27,7 @@ except ImportError:  # pragma: no cover
 
 from .keys import CTRL_ALT_DEL
 from .rfb import RfbClient
+from .scaling import clamp_console_scale
 from .status_panel import (
     CONNECTING_ICON,
     CONNECTING_TITLE,
@@ -55,6 +57,9 @@ class VncConsole(Gtk.Box):
     supports = {
         "auto_resize": False,
         "scaling": True,
+        # Magnification only -- see console/scaling.py for why it cannot be
+        # the resolution change it is on SPICE.
+        "console_scale": True,
         "codec": False,
         "compression": False,
         "refresh": True,
@@ -80,6 +85,7 @@ class VncConsole(Gtk.Box):
         on_status=None,
         fingerprint=None,
         scale_to_fit=True,
+        console_scale=100,
         on_disconnect=None,
         on_reconnect=None,
     ):
@@ -89,6 +95,7 @@ class VncConsole(Gtk.Box):
         self.on_status = on_status or (lambda text: None)
         self.last_status = ""
         self.scaling = scale_to_fit
+        self.console_scale = clamp_console_scale(console_scale)
         self.on_disconnect = on_disconnect or (lambda reason: None)
         self.on_reconnect = on_reconnect or (lambda: None)
         self.connected = False
@@ -104,6 +111,7 @@ class VncConsole(Gtk.Box):
         self._last_frames = 0
         self._last_encodings = {}
         self._encoding = ""
+        self._canvas_request = (-1, -1)
 
         if not AVAILABLE:
             self.pack_start(
@@ -142,8 +150,22 @@ class VncConsole(Gtk.Box):
         self.area.connect("key-release-event", self._on_key)
         self.area.connect("enter-notify-event", lambda w, e: (w.grab_focus(), False)[1])
 
+        # The drawing area goes in a scroller so that a picture magnified
+        # past the tab stays reachable. At 100% it never is, and the
+        # scrollbars never appear.
+        #
+        # Overlay scrolling deliberately: a scrollbar that takes space would
+        # shrink the viewport, which changes the fit scale, which can decide
+        # whether the scrollbar was needed in the first place -- a loop with
+        # nothing to settle it.
+        self.scroller = Gtk.ScrolledWindow()
+        self.scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        self.scroller.set_overlay_scrolling(True)
+        self.scroller.add(self.area)
+        self.scroller.connect("size-allocate", lambda *_: self._update_canvas())
+
         self.overlay = Gtk.Overlay()
-        self.overlay.add(self.area)
+        self.overlay.add(self.scroller)
         self.status_panel = ConsoleStatusPanel(on_reconnect=lambda: self.on_reconnect())
         self.overlay.add_overlay(self.status_panel)
         self.pack_start(self.overlay, True, True, 0)
@@ -251,13 +273,13 @@ class VncConsole(Gtk.Box):
         with self.client.fb_lock:
             if not self._rebuild_surface():
                 return False
-        # A modest floor, not the guest's resolution. Asking for the full
-        # framebuffer makes the drawing area's *minimum* size larger than the
-        # tab it lives in, and a widget allocated more space than its parent
-        # can show is drawn partly off the edge -- where it is invisible and
-        # the pointer cannot reach it. Shrinking to fit is handled in
-        # _scale_factors instead.
-        self.area.set_size_request(min(width, 800), min(height, 600))
+        # The guest picked a new resolution, so the canvas is a different
+        # size even though nothing about the zoom changed. Sizing the area
+        # is _update_canvas's job alone -- it is the only thing that knows
+        # whether the picture still fits, and a second opinion here is how
+        # the drawing area ends up larger than the tab with part of the
+        # guest screen off the edge, invisible and unreachable.
+        self._update_canvas()
         self.connected = True
         self.status_panel.hide_message()
         self.area.queue_draw()
@@ -280,6 +302,22 @@ class VncConsole(Gtk.Box):
 
     def set_scaling(self, enabled):
         self.scaling = enabled
+        self._update_canvas()
+        self.area.queue_draw()
+
+    def set_console_scale(self, percent):
+        """Draw every guest pixel `percent` bigger than it would be.
+
+        Magnification and nothing more: RFB gives this client no way to ask
+        the guest for a different resolution, so the server sends exactly as
+        much as it did before -- see console/scaling.py. Only what happens
+        to those pixels on the way to the screen changes.
+
+        The pointer needs no separate handling: _widget_to_guest divides by
+        the same scale _on_draw multiplies by, so the two cannot disagree.
+        """
+        self.console_scale = clamp_console_scale(percent)
+        self._update_canvas()
         self.area.queue_draw()
 
     def refresh_framebuffer(self):
@@ -340,27 +378,74 @@ class VncConsole(Gtk.Box):
             return 0, 0
         return self._surface.get_width(), self._surface.get_height()
 
+    def _viewport_size(self):
+        """How much room the picture has before it has to scroll.
+
+        The scroller's allocation, not the drawing area's: the area is the
+        canvas and is made as large as the picture, so measuring the fit
+        against it would be measuring against the answer.
+        """
+        allocation = self.scroller.get_allocation()
+        return allocation.width, allocation.height
+
+    def _fit_scale(self, guest_w, guest_h):
+        """What the picture is scaled by before the zoom setting applies."""
+        view_w, view_h = self._viewport_size()
+        if not guest_w or not guest_h or view_w <= 1 or view_h <= 1:
+            return 1.0
+        if self.scaling:
+            return min(view_w / guest_w, view_h / guest_h)
+        # Never enlarge, but do shrink to fit rather than letting the guest
+        # screen run off the edge of the tab.
+        return min(1.0, view_w / guest_w, view_h / guest_h)
+
     def _scale_factors(self):
         """(scale, offset_x, offset_y) mapping guest pixels to widget pixels.
 
         The one place the geometry is worked out; both drawing and pointer
         mapping go through it, so the picture and the pointer cannot drift
-        apart.
+        apart -- which is what keeps clicks landing where the picture says
+        they should at any zoom.
         """
         guest_w, guest_h = self._guest_size()
         if not guest_w or not guest_h:
             return 1.0, 0.0, 0.0
+        scale = self._fit_scale(guest_w, guest_h) * self.console_scale / 100
+        # The area's own allocation, which is the canvas: the same size as
+        # the viewport until the zoom makes the picture bigger, and the
+        # picture's own size after that. Centring against it letterboxes a
+        # small picture and offsets nothing once it is scrolling.
         allocation = self.area.get_allocation()
-        if self.scaling:
-            scale = min(allocation.width / guest_w, allocation.height / guest_h)
-        else:
-            # Never enlarge, but do shrink to fit rather than letting the
-            # guest screen run off the edge of the tab: the part that hangs
-            # off is both invisible and unreachable with the pointer.
-            scale = min(1.0, allocation.width / guest_w, allocation.height / guest_h)
-        offset_x = (allocation.width - guest_w * scale) / 2
-        offset_y = (allocation.height - guest_h * scale) / 2
+        offset_x = max(0.0, (allocation.width - guest_w * scale) / 2)
+        offset_y = max(0.0, (allocation.height - guest_h * scale) / 2)
         return scale, offset_x, offset_y
+
+    def _update_canvas(self):
+        """Ask for as much room as the picture needs, and no more.
+
+        A size request the viewport can already satisfy is not made at all
+        (-1): the area then fills the viewport and _scale_factors centres
+        the picture inside it, which is what every unzoomed console does.
+        Only when the zoom makes the picture larger than the viewport does
+        the area become the bigger thing and the scrollbars mean something.
+        """
+        guest_w, guest_h = self._guest_size()
+        if not guest_w or not guest_h:
+            return
+        scale = self._fit_scale(guest_w, guest_h) * self.console_scale / 100
+        view_w, view_h = self._viewport_size()
+        want_w = math.ceil(guest_w * scale)
+        want_h = math.ceil(guest_h * scale)
+        request = (
+            want_w if want_w > view_w else -1,
+            want_h if want_h > view_h else -1,
+        )
+        # Only when it changes: this runs from the scroller's own
+        # size-allocate, and setting a request from inside one that did not
+        # need setting is how a layout starts allocating in a loop.
+        if request != self._canvas_request:
+            self._canvas_request = request
+            self.area.set_size_request(*request)
 
     def _on_draw(self, _widget, context):
         # Before the lock: a guest that resized since the last frame needs a

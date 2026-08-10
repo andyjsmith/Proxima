@@ -51,6 +51,20 @@ DEFAULTS = {
     "sw_decoders": False,
     "auto_resize": True,
     "scale_to_fit": False,
+    # How large a guest pixel is drawn, as a percentage. 100 is what every
+    # console has always done and is still the default.
+    #
+    # It earns its place on a HiDPI screen, where it is the difference
+    # between a usable SPICE console and an unusable one. spice-gtk asks the
+    # guest for `window * scale_factor / zoom` pixels, and scale_factor is 2
+    # on a Retina Mac -- so a console that looks like a 1920x1080 window is
+    # really asking the guest to render, encode and send 3840x2160. 200 here
+    # cancels that exactly. It is not a macOS setting, though: any 4K screen
+    # asks the same of a guest, and the answer is the same.
+    #
+    # What it means to each protocol is not quite the same thing, and cannot
+    # be -- see set_console_scale in console/spice.py and console/vnc.py.
+    "console_scale": 100,
     "prefer_vnc": False,  # force VNC even when SPICE is available
     # Give the guest a display on every monitor in full screen. Off by
     # default: it asks the guest to create heads it did not have, which is

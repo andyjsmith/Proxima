@@ -7,6 +7,7 @@ from gi.repository import Gtk
 
 from proxima.console import keys as keys_mod
 from proxima.console import status_panel as status_panel_mod
+from proxima.console.scaling import CONSOLE_SCALES
 from proxima.ui import split as split_mod
 
 from .conftest import (
@@ -345,6 +346,17 @@ def test_console_preferences_are_saved_per_guest(window, config):
         assert window.guest_prefs(RUNNING)["scaling"] is True, (
             "stored guest preference does not read back"
         )
+
+        # Display scaling is remembered the same way, and as a number: it is
+        # compared with numbers everywhere it is used.
+        window.console_scale_items[CONSOLE_SCALES.index(200)].set_active(True)
+        pump(0.3)
+        assert console.console_scale == 200, "the console was never told"
+        stored = (config.get("guest_prefs") or {}).get(RUNNING, {})
+        assert stored.get("console_scale") == 200, (
+            f"display scaling not saved per guest (got {stored})"
+        )
+        assert window.guest_prefs(RUNNING)["console_scale"] == 200
     finally:
         window.close_console("pref")
         window.notebook.set_current_page(0)
@@ -582,6 +594,29 @@ def test_a_real_console_keeps_the_tabs_connecting_panel_up(window, live_console)
         assert placeholder.get_text() == "", (
             f"the console shows a bare {placeholder.get_text()!r} label"
         )
+
+
+def test_display_scaling_is_grey_for_a_console_that_cannot_scale(window):
+    """A serial console is text in a terminal; there is nothing to magnify.
+
+    The same rule as the codec and clipboard entries: each console says what
+    it supports and the menu follows, rather than the menu knowing which
+    protocols exist.
+    """
+    console = FakeConsole("no-scale")
+    console.supports = dict(FakeConsole.supports, console_scale=False)
+    window.consoles["no-scale"] = console
+    window.panes.append(console, Gtk.Label(label="no-scale"))
+    pump(0.4)
+    try:
+        window._sync_view_menu()
+        assert not window.console_scale_item.get_sensitive(), (
+            "display scaling is offered for a console that does not support it"
+        )
+    finally:
+        window.close_console("no-scale")
+        window.notebook.set_current_page(0)
+        pump(0.3)
 
 
 def test_the_split_button_needs_two_tabs_and_nothing_else(window):
