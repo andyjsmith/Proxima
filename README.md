@@ -1,24 +1,119 @@
 # Proxima
 
-A VMware Workstation style client for Proxmox VE, built on GTK 3, SPICE,
-VNC and a serial console for containers.
+A VMware Workstation style desktop client for Proxmox VE. Your whole
+datacenter in a tree down one side, guests in tabs, and a real console in
+each tab -- SPICE for VMs that have it, VNC for the rest, and a proper
+terminal for containers.
 
-```
-python3 proxima.py                 normal start
-python3 proxima.py --diagnose      report the GTK/SPICE stack
-python3 proxima.py --fontconfig    force the FreeType font backend
-python3 proxima.py --debug         log everything, including GLib's own
-python3 proxima.py --logs          print the log directory and exit
+It talks to the Proxmox API directly. There is nothing to install on the
+server, and nothing runs there that would not run for the web interface.
+
+* **Consoles in tabs**, split across up to four panes, or full screen across
+  every monitor you have
+* **Power, snapshots and settings** without leaving the console you are
+  looking at
+* **USB devices** handed to a VM over SPICE, offered as you plug them in
+* **Node pages** with the meters and graphs the web interface shows, and a
+  root shell one click away
+* **Folders and tags** for organising guests across the whole datacenter
+* **Certificate pinning**, so a self-signed Proxmox is verified rather than
+  ignored
+
+---
+
+## Download
+
+Builds are on the [releases
+page](https://github.com/andyjsmith/proxima/releases/latest). Everything is
+self-contained: GTK, SPICE, GStreamer and Python are inside the package, so
+there is nothing else to install.
+
+Both platforms are 64-bit x86 (`x86_64`/`amd64`). There is no 32-bit or ARM
+build, and no macOS build. The Linux packages are built on Ubuntu 22.04, so
+they need its glibc (2.35) or newer -- which covers every current
+distribution.
+
+### Windows
+
+| File | |
+| --- | --- |
+| `proxima-<version>-windows-x86_64-setup.exe` | Installer. **Start here.** |
+| `proxima-<version>-windows-x86_64.zip` | The same program in a folder. Unpack it anywhere and run `proxima.exe`. |
+
+The installer offers **Just me** or **All users**. Just me is the default
+and never shows a UAC prompt; choosing all users asks for administrator
+rights at that moment and not before.
+
+It can also install **UsbDk**, the driver USB redirection needs on Windows
+-- a tickbox on the components page, ticked off automatically if you already
+have it. See [USB redirection](#usb-redirection) below. Uninstalling Proxima
+leaves the driver alone, since virt-viewer and friends use the same one.
+
+### Linux
+
+| File | |
+| --- | --- |
+| `Proxima-<version>-x86_64.AppImage` | Any distribution, nothing installed. `chmod +x` it and run it. |
+| `proxima_<version>_amd64.deb` | Debian, Ubuntu, Mint. `sudo apt install ./proxima_<version>_amd64.deb` |
+| `proxima-<version>-1.x86_64.rpm` | Fedora, RHEL, openSUSE. `sudo dnf install ./proxima-<version>-1.x86_64.rpm` |
+| `proxima-<version>-linux-x86_64.tar.gz` | Unpack anywhere and run `./proxima`. A tarball rather than a zip, because zip has nowhere to keep the executable bit. |
+
+The deb and rpm install to `/opt/proxima`, put `proxima` on your `PATH` and
+add a desktop entry. The AppImage and the tarball leave nothing behind and
+need no root.
+
+### Checking what you downloaded
+
+`SHA256SUMS` is published with every release.
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing        # Linux
 ```
 
-On Windows this must run under the MSYS2 UCRT64 Python
-(`C:/msys64/ucrt64/bin/python.exe`), not a python.org install: PyGObject and
-spice-gtk come from pacman and will not load anywhere else.
+```powershell
+Get-FileHash proxima-0.2.0-windows-x86_64-setup.exe   # Windows, compare by eye
+```
+
+---
+
+## Connecting
+
+**File -> Connect**, then the host, the username with its realm
+(`root@pam`), and the password. Port 8006 is assumed, so `pve.example.com`
+is enough; `10.0.0.5:8006` and a pasted `https://host:8006/...` are both
+understood too. Saved connections reopen on the next start.
+
+Proxmox signs its own certificate, so there is no public authority to vouch
+for it. Rather than turn checking off -- the usual answer, and one that
+means talking to anything that answers on port 8006 while holding root
+credentials -- Proxima does what ssh does:
+
+1. The first connection shows you the certificate, including its SHA-256
+   fingerprint. **Datacenter -> Certificates** in the Proxmox web interface
+   prints the same value, as does `openssl x509 -fingerprint -sha256`, so
+   you can compare it by eye.
+2. Accept it once and the fingerprint is pinned. Nothing asks again.
+3. If that server ever presents a *different* certificate, the connection
+   stops before any credential is sent and says so. That is a renewal, or it
+   is somebody in the middle, and nothing at this end can tell which -- so
+   the safe answer is the default one.
+
+There is deliberately no "skip the check" setting: it would be set once,
+forgotten, and left on the one connection that carries root. A certificate
+that does chain to a public CA is verified normally and is not pinned, so
+renewing it changes nothing. The console's own connection is held to the
+same pin, so a VNC session cannot end up less checked than the API call that
+opened it.
+
+To be asked again about a server, delete its entry from `trusted_certs` in
+your settings file (see [Where things are kept](#where-things-are-kept)).
+
+---
 
 ## The inventory tree
 
 Three shapes, cycled by the button beside the search box or chosen in
-Preferences -> Behaviour; both write the same setting.
+**Preferences -> Behaviour**; both write the same setting.
 
 | | |
 | --- | --- |
@@ -27,16 +122,159 @@ Preferences -> Behaviour; both write the same setting.
 | Tag | The tags Proxmox keeps. |
 
 Tag view repeats guests, deliberately: tags are not a hierarchy, so a guest
-tagged `prod` and `web` appears under both. Grouping by the *combination*
-instead would make a separate group for every set of tags anyone had ever
-used, which stops being useful the moment it is populated. Tags differing
-only in case are one group, spelled the way the first guest to use it spells
-it, and guests with no tags collect under **Untagged** at the end. The node
-rows stay at the top in folder and tag view, since what is in the cluster is
-worth knowing whatever the guests below are sorted by.
+tagged `prod` and `web` appears under both. Tags differing only in case are
+one group, spelled the way the first guest to use it spells it, and guests
+with no tags collect under **Untagged** at the end. Node rows stay at the
+top in folder and tag view, since what is in the cluster is worth knowing
+whatever the guests below are sorted by.
 
-The search box already matches tags, so filtering to one is a matter of
-typing it.
+The search box matches tags too, so filtering to one is a matter of typing
+it.
+
+Guests can be dragged between folders. If you would rather they could not,
+turn dragging off in **Preferences -> Behaviour**.
+
+---
+
+## Consoles
+
+| Guest | Default | The other option |
+| --- | --- | --- |
+| VM with a SPICE display | SPICE | VNC |
+| VM without one | VNC | - |
+| Container | Serial | VNC |
+
+**VM -> Reopen Console with...** switches for as long as the tab is open;
+the guest's own **Protocol** setting, in VM Settings -> Proxmox Manager,
+makes it stick for everyone.
+
+The serial console is Proxmox's `termproxy` -- the same thing the web UI
+opens with xterm.js, and what `pct console` attaches to. It is a real
+character terminal rather than a picture of one, which is what a container's
+VNC console actually is:
+
+* the text can be selected with the mouse; **Ctrl+Shift+C** copies and
+  **Ctrl+Shift+V** pastes (middle click pastes the primary selection)
+* the terminal is as wide as the tab, not a fixed 80x24, and the container
+  is told when that changes
+* there is scrollback -- the wheel, the scrollbar, or Shift+Page Up
+* **Ctrl+plus** and **Ctrl+minus** change the font size, per container
+* it costs a few hundred bytes a screen rather than a framebuffer
+
+VNC stays one menu entry away, because a container whose serial console is
+wedged is exactly when a second opinion is worth having.
+
+### Splitting the window
+
+The **Split** button cycles: one pane, side by side, one above the other,
+and back. It works whenever more than one tab is open. Tabs can be dragged
+between panes, which is also how you get three panes or a 2x2 grid.
+
+With the window split, the tab the toolbar and menus are acting on is shown
+in **bold**. Click anywhere in a pane to point them at that one.
+
+### Sending keys the host swallows
+
+Ctrl+Alt+Del is a toolbar button; its arrow, and **VM -> Send Key**, carry
+the rest -- Ctrl+Alt+Backspace, the twelve virtual terminals, Alt+Tab,
+Alt+F4, Ctrl+Esc and PrintScreen. These exist because pressing them does not
+work: the window manager on *this* computer takes Alt+Tab, a Linux desktop
+takes Ctrl+Alt+F2, and something is usually listening for PrintScreen, so
+none of them ever reach the guest. Both SPICE and VNC carry them.
+
+On a serial console the menu offers only what a character terminal can
+express, and refuses the rest by name rather than quietly doing something
+else.
+
+---
+
+## Full screen and multiple monitors
+
+**Ctrl+Alt+Enter** puts the console in front full screen, with a floating
+bar at the top edge for the way back out. Ctrl+Alt on its own hands the
+keyboard and mouse back to your desktop.
+
+**View -> Use All Monitors** spreads the guest across every monitor you
+have: the tab's window takes the monitor it is already on, and each further
+display gets a window on the next monitor along, ordered by where your
+monitors actually sit. Leaving full screen closes them and gives the extra
+displays back to the guest.
+
+It is **off by default**, because it asks the guest to create displays it
+did not have, which changes the guest's own desktop layout. Once you turn it
+on it stays on.
+
+The entry is greyed out when it would do nothing, and its tooltip says which
+reason applies:
+
+| Why it is greyed out | What to do |
+| --- | --- |
+| Only one monitor here | Nothing to spread onto. |
+| The console is not connected | Wait for it, or start the guest. |
+| A VNC console | VNC carries one framebuffer with the guest's displays side by side inside it. Reopen the console with SPICE. |
+| The display adapter has one head | In Proxmox, Hardware -> Display. See below. |
+
+**Pick SPICE (`qxl`) for multiple monitors.** QXL carries up to four
+displays on its own, so plain `qxl` is already enough -- `qxl2`/`qxl3`/`qxl4`
+add QXL *devices*, which is a different thing and not needed for a second
+monitor. **VirtIO-GPU is one display only**: QEMU's `virtio-gpu` defaults to
+a single output and Proxmox exposes no setting to raise it.
+
+The guest has to co-operate, since it is the guest that creates the display:
+the SPICE guest agent must be running (`spice-vdagent` on Linux, the SPICE
+guest tools on Windows) and its driver has to support a second monitor. If a
+display never arrives, that window says so rather than sitting there blank.
+
+---
+
+## USB redirection
+
+A USB device plugged into this computer can be handed to a VM over SPICE,
+from **VM -> USB Devices**, from the icon in the status bar, or from the
+question Proxima asks when you plug something in while a console is in front
+of you. VNC has no channel to carry a device, so it is offered only on
+SPICE.
+
+Three things have to be in place, and the status bar says which one is
+missing:
+
+| | |
+| --- | --- |
+| The VM needs a SPICE USB port | Proxmox adds none. Hardware -> Add -> USB Device -> Spice Port, which writes `usb0: spice`. One line, one device at a time; add more for more. |
+| Windows needs the UsbDk driver | The installer offers it, or get it from [daynix/UsbDk](https://github.com/daynix/UsbDk/releases/latest). Devices are listed without it and the list looks perfectly healthy -- Windows just will not hand one over when it is claimed. |
+| Linux needs access to the device | spice-gtk talks to libusb directly, so you have to be able to open `/dev/bus/usb`. Your distribution's `spice-client-glib-usb-acl-helper` handles this where it is installed. |
+
+A redirected device is taken away from this computer for as long as it is
+redirected; closing the console gives it back. The prompt on plug-in can be
+turned off in **Preferences -> Console**.
+
+---
+
+## Nodes
+
+A node opens like a guest does -- double-click it in the tree, or right-click
+for **Open Node** -- and gets a tab with two sides.
+
+The summary is what Proxmox's own node Summary shows: **meters** for CPU
+usage, IO delay, load average, RAM, swap and the root filesystem; **graphs**
+of CPU (with IO delay over it), memory used against installed, and network
+traffic in and out, over the hour, day, week, month or year; and status,
+uptime, guest count, processor, kernel and pve-manager versions. Hovering a
+graph reads off the sample under the pointer.
+
+Load is drawn against the processor count, so a full bar means a machine
+with no idle capacity left rather than an arbitrary ceiling. The graphs come
+from the node's round-robin history, which records a sample a minute, so the
+page re-reads it once a minute and no faster.
+
+**Open Shell** is the node's own terminal -- `termproxy`, the same thing the
+web interface's Shell button opens. It is never opened for you: a node page
+restored on the next start brings the figures, not a root shell.
+
+A node the cluster cannot reach says so in the tree and on its page, and its
+Shell is greyed out rather than offered and then refused.
+
+---
 
 ## Polling
 
@@ -50,205 +288,38 @@ The inventory is polled at two speeds and the window picks between them.
 "Waiting" is a state, not a countdown: a power action, a rename, a console
 being restored at startup or a server still connecting all hold the faster
 cadence for exactly as long as they take. **Keep waiting for** (15s) only
-covers actions that leave nothing else to watch. A guest merely carrying a
-lock does not count -- a backup can hold one for an hour.
+covers actions that leave nothing else to watch -- a guest merely carrying a
+lock does not count, since a backup can hold one for an hour.
 
 All three are in **Preferences -> Polling**, along with the task pane's own
 interval. The task pane polls only while it is open.
 
-This replaced a fixed 2s interval with a second once-a-second timer laid
-over it after every action, which meant an idle window talking to the
-server thirty times a minute and an action answered by both timers at once.
+---
 
-## Nodes
+## Updates
 
-A node opens like a guest does -- double-click it in the tree, or right-click
-it for **Open Node** -- and gets a tab of its own with two sides.
+A packaged build asks GitHub for the latest release a few seconds after the
+window opens, and says so only when there is a newer one. It never downloads
+or installs anything: the dialog shows the release notes and a link. Turn it
+off in **Preferences -> Behaviour**, or check on demand from **Help -> Check
+for Updates**.
 
-The summary is what Proxmox's own node Summary shows:
+---
 
-* **meters** for CPU usage, IO delay, load average, RAM, swap and the root
-  filesystem. Load is drawn against the processor count, so a full bar means
-  a machine with no idle capacity left rather than an arbitrary ceiling.
-* **graphs** of CPU (with IO delay over it), memory used against installed,
-  and network traffic in and out, over the hour, day, week, month or year.
-  Hovering reads off the sample under the pointer. They come from the
-  node's round-robin history, which records a sample a minute, so the page
-  re-reads it once a minute and no faster.
-* status, uptime, how many guests are on it, the processor, and the kernel
-  and pve-manager versions.
+## Where things are kept
 
-There is deliberately no picture of the console on this page, unlike a
-guest's: a thumbnail of a shell prompt is not worth the width.
+Settings, saved connections and pinned certificates:
 
-**Open Shell** is the node's own terminal -- `termproxy` on
-`/nodes/<node>`, which is what the web interface's Shell button opens, and
-the same emulator the container consoles use. It is not opened for you: a
-node page that comes back with the session on the next start brings the
-figures, not a root shell.
+| | |
+| --- | --- |
+| Windows | `%APPDATA%\Proxima\settings.json` |
+| Linux | `$XDG_CONFIG_HOME/proxima/settings.json`, or `~/.config/proxima/settings.json` |
+| Anywhere | `PROXIMA_CONFIG_DIR` overrides both |
 
-The graphs are drawn with cairo (`proxima/ui/graphs.py`) rather than by a
-charting library, for the same reason the terminal emulator and the RFB
-client are ours: nothing new to install, on either platform.
-
-A node the cluster cannot reach says so in the tree and on its page, and its
-Shell is greyed out rather than offered and then refused.
-
-## Certificates
-
-Proxmox signs its own certificate, so there is no public authority to vouch
-for it. Rather than turn checking off -- which is the usual answer, and
-means talking to anything that answers on port 8006 while holding root
-credentials -- Proxima does what ssh does:
-
-1. The first connection to a server shows you its certificate, including the
-   SHA-256 fingerprint. **Datacenter -> Certificates** in the Proxmox web
-   interface prints the same value, as does
-   `openssl x509 -fingerprint -sha256`, so it can be compared by eye.
-2. Accept it once and the fingerprint is pinned in the settings under
-   `trusted_certs`. Nothing asks again.
-3. If that server ever presents a different certificate, the connection
-   stops before any credential is sent and says so. That is a renewal, or it
-   is somebody in the middle, and nothing at this end can tell which -- so
-   the safe answer is the default one.
-
-There is no "skip the check" setting, deliberately: it would be set once,
-forgotten, and left on the one connection that carries root. A certificate
-that does chain to a public CA is verified normally and is not pinned, so
-renewing it changes nothing. A pinned certificate is not checked for
-hostname, because the fingerprint *is* the identity at that point -- and a
-Proxmox certificate frequently does not match the address you reach it on.
-
-The console's own connection is held to the same pin, so a VNC session
-cannot end up less checked than the API call that opened it. To be asked
-again about a server, delete its entry from `trusted_certs` in
-`settings.json`.
-
-## Which console you get
-
-| Guest | Default | The other option |
-| --- | --- | --- |
-| VM with a SPICE display | SPICE | VNC |
-| VM without one | VNC | - |
-| Container | Serial | VNC |
-
-**VM -> Reopen Console with...** switches for as long as the tab is open;
-the guest's own **Protocol** setting, in VM Settings -> Proxmox Manager,
-makes it stick for everyone.
-
-The serial console is Proxmox's `termproxy` -- the same thing the web UI
-opens with xterm.js, and what the `pct console` command attaches to. It is
-a real character terminal rather than a picture of one, which is what a
-container's VNC console actually is:
-
-* the text can be selected with the mouse, **Ctrl+Shift+C** copies and
-  **Ctrl+Shift+V** pastes (middle click pastes the primary selection)
-* the terminal is as wide as the tab, not a fixed 80x24, and the container
-  is told when that changes
-* there is scrollback -- the wheel, the scrollbar, or Shift+Page Up
-* **Ctrl+plus** and **Ctrl+minus** change the font size, per container
-* it costs a few hundred bytes a screen rather than a framebuffer
-
-VNC stays one menu entry away, because a container whose serial console is
-wedged is exactly when a second opinion is worth having. The emulator is
-ours (`proxima/console/vt.py`): VTE is the obvious answer on Linux and does
-not exist on Windows, since MSYS2 ships no `vte3` for any mingw target.
-
-## Full screen, on more than one monitor
-
-**Ctrl+Alt+Enter** puts the console in front full screen, with a floating
-bar at the top edge for the way back out.
-
-**View -> Use All Monitors**, off by default, spreads the guest over every
-monitor instead: the tab's window takes the monitor it is already on, and
-each further display gets a bare window on the next monitor along, ordered
-by where the monitors actually sit rather than by how the desktop numbers
-them. Leaving full screen closes them again.
-
-A head is *asked for*, not waited for, which is the part that is easy to
-get wrong. A guest does not offer a second display until a client says it
-wants one, so counting the SPICE display channels that have turned up
-answers "one" for a guest that would happily give you four. Proxima says
-what virt-viewer's Displays menu says -- display N is enabled -- and the
-guest's driver makes the head. Giving the head back on the way out disables
-it again, so the guest is not left with a monitor nobody is watching and
-windows living on it. That also matters more than it sounds: a desktop that
-is left with a monitor it cannot see can save that layout and come back to
-it after a reboot, with the session on a screen that is not there.
-
-**And it is asked for twice.** Going full screen resizes the first head,
-and the message describing that resize does not mention a head that has
-been asked for and not yet created -- so on some guests the first request
-is dropped, which is what "it works if I go full screen twice" was. Asking
-*only* after the resize is not the answer either: other guests make the
-head on the first ask and lose it when the ask is delayed. So every window
-opens at once, showing a message where the picture will be, and any head
-the guest has not produced by the time the resize lands is asked for again
--- off, on, and a new widget, which is what going full screen twice did by
-hand. Three attempts, then the window says what it knows instead.
-
-The retry rebuilds the widget rather than just re-enabling the head,
-because a head's size is reported by its widget and only when the widget is
-allocated: a head that was dropped and merely re-enabled has no size, and
-the guest is entitled to ignore it.
-
-**Where the heads go is the guest's business.** It arranges the displays it
-has been given, and it is good at it. A client that sends positions as well
-argues with it continuously: every position provokes a resize and every
-resize changes the numbers the next position would be computed from. On a
-guest with two QXL devices it is worse than useless, because the agent
-matches monitor-config entries to devices in the guest's own enumeration
-order, which need not match the display channels -- so a position meant for
-one monitor lands on the other, and the two sizes swap back and forth
-forever. Proxima sends no positions and no sizes. Each head's widget
-reports its own size through `resize-guest`, which is exactly one monitor,
-and the guest lays them out.
-
-**`vga: qxl` is already enough.** QXL carries up to four monitors on one
-device; `qxl2`/`qxl3`/`qxl4` add QXL *devices*, which is a different thing
-and is not needed for a second monitor. Either way it is up to four, and
-the difference is only whether the extra heads arrive as monitors on one
-display channel or as a channel each -- Proxima works out which from what
-has connected.
-
-The entry is disabled where it would do nothing, and the tooltip says which
-reason applies: a VNC console (one framebuffer with the guest's heads side
-by side inside it, so there is nothing to spread), a desktop with one
-monitor, a console that is not connected, or a single-head adapter. In
-Proxmox that last one means VirtIO-GPU: QEMU's `virtio-gpu` defaults to one
-output and Proxmox exposes no setting to raise it, so SPICE (`qxl`) is the
-adapter to pick for multiple monitors.
-
-Nothing is reparented on either path. A `SpiceDisplay` moved between
-toplevels has its `GdkWindow` destroyed and rebuilt underneath a live
-connection, so the first head keeps the widget it has had since it
-connected and the extra heads get widgets built for the occasion and thrown
-away afterwards.
-
-## Sending keys the host swallows
-
-Ctrl+Alt+Del is a toolbar button; its arrow, and **VM -> Send Key**, carry
-the rest -- Ctrl+Alt+Backspace, the twelve virtual terminals, Alt+Tab,
-Alt+F4, Ctrl+Esc and PrintScreen. These exist because pressing them does
-not work: the window manager on *this* computer takes Alt+Tab, a Linux
-desktop takes Ctrl+Alt+F2, and something is usually listening for
-PrintScreen, so none of them ever reach the guest. SPICE and VNC both carry
-them -- keysyms go over SPICE and RFB alike -- so the menu works on a VNC
-console too.
-
-On a serial console the menu only offers what a character terminal can
-express, and the entries that cannot are refused by name rather than
-quietly doing something else: Ctrl+Alt+F2 switches virtual terminals on a
-machine with a console driver, and there is no console driver behind a pty.
-Ctrl+Alt+Del is greyed out there for the same reason.
-
-## Logs
-
-Every run writes one, and **Help -> Open Log Folder** is the short way to
-find it. The last five runs are kept, and a single run is capped at 10 MB
+Logs. Every run writes one, and **Help -> Open Log Folder** is the short way
+to find it. The last five runs are kept, and a single run is capped at 10 MB
 with one previous chunk retained -- so a window left open for a fortnight
-keeps its recent past without growing without limit. A run's chunks age out
-together, so a long one never pushes four short ones out of the directory.
+keeps its recent past without growing without limit.
 
 | | |
 | --- | --- |
@@ -257,242 +328,37 @@ together, so a long one never pushes four short ones out of the directory.
 | macOS | `~/Library/Logs/Proxima` |
 | Anywhere | `PROXIMA_LOG_DIR` overrides all of the above |
 
-The file always gets full detail; `--debug` additionally puts it on the
-console and stops filtering GLib's own chatter (`G_MESSAGES_DEBUG` picks
-individual domains, as it would anywhere else). This matters more than it
-looks: a packaged Windows build is a GUI-subsystem executable with **no
-stdout and no stderr at all**, so on Windows the log file is the only
-account of a run there will ever be. GTK, GStreamer and spice-gtk log
-through GLib rather than through Python, and those messages are routed into
-the same file -- a SPICE fault usually explains itself on a `GSpice` line.
+A packaged Windows build is a GUI executable with **no stdout and no stderr
+at all**, so on Windows the log file is the only account of a run there will
+ever be. GTK, GStreamer and spice-gtk log through GLib rather than through
+Python, and those messages land in the same file -- a SPICE fault usually
+explains itself on a `GSpice` line.
 
-## Updates
+---
 
-A packaged build asks GitHub for the latest release a few seconds after the
-window opens, and says so only when there is a newer one. It never downloads
-or installs anything; the dialog shows the release notes and a link. Turn it
-off in Preferences -> Behaviour, or check on demand from Help -> Check for
-Updates. A source checkout never checks by itself -- the version there comes
-from `pyproject.toml`, which is routinely behind the tree it describes.
-
-## USB redirection
-
-A USB device plugged into this computer can be handed to a VM over SPICE,
-from **VM -> USB Devices**, from the icon in the status bar, or from the
-question Proxima asks when something is plugged in while a console is in
-front of you. VNC has no channel to carry a device over, so it is offered
-only on SPICE.
-
-Three things have to be in place, and the status bar says which one is
-missing:
-
-| | |
-| --- | --- |
-| The VM needs a SPICE USB port | Proxmox adds none. Hardware -> Add -> USB Device -> Spice Port, which writes `usb0: spice`. One line, one device at a time; add more for more. |
-| Windows needs the UsbDk driver | The installer offers to install it (a tickbox on the components page), or get it from [daynix/UsbDk](https://github.com/daynix/UsbDk/releases/latest). Devices are listed without it and the list looks perfectly healthy -- Windows just will not hand one over when it is claimed. |
-| Linux needs access to the device | spice-gtk talks to libusb directly, so the user has to be able to open `/dev/bus/usb`. The distribution's `spice-client-glib-usb-acl-helper` handles this where it is installed. |
-
-A redirected device is taken away from this computer for as long as it is
-redirected; closing the console gives it back. The prompt on plug-in can be
-turned off in Preferences -> Console.
-
-## Development
-
-PyGObject, pycairo and spice-gtk come from the system, never from pip -- a
-pip-installed copy cannot find the GObject typelibs.
-
-| | Linux | Windows (MSYS2 UCRT64) |
-| --- | --- | --- |
-| GTK stack | `apt install python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-spiceclientgtk-3.0` | `pacman -S mingw-w64-ucrt-x86_64-{python-gobject,gtk3,spice-gtk}` |
-| pytest | `apt install python3-pytest python3-pytest-xdist` | `pacman -S mingw-w64-ucrt-x86_64-python-pytest{,-xdist}` |
-
-### Tests
-
-The suite in `tests/` builds the real UI against a fake Proxmox and pumps the
-GTK main loop, which catches what only shows up once the widgets are realised
--- wrong signal signatures, bad CSS, missing icons, TreeStore column
-mismatches -- without needing a server. The fakes and the main-loop pump live
-in `tests/conftest.py`.
+## Command line
 
 ```
-python3 -m pytest                  everything (~30s, eight at a time)
-python3 -m pytest -k console       one area
-python3 -m pytest -n0              serially, for a readable failure
-python3 tools/smoke_test.py        same thing, the old entry point
+proxima                  normal start
+proxima --diagnose       report the GTK/SPICE stack and exit
+proxima --logs           print the log directory and exit
+proxima --debug          log everything, including GLib's own, to the console
+proxima --fontconfig     force the FreeType font backend
 ```
 
-Windows are module-scoped: the tests in a file run in order against one
-window, each putting back whatever it changed. That is why the run is split
-by file (`--dist loadfile` in `pyproject.toml`) rather than by test -- a file
-has to stay on one worker, and several windows opening and closing at once is
-the suite working as intended, not a fault.
+`--diagnose` is the first thing to run when a console will not open: it
+prints what the build carries, which GStreamer decoders are present, and
+whether a SPICE session can actually be created.
 
-The wall clock is bounded by the slowest single file, so the way to make the
-suite faster is to make its longest file shorter, not to add workers. Which
-file that is comes out of `python3 -m pytest -n0 --durations=0`. Prefer
-`pump_until(...)` over `pump(n)` when adding a test: a fixed sleep is both
-slower than it needs to be on a good machine and too short on a busy one.
+---
 
-### Formatting and linting
+## Contributing
 
-```
-uv run --only-group dev ruff check .          must pass
-uv run --only-group dev ruff format --diff .  advisory, see below
-```
+Building it, running it from source, the test suite and how releases are cut
+are in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 
-`ruff check` is enforced in CI. The tree is `ruff format` clean as well, but
-the format job is still `continue-on-error`: it reports the diff without
-failing the build. Drop that line from `ci.yml` to make it binding.
+## Licence
 
-### Icons
-
-The icons on buttons and menus are not shipped with Proxima. They are
-freedesktop icon names -- `media-playback-start-symbolic`,
-`view-fullscreen-symbolic` -- looked up in whatever icon theme is live, which
-is **Adwaita**, the one GTK itself comes with. That is why a packaged build
-carries `share/icons/Adwaita`: without it the buttons come up blank.
-
-To see what is available, GTK ships a browser:
-
-```
-gtk3-icon-browser        MSYS2: it is in mingw-w64-ucrt-x86_64-gtk3
-                         Debian: apt install gtk-3-examples
-```
-
-Anything it lists can be passed to `set_icon_name()`. The names also follow
-the freedesktop icon naming specification, so most of them are portable to
-other themes. Prefer the `-symbolic` variants: they recolour to match the
-theme, which is what the toolbar and the status bar rely on.
-
-### CI
-
-* `.github/workflows/ci.yml` -- format (advisory), lint, and the test suite on
-  Linux under Xvfb with openbox, since the fullscreen tests wait on real
-  window-state changes.
-* `.github/workflows/build.yml` -- standalone Nuitka builds for Linux and
-  Windows, uploaded as artifacts. The Windows job builds inside MSYS2 UCRT64
-  for the same reason the app runs there. It takes the better part of an hour,
-  so it does not run on a push: start one from **Actions -> Build -> Run
-  workflow**, or put a `build-please` label on a pull request to build that
-  branch. The release workflow calls it regardless.
-* `.github/workflows/release.yml` -- everything below.
-
-## Releasing
-
-A release is cut from a tag, so every artifact traces back to one commit.
-The version lives in `pyproject.toml` and nowhere else -- the app reads it
-back at run time -- so `uv version` is all it takes:
-
-```
-uv version 0.2.0                     or: uv version --bump minor
-git commit -am "release: v0.2.0"
-git tag -a v0.2.0 -m "Proxima 0.2.0"
-git push origin main --follow-tags   this is what starts the release
-```
-
-The workflow refuses to publish a tag whose version does not match
-`pyproject.toml`. A version with a suffix (`0.2.0-rc1`) is published as a
-pre-release.
-
-Pushing the tag builds both platforms and publishes:
-
-| Artifact | |
-| --- | --- |
-| `proxima-<v>-windows-x86_64-setup.exe` | NSIS installer, per-user or all-users |
-| `proxima-<v>-windows-x86_64.zip` | the same bundle, unpacked wherever you like |
-| `proxima-<v>-linux-x86_64.tar.gz` | tarball, not a zip: zip has nowhere to keep the executable bit |
-| `Proxima-<v>-x86_64.AppImage` | |
-| `proxima_<v>_amd64.deb` | installs to `/opt/proxima` |
-| `proxima-<v>-1.x86_64.rpm` | the same |
-| `SHA256SUMS` | |
-
-`workflow_dispatch` on the release workflow rebuilds an existing tag and
-re-uploads the files, for when a build fails for reasons that have nothing to
-do with the code.
-
-### Trying a package without releasing one
-
-Run the release workflow by hand from **Actions -> Release -> Run workflow**
-and leave the tag box **empty**. Everything is built and packaged from the
-branch you picked -- installer, AppImage, deb, rpm, zip, checksums -- and the
-lot is uploaded as a `release-<version>` workflow artifact. Nothing is
-published and no tag is touched, so this is the way to look at an actual
-AppImage or installer before deciding to cut a release.
-
-The version on those files comes from `pyproject.toml`, which on a branch is
-whatever the last release left behind. They are for testing, not for handing
-out.
-
-### What is in a package
-
-Everything. None of them ask the user to install GTK, spice-gtk, GStreamer or
-Python -- and they are built `--standalone`, never `--onefile`, which would
-unpack 60 MB to a temporary directory on every start.
-
-Getting there takes two steps beyond a plain Nuitka build, because Nuitka
-follows what the program *links against*, and GTK loads most of itself by hand
-later:
-
-* the build passes `--include-raw-dir` for the pixbuf loaders, the GStreamer
-  plugins and the GIO modules. Not `--include-data-dir`, which silently drops
-  shared libraries and leaves plugin directories that do nothing;
-* `tools/bundle_deps.py` then asks every bundled plugin what it needs, copies
-  the codec libraries in beside the executable, and on Linux gives the plugins
-  an RPATH back to the top of the bundle.
-
-At run time `proxima/bundle.py` points GTK at all of it -- the loader cache is
-rewritten, since the paths in it belong to the machine the build was made on
--- before anything imports `gi`. It does nothing in a source checkout.
-`proxima --diagnose` prints what a bundle carries and what it is missing.
-
-`packaging/` holds the installer script, the desktop entry, the icon and
-`gst-plugins.txt` -- the list of GStreamer plugins a build carries. Shipping
-every plugin costs about 200 MB, nearly all of it encoders a client never
-uses.
-
-The Windows installer can also carry the UsbDk driver, which USB redirection
-needs. `tools/fetch_usbdk.py` downloads the latest x64 MSI at package time
-and the release workflow passes it to `makensis` as `-DUSBDK=...`; without
-that define the installer compiles exactly as before and simply does not
-offer the driver. It is one tickbox on the components page, unticked
-automatically when the machine already has UsbDk, and the uninstaller
-deliberately leaves the driver alone -- virt-viewer and friends use the same
-one.
-
-The installer runs as the invoking user and asks for administrator rights
-only when they are actually needed: choosing "all users" relaunches it
-elevated at that moment, and the uninstaller does the same for an all-users
-installation. A per-user install never sees a UAC prompt from Proxima
-itself. (The driver's own MSI raises one when it is installed, whichever
-mode is in use -- a kernel driver is per-machine either way.)
-
-The application icon is `packaging/proxima.png`. After changing it, run
-`python3 tools/make_icon.py` to rebuild `packaging/proxima.ico`, which is
-what Windows uses for the executable, the installer and the taskbar. The PNG
-is set as the default window icon at startup, so it applies in a source
-checkout too -- no build needed to see it.
-
-### Building one locally
-
-Windows, from the MSYS2 UCRT64 tree but *not* from an MSYS2 shell -- Nuitka's
-`gi` plugin trips over its own path handling when `MSYSTEM` is set:
-
-```powershell
-$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
-python -m nuitka --standalone --zig --include-package=proxima proxima.py
-```
-
-`--zig` is not optional: Nuitka cannot use MinGW with Python 3.13 or newer,
-and it refuses any gcc it did not download itself. Zig has to be on PATH.
-
-If a build starts segfaulting or dies with `init_fs_encoding: failed to get
-the Python codec of the filesystem encoding`, the Zig cache is poisoned --
-a build that is interrupted or fails part-way can leave it that way, and
-every build afterwards inherits it. Nuitka's own `--disable-cache=all` does
-not cover it:
-
-```powershell
-Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Nuitka\Nuitka\Cache\zig"
-```
-
-CI never hits this, since every run starts on a clean machine.
+Proxima is MIT licensed; see [LICENSE](LICENSE). A package bundles GTK,
+spice-gtk and GStreamer, which carry their own licences -- those are listed
+in `packaging/NOTICE.md` and shipped in `licenses/` inside every build.
