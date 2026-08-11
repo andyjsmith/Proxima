@@ -951,6 +951,14 @@ class MainWindow(Gtk.Window):
         )
         strip.pack_start(self.mic_icon, False, False, 0)
 
+        # This machine's smartcard reader, offered to the guest as a reader of
+        # its own. Off unless asked for, and next to the microphone because it
+        # is the same kind of thing: local hardware handed to a VM.
+        self.smartcard_icon = StatusIndicator(
+            "auth-smartcard-symbolic", "Smartcard", on_toggle=self._toggle_smartcard
+        )
+        strip.pack_start(self.smartcard_icon, False, False, 0)
+
         # Whether a USB device is currently in the guest's hands. Not a
         # switch like the two before it -- there is nothing to turn on
         # without saying which device -- so clicking opens the chooser.
@@ -973,6 +981,7 @@ class MainWindow(Gtk.Window):
         self._set_indicator(self.qga_icon, None, "Guest agent")
         self._set_indicator(self.audio_icon, None, "Audio")
         self._set_indicator(self.mic_icon, None, "Microphone")
+        self._set_indicator(self.smartcard_icon, None, "Smartcard")
         self._set_indicator(self.usb_icon, None, "USB redirection")
         self._update_dnd_indicator()
 
@@ -1204,6 +1213,9 @@ class MainWindow(Gtk.Window):
 
     def _toggle_microphone(self):
         self._toggle_switch("microphone", "microphone")
+
+    def _toggle_smartcard(self):
+        self._toggle_switch("smartcard", "smartcard redirection")
 
     def _toggle_dnd(self):
         """Arm or disarm dragging guests between folders.
@@ -1492,6 +1504,79 @@ class MainWindow(Gtk.Window):
             enabled=enabled,
             can_toggle=True,
             detail=f"{audio} - click to turn {'off' if enabled else 'on'}",
+        )
+
+    def _update_smartcard_indicator(self, console=_CURRENT):
+        """This machine's card reader, offered to the guest.
+
+        Three things have to line up and only one of them is a setting: a
+        reader plugged in here, a CCID device on the VM for the channel to
+        attach to, and the switch. Proxmox adds no CCID device by default, so
+        the usual answer is "the guest has nowhere to put it" -- which is worth
+        saying plainly rather than leaving a switch that appears to do nothing.
+        """
+        if console is _CURRENT:
+            console = self.current_console()
+        guest = self.context_guest(console)
+        enabled = self._guest_switch(guest, "smartcard")
+        label = "Smartcard"
+
+        if guest is None or guest.is_container:
+            self._set_indicator(self.smartcard_icon, None, label, can_toggle=False)
+            return
+        if console is None or not getattr(console, "supports", {}).get("smartcard"):
+            self._set_indicator(
+                self.smartcard_icon,
+                None,
+                label,
+                enabled=enabled,
+                can_toggle=False,
+                detail=(
+                    "n/a - "
+                    + (
+                        "this console is VNC, which has no smartcard channel"
+                        if console is not None
+                        else "needs an open SPICE console"
+                    )
+                ),
+            )
+            return
+
+        readers = getattr(console, "smartcard_readers", lambda: [])()
+        if not readers:
+            self._set_indicator(
+                self.smartcard_icon,
+                False,
+                label,
+                enabled=enabled,
+                can_toggle=False,
+                detail="no smartcard reader on this machine",
+            )
+            return
+
+        named = ", ".join(readers)
+        # With the switch off there is no channel to look for, so "no channel"
+        # would only be describing the switch back at itself.
+        if enabled and not getattr(console, "smartcard_available", lambda: False)():
+            self._set_indicator(
+                self.smartcard_icon,
+                False,
+                label,
+                enabled=enabled,
+                can_toggle=True,
+                detail=(
+                    f"{named} - this guest offered no smartcard channel. "
+                    "Proxmox adds no CCID device by default."
+                ),
+            )
+            return
+        self._set_indicator(
+            self.smartcard_icon,
+            True,
+            label,
+            enabled=enabled,
+            can_toggle=True,
+            detail=f"{named} - click to turn {'off' if enabled else 'on'}",
         )
 
     # -- USB redirection -----------------------------------------------
@@ -3091,6 +3176,7 @@ class MainWindow(Gtk.Window):
         self._refresh_snapshot_state(guest)
         self._update_audio_indicator(console)
         self._update_microphone_indicator(console)
+        self._update_smartcard_indicator(console)
         self._update_clipboard_indicator(console)
         self._update_usb_indicator(console)
         self._ensure_config_loaded(guest)
@@ -3156,6 +3242,7 @@ class MainWindow(Gtk.Window):
         if current is not None and current.key == key:
             self._update_audio_indicator()
             self._update_microphone_indicator()
+            self._update_smartcard_indicator()
             self._update_clipboard_indicator()
         return False
 
@@ -4112,6 +4199,7 @@ class MainWindow(Gtk.Window):
                 share_clipboard=self._guest_switch(guest, "clipboard"),
                 play_audio=self._guest_switch(guest, "audio"),
                 capture_audio=self._guest_switch(guest, "microphone"),
+                share_smartcard=self._guest_switch(guest, "smartcard"),
                 view_only=guest.key in self._view_only,
                 disable_effects=prefs["disable_effects"],
                 on_agent=lambda connected, c=None: self._on_console_agent(
@@ -4845,6 +4933,7 @@ class MainWindow(Gtk.Window):
             return
         self._update_audio_indicator(console)
         self._update_microphone_indicator(console)
+        self._update_smartcard_indicator(console)
         self._update_clipboard_indicator(console)
         self._update_usb_indicator(console)
 
@@ -5154,6 +5243,7 @@ class MainWindow(Gtk.Window):
         self._context_changed()
         self._update_audio_indicator()
         self._update_microphone_indicator()
+        self._update_smartcard_indicator()
         self._update_clipboard_indicator()
 
     def _clear_session_choices(self, key):

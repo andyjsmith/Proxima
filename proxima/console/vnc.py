@@ -71,6 +71,7 @@ class VncConsole(Gtk.Box):
         "clipboard": False,
         "audio": False,
         "microphone": False,
+        "smartcard": False,
         "view_only": True,
         "usb": False,
         # RFB has one framebuffer per connection. A guest with two heads

@@ -286,6 +286,7 @@ class SpiceConsole(Gtk.Box):
         "clipboard": True,
         "audio": True,
         "microphone": True,
+        "smartcard": True,
         "view_only": True,
         "effects": True,
         "usb": True,
@@ -301,7 +302,7 @@ class SpiceConsole(Gtk.Box):
     # the session is created. The microphone deliberately is not: it is a
     # channel, so it moves live, and a False from it means there is no
     # record channel -- which reconnecting would not change.
-    RECONNECT_SWITCHES = ("audio",)
+    RECONNECT_SWITCHES = ("audio", "smartcard")
 
     def __init__(
         self,
@@ -318,6 +319,7 @@ class SpiceConsole(Gtk.Box):
         share_clipboard=True,
         play_audio=True,
         capture_audio=False,
+        share_smartcard=False,
         view_only=False,
         disable_effects=(),
         on_usb=None,
@@ -358,6 +360,10 @@ class SpiceConsole(Gtk.Box):
         self.enable_audio = bool(enable_audio) and bool(play_audio)
         self.capture_audio = bool(capture_audio)
         self._record_channel = None
+        # The reader on this machine, offered to the guest as a card reader of
+        # its own. Off unless asked for: a smartcard is somebody's identity.
+        self.share_smartcard = bool(share_smartcard)
+        self._smartcard_channel = None
         self.view_only = bool(view_only)
         # Guest desktop effects to ask the agent to drop, for a link where
         # the wallpaper is not worth the bandwidth. See _build_session.
@@ -535,6 +541,17 @@ class SpiceConsole(Gtk.Box):
             except Exception as exc:
                 log.warning("could not disable audio: %s", exc)
 
+        if self.share_smartcard:
+            # spice-gtk defaults this off and reads it when the session is
+            # built, which is why the switch asks for a reconnect. The channel
+            # only appears if the *server* offers one too -- see
+            # smartcard_available().
+            try:
+                session.set_property("enable-smartcard", True)
+                log.info("smartcard redirection enabled")
+            except Exception as exc:
+                log.warning("could not enable smartcard redirection: %s", exc)
+
         if self.disable_effects:
             # Applied to display channels as they are created, which is why
             # this is a session property rather than something to switch on a
@@ -632,6 +649,42 @@ class SpiceConsole(Gtk.Box):
         rather than pretended, exactly as with audio: the caller rebuilds.
         """
         self.disable_effects = tuple(effects or ())
+        return False
+
+    # -- smartcard redirection -----------------------------------------
+    #
+    # SPICE carries a reader on this machine into the guest as a CCID device,
+    # so a card in your reader is a card in the VM. Two things have to be true
+    # and neither is ours to arrange: the client needs a reader, and the guest
+    # needs a CCID device for the channel to attach to. Proxmox does not
+    # configure one by default, so on most VMs this stays unavailable -- which
+    # the indicator says rather than leaving a switch that does nothing.
+
+    @staticmethod
+    def smartcard_readers():
+        """Reader names on this machine, or [] if there are none."""
+        try:
+            manager = SpiceGLib.SmartcardManager.get()
+            return [
+                r.get_property("name") if hasattr(r, "get_property") else str(r)
+                for r in (manager.get_readers() or [])
+            ]
+        except Exception as exc:
+            log.info("could not list smartcard readers: %s", exc)
+            return []
+
+    def smartcard_available(self):
+        """Whether the guest offered a smartcard channel to talk to."""
+        return self._smartcard_channel is not None
+
+    def set_smartcard_enabled(self, enabled):
+        """Record the choice. Returns False: it needs a reconnect.
+
+        "enable-smartcard" decides whether spice-gtk asks for the channel at
+        all, and it is read when the session is built -- so like audio, this
+        is reported rather than pretended, and the caller rebuilds.
+        """
+        self.share_smartcard = bool(enabled)
         return False
 
     # -- the microphone ------------------------------------------------
@@ -760,6 +813,10 @@ class SpiceConsole(Gtk.Box):
                 connect_signal(channel, "notify::monitors", self._on_monitors_notify)
             self._refresh_heads()
             GLib.idle_add(self._attach_display, channel_id)
+
+        elif isinstance(channel, SpiceGLib.SmartcardChannel):
+            self._smartcard_channel = channel
+            self._status("smartcard channel offered")
 
         elif isinstance(channel, SpiceGLib.RecordChannel):
             # The microphone. Not acted on from in here: spice-gtk's own

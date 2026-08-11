@@ -408,3 +408,69 @@ def test_closing_the_task_pane_releases_its_toolbar_button(window):
     assert not window.tasks_tool_item.get_active(), (
         "closing the pane left its toolbar button pressed in"
     )
+
+
+# -- smartcard redirection -------------------------------------------------
+
+
+def test_smartcard_defaults_off_and_needs_a_rebuild(window, config, switch_console):
+    """A smartcard is somebody's identity, so nothing shares it by accident."""
+    guest = window.sidebar.guests[RUNNING]
+    assert window._guest_switch(guest, "smartcard") is False, (
+        "a guest that never asked was offering the card reader"
+    )
+    window._update_smartcard_indicator(switch_console)
+    pump(0.2)
+    assert window.smartcard_icon.struck, "the icon is not struck when off"
+    assert window.smartcard_icon.can_toggle, (
+        "with a reader here and a channel offered, it should be switchable"
+    )
+
+    window._toggle_smartcard()
+    # Read before pumping: the rebuild finishes and clears the mark, exactly
+    # as in the audio test above.
+    reconnecting = RUNNING in window._reconnecting
+    pump(0.3)
+    try:
+        assert switch_console.share_smartcard is True, "the switch did not reach it"
+        # enable-smartcard is read when the session is built.
+        assert reconnecting, "turning it on did not reconnect"
+        assert (config.get("guest_prefs") or {}).get(RUNNING, {}) == {}, (
+            "the status bar switch wrote a saved preference"
+        )
+    finally:
+        config["guest_prefs"] = {}
+
+
+def test_no_reader_on_this_machine_is_said_plainly(window, switch_console):
+    switch_console.readers = []
+    window._update_smartcard_indicator(switch_console)
+    pump(0.2)
+    assert not window.smartcard_icon.can_toggle, (
+        "offered to share a reader this machine does not have"
+    )
+    assert "reader" in (window.smartcard_icon.get_tooltip_text() or "").lower(), (
+        f"no explanation: {window.smartcard_icon.get_tooltip_text()!r}"
+    )
+
+
+def test_a_guest_with_no_ccid_device_says_so_once_it_is_on(window, switch_console):
+    """The usual case on Proxmox, which adds no CCID device by default."""
+    switch_console.has_smartcard_channel = False
+    window._session_switches[(RUNNING, "smartcard")] = True
+    try:
+        window._update_smartcard_indicator(switch_console)
+        pump(0.2)
+        tip = window.smartcard_icon.get_tooltip_text() or ""
+        assert "CCID" in tip, f"the reason was not given: {tip!r}"
+    finally:
+        window._session_switches.pop((RUNNING, "smartcard"), None)
+
+
+def test_spice_declares_the_smartcard_contract():
+    from proxima.console.spice import SpiceConsole
+
+    assert SpiceConsole.supports["smartcard"] is True
+    assert "smartcard" in SpiceConsole.RECONNECT_SWITCHES, (
+        "enable-smartcard is read at session build, so it needs a rebuild"
+    )

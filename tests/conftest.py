@@ -666,6 +666,7 @@ class FakeConsole(Gtk.Box):
         "clipboard": True,
         "audio": True,
         "microphone": True,
+        "smartcard": True,
         "view_only": True,
         "effects": True,
         "multi_monitor": True,
@@ -673,7 +674,7 @@ class FakeConsole(Gtk.Box):
     agent_connected = True
     # As SpiceConsole declares it: audio needs the session rebuilt, the
     # microphone does not.
-    RECONNECT_SWITCHES = ("audio",)
+    RECONNECT_SWITCHES = ("audio", "smartcard")
 
     def __init__(self, title="fake-guest", heads=1):
         super().__init__()
@@ -693,6 +694,12 @@ class FakeConsole(Gtk.Box):
         self.share_clipboard = True
         self.play_audio = True
         self.capture_audio = False
+        self.share_smartcard = False
+        # A reader on this machine, and a channel from the guest. Both have to
+        # be there for the switch to mean anything; tests set them to model a
+        # machine with no reader or a VM with no CCID device.
+        self.readers = ["Fake Reader 0"]
+        self.has_smartcard_channel = True
         self.view_only = False
         self.disable_effects = ()
         # Whether the guest offered a record channel at all. True here so the
@@ -731,6 +738,16 @@ class FakeConsole(Gtk.Box):
     def set_microphone_enabled(self, value):
         self.capture_audio = value
         return self.has_record_channel
+
+    def smartcard_readers(self):
+        return list(self.readers)
+
+    def smartcard_available(self):
+        return self.has_smartcard_channel
+
+    def set_smartcard_enabled(self, value):
+        self.share_smartcard = value
+        return False  # needs the session rebuilt, as SpiceConsole reports
 
     def set_scaling(self, value):
         self.scaling = value

@@ -146,6 +146,7 @@ class SerialConsole(Gtk.Box):
         "clipboard": False,
         "audio": False,
         "microphone": False,
+        "smartcard": False,
         "view_only": True,
         "usb": False,
         "multi_monitor": False,

@@ -79,6 +79,12 @@ MICROPHONE_CHOICES = [
     ("enabled", "Enabled"),
 ]
 
+# Same shape and same reason as the microphone: off unless asked for.
+SMARTCARD_CHOICES = [
+    ("disabled", "Disabled"),
+    ("enabled", "Enabled"),
+]
+
 PROTOCOL_CHOICES = [
     ("default", "Default  -  SPICE when the display supports it"),
     ("vnc", "VNC only"),
@@ -775,6 +781,21 @@ class VMSettingsDialog(Gtk.Dialog):
                 "record channel. Needs a SPICE console and an audio device "
                 "on the VM whose codec has an input, which "
                 "device=ich9-intel-hda,driver=spice has."
+            ),
+            sensitive=not container,
+            local=True,
+        )
+        row += 1
+        self._combo(
+            grid,
+            row,
+            "Smartcard",
+            SMARTCARD_CHOICES,
+            "smartcard",
+            tooltip=(
+                "Offer this machine's smartcard reader to the guest. Needs a "
+                "SPICE console, a reader here, and a CCID device on the VM -- "
+                "which Proxmox does not add by default."
             ),
             sensitive=not container,
             local=True,

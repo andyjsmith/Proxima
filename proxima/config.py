@@ -178,6 +178,9 @@ LOCAL_SWITCH_DEFAULTS = {
     # into one is this machine listening to the room, which nobody should get
     # by not having thought about it.
     "microphone": "disabled",
+    # And off for the same reason, more so: a smartcard is somebody's
+    # identity, and the reader is plugged into this desk.
+    "smartcard": "disabled",
 }
 
 
