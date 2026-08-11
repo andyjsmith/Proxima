@@ -113,16 +113,19 @@ def with_folder(notes, path):
 # nothing. "bidirectional" is accepted when reading so that a stored value
 # from a future version that does know directions still means "on".
 
+# Settings that belong to the *guest*: everyone who opens it should get the
+# same answer, so they live on the server. Anything that is really about the
+# machine you are sitting at -- which speakers, which microphone, which
+# folder -- is not here; see config.LOCAL_SWITCH_DEFAULTS.
 SETTINGS_DEFAULTS = {
     "clipboard": "enabled",
-    "audio": "enabled",
-    # The one switch that defaults off. Sound coming out of a guest is what
-    # someone asked for by configuring an audio device; a microphone going
-    # into one is this machine listening to the room, which nobody should
-    # get by not having thought about it.
-    "microphone": "disabled",
     "protocol": "default",
 }
+
+# Settings that used to live here and have since moved to this machine's own
+# storage. Read back when present so a guest configured before the move keeps
+# what was chosen for it; never written, so the next save drops them.
+MOVED_TO_LOCAL = ("audio", "microphone")
 
 _CLIPBOARD_ALIASES = {
     "bidirectional": "enabled",
@@ -140,11 +143,17 @@ def settings_of(notes):
 
 
 def normalise_settings(stored):
-    """A stored settings dict, cleaned up and completed from the defaults."""
+    """A stored settings dict, cleaned up and completed from the defaults.
+
+    A value left over from before audio and the microphone moved to local
+    storage is passed through as it was found, with no default filled in --
+    "absent" and "someone chose this once" have to stay distinguishable for
+    the one read that migrates it.
+    """
     settings = dict(SETTINGS_DEFAULTS)
     if not isinstance(stored, dict):
         return settings
-    for name in SETTINGS_DEFAULTS:
+    for name in (*SETTINGS_DEFAULTS, *MOVED_TO_LOCAL):
         value = stored.get(name)
         if value is None:
             continue
@@ -162,13 +171,17 @@ def with_settings(notes, settings):
     guest left alone never grows a settings block at all and one reset to
     the defaults loses it again. Notes are user-visible text; this keeps the
     footprint in them to what somebody actually chose.
+
+    Anything that is not a server-side setting is dropped too, which is how a
+    block written before audio and the microphone moved to local storage gets
+    tidied up: read once for the migration, then gone on the next save.
     """
     metadata, _ = parse(notes)
     settings = normalise_settings(settings)
     trimmed = {
         name: value
         for name, value in settings.items()
-        if value != SETTINGS_DEFAULTS[name]
+        if name in SETTINGS_DEFAULTS and value != SETTINGS_DEFAULTS[name]
     }
     if trimmed:
         metadata["settings"] = trimmed

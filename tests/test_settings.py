@@ -3,6 +3,7 @@
 import pytest
 from gi.repository import Gdk, GLib, Gtk
 
+from proxima import config as config_mod
 from proxima.api import devices as dev_mod
 from proxima.api import notes as notes_mod
 from proxima.ui import actions as action_defs
@@ -112,6 +113,9 @@ def settings_guest(window):
     FakeAPI.NOTES = {}
     guest.settings = {}
     window._clear_session_choices(RUNNING)
+    # The local half is a file on this machine, so it outlives the fixture
+    # unless it is cleared here.
+    window.config["guest_prefs"] = {}
 
 
 def test_settings_opens_for_a_guest_whose_config_was_never_read(window, settings_guest):
@@ -134,6 +138,7 @@ def test_saving_vm_settings_keeps_the_user_text_in_the_notes(
         api,
         settings_guest,
         on_saved=lambda s: window._guest_settings_saved(RUNNING, s),
+        on_local_saved=lambda values: window._guest_local_saved(RUNNING, values),
     )
     pump(0.3)
     try:
@@ -147,7 +152,8 @@ def test_saving_vm_settings_keeps_the_user_text_in_the_notes(
         )
 
         dialog.values["protocol"] = "vnc"
-        dialog.values["audio"] = "disabled"
+        # Audio is a local switch now, so it goes in the other half.
+        dialog.local_values["audio"] = "disabled"
         dialog._sync_buttons()
         assert dialog.apply_button.get_sensitive(), (
             "Apply stayed disabled after a change"
@@ -163,8 +169,11 @@ def test_saving_vm_settings_keeps_the_user_text_in_the_notes(
         assert notes_mod.settings_of(written)["protocol"] == "vnc", (
             f"protocol not stored: {notes_mod.settings_of(written)}"
         )
-        assert settings_guest.settings.get("audio") == "disabled", (
-            "the guest did not take the saved settings"
+        assert "audio" not in written, (
+            f"a local switch was written to the server: {written!r}"
+        )
+        assert window.guest_local_switch(RUNNING, "audio") == "disabled", (
+            "the local switch was not stored on this machine"
         )
         assert not dialog.apply_button.get_sensitive(), (
             "Apply stayed live after a successful save"
@@ -193,22 +202,33 @@ def test_saving_vm_settings_keeps_the_user_text_in_the_notes(
 
 def test_the_microphone_is_the_one_setting_that_defaults_off(window, settings_guest):
     """A guest nobody has configured must not be listening to the room."""
-    assert notes_mod.SETTINGS_DEFAULTS["microphone"] == "disabled"
-    assert notes_mod.normalise_settings({})["microphone"] == "disabled", (
-        "an empty settings block produced a live microphone"
+    assert config_mod.LOCAL_SWITCH_DEFAULTS["microphone"] == "disabled"
+    assert window._guest_switch(settings_guest, "microphone") is False, (
+        "a guest with nothing stored produced a live microphone"
     )
-    assert notes_mod.settings_of("")["microphone"] == "disabled", (
-        "a guest with no notes at all produced a live microphone"
+    assert window._guest_switch(None, "microphone") is False, (
+        "no guest at all produced a live microphone"
     )
-    # And the trimming that keeps notes clean has to keep the *enabled* value,
-    # since that is the one that differs from the default.
-    written = notes_mod.with_settings("", {"microphone": "enabled"})
-    assert notes_mod.settings_of(written)["microphone"] == "enabled", (
-        f"an enabled microphone was not stored: {written!r}"
+
+
+def test_the_local_switches_are_not_written_to_the_server(window, settings_guest):
+    """They are about this machine, so the guest's notes must not carry them."""
+    for name in config_mod.LOCAL_SWITCH_DEFAULTS:
+        assert name not in notes_mod.SETTINGS_DEFAULTS, (
+            f"{name} is still a server-side setting"
+        )
+    # A block written before the move is read once and then tidied away,
+    # rather than being kept alive by every later save.
+    legacy = notes_mod.with_settings("", {"clipboard": "disabled"})
+    legacy = legacy.replace(
+        '"clipboard": "disabled"', '"clipboard": "disabled", "audio": "disabled"'
     )
-    assert "microphone" not in notes_mod.with_settings(
-        "", {"microphone": "disabled"}
-    ), "the default was written into the notes"
+    assert notes_mod.settings_of(legacy).get("audio") == "disabled", (
+        "a legacy audio value became unreadable, so it cannot be migrated"
+    )
+    rewritten = notes_mod.with_settings(legacy, notes_mod.settings_of(legacy))
+    assert "audio" not in rewritten, f"the legacy value was written back: {rewritten!r}"
+    assert "clipboard" in rewritten, "tidying up dropped a real setting"
 
 
 def test_settings_reset_to_the_defaults_leave_the_notes_clean(
@@ -520,3 +540,26 @@ def test_refreshing_the_bridge_list_keeps_what_each_nic_is_on(hardware):
     pump(0.2)
     assert hardware.nets[0]["bridge_widget"].get_child().get_text() == before
     assert "vnet-dmz" in bridge_options(hardware.nets[0]), "the refresh did not land"
+
+
+def test_a_switch_set_before_the_move_is_still_honoured(window, api, settings_guest):
+    """Somebody who turned audio off on the server keeps it off.
+
+    The value stays readable in the notes and is used as the local default
+    until this machine has an answer of its own, so the move does not quietly
+    turn sound back on for a guest that was deliberately silenced.
+    """
+    settings_guest.settings = {"audio": "disabled"}
+    window.config["guest_prefs"] = {}
+    assert window.guest_local_switch(RUNNING, "audio") is None, (
+        "the test started with a local value already stored"
+    )
+    assert window._guest_switch(settings_guest, "audio") is False, (
+        "a value set before the move was ignored"
+    )
+
+    # Once this machine has its own answer, that wins.
+    window._save_guest_pref("audio", "enabled", key=RUNNING)
+    assert window._guest_switch(settings_guest, "audio") is True, (
+        "the local value did not take precedence"
+    )

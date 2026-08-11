@@ -36,6 +36,7 @@ from ..api.models import (
     vga_is_spice,
     vga_memory_mib,
 )
+from ..config import LOCAL_SWITCH_DEFAULTS
 from ..console import (
     SERIAL_AVAILABLE,
     SPICE_AVAILABLE,
@@ -1101,24 +1102,48 @@ class MainWindow(Gtk.Window):
     def _guest_switch(self, guest, name):
         """Whether one of the status bar switches is on for a guest now.
 
-        Two sources, in order: whatever the status bar button was last set
-        to for this console, and otherwise the guest's own settings from the
-        server. The button is a session-length override and nothing more --
-        it never writes back into the settings, which is what makes it safe
-        to click while poking at something.
+        Three sources, in order: whatever the status bar button was last set
+        to for this console, then wherever that switch is kept, then its
+        default. The button is a session-length override and nothing more --
+        it never writes back, which is what makes it safe to click while
+        poking at something.
 
-        The fallback is the stored default rather than a flat "on", because
-        not every switch defaults on: the microphone defaults off, and a
-        guest we know nothing about must not read as one listening.
+        Where a switch is kept depends on what it is about. The clipboard is
+        the guest's business and lives in its notes on the server; audio and
+        the microphone are about the machine you are sitting at and live in
+        this computer's own settings. See config.LOCAL_SWITCH_DEFAULTS.
+
+        The fallback is that switch's own default rather than a flat "on":
+        the microphone defaults off, and a guest we know nothing about must
+        not read as one listening to the room.
         """
-        default = notes_meta.SETTINGS_DEFAULTS.get(name, "enabled") != "disabled"
+        local = name in LOCAL_SWITCH_DEFAULTS
+        default = (
+            LOCAL_SWITCH_DEFAULTS[name]
+            if local
+            else notes_meta.SETTINGS_DEFAULTS.get(name, "enabled")
+        ) != "disabled"
         if guest is None:
             return default
         override = self._session_switches.get((guest.key, name))
         if override is not None:
             return bool(override)
-        stored = self.guest_settings(guest).get(name)
+        if local:
+            stored = self.guest_local_switch(guest.key, name)
+            if stored is None:
+                # Nothing here yet. A value left in the guest's notes from
+                # before these moved is what it was set to, so honour it
+                # rather than resetting somebody's choice to the default.
+                stored = self.guest_settings(guest).get(name)
+        else:
+            stored = self.guest_settings(guest).get(name)
         return default if stored is None else stored != "disabled"
+
+    def guest_local_switch(self, key, name):
+        """A local per-guest switch as stored, or None if never set here."""
+        stored = (self.config.get("guest_prefs") or {}).get(key, {})
+        value = stored.get(name)
+        return None if value is None else str(value).strip().lower()
 
     def guest_settings(self, guest):
         """The Proxmox Manager settings stored in a guest's notes."""
@@ -2360,7 +2385,32 @@ class MainWindow(Gtk.Window):
             on_saved=lambda settings, k=guest.key: self._guest_settings_saved(
                 k, settings
             ),
+            local={
+                name: self.guest_local_switch(guest.key, name)
+                for name in LOCAL_SWITCH_DEFAULTS
+            },
+            on_local_saved=lambda values, k=guest.key: self._guest_local_saved(
+                k, values
+            ),
         )
+
+    def _guest_local_saved(self, key, values):
+        """Store this machine's own settings for a guest, and apply them.
+
+        Written here rather than in the dialog because this is the object that
+        owns the settings file. Applying goes through the same path a server
+        save takes -- the switches read from wherever they live, so neither
+        half has to know which of the two moved.
+        """
+        for name, value in values.items():
+            self._save_guest_pref(name, value, key=key)
+        guest = self.sidebar.guests.get(key)
+        if guest is not None:
+            # The same path a server save takes. The switches read from
+            # wherever they live, so it needs telling nothing about which of
+            # the two halves moved.
+            self._guest_settings_saved(key, self.guest_settings(guest))
+        self._context_changed()
 
     def _guest_settings_saved(self, key, settings):
         """Take the new settings into use, and say what still needs a reopen.
@@ -2389,22 +2439,19 @@ class MainWindow(Gtk.Window):
 
         # The microphone is a channel rather than a session property, so it
         # takes hold live like the clipboard does and never lands in pending.
-        # The default is spelled out because "absent" means off for this one,
-        # and a missing key must not read as consent.
+        # Read through _guest_switch rather than out of `settings`: it is a
+        # local switch now, so the settings dict from the server has nothing
+        # to say about it, and _guest_switch knows where it does live.
         if "microphone" not in {name for k, name in self._session_switches if k == key}:
-            wanted = (
-                settings.get("microphone", notes_meta.SETTINGS_DEFAULTS["microphone"])
-                != "disabled"
-            )
             setter = getattr(console, "set_microphone_enabled", None)
             if setter is not None:
-                setter(wanted)
+                setter(self._guest_switch(guest, "microphone"))
 
         if (
             console is not None
             and getattr(console, "supports", {}).get("audio")
             and bool(getattr(console, "play_audio", True))
-            != (settings.get("audio") != "disabled")
+            != self._guest_switch(guest, "audio")
         ):
             pending.append("audio")
         if (
@@ -5123,11 +5170,11 @@ class MainWindow(Gtk.Window):
         # A rebuild that was in flight is over too, whatever became of it:
         # the tab it would have landed in has gone.
         self._reconnecting.pop(key, None)
-        # Every switch the status bar offers, so a new console starts from the
-        # guest's own settings. Named from the settings rather than by hand:
-        # leaving one out is invisible until somebody notices a switch that
-        # outlived the tab it was flipped on.
-        for name in notes_meta.SETTINGS_DEFAULTS:
+        # Every switch the status bar offers, from both halves of where they
+        # are kept. Named from those rather than by hand: leaving one out is
+        # invisible until somebody notices a switch that outlived the tab it
+        # was flipped on.
+        for name in (*notes_meta.SETTINGS_DEFAULTS, *LOCAL_SWITCH_DEFAULTS):
             self._session_switches.pop((key, name), None)
 
     def close_console(self, key):

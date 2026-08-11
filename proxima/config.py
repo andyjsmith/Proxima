@@ -161,6 +161,26 @@ DEFAULTS = {
 }
 
 
+# Per-guest switches that belong to this computer rather than to the guest,
+# stored inside guest_prefs. They are here and not in the guest's notes on
+# the server because each one is about hardware you are sitting in front of:
+# whether this machine's speakers play the guest, and whether its microphone
+# is fed into it. The same VM opened from a laptop in a meeting and from a
+# desk at home wants different answers, and neither should overrule the other.
+#
+# "enabled"/"disabled" rather than true/false so they read the same as the
+# server-side settings in notes.SETTINGS_DEFAULTS, which the same dialog rows
+# and the same status bar switches drive.
+LOCAL_SWITCH_DEFAULTS = {
+    "audio": "enabled",
+    # The one switch that defaults off. Sound coming out of a guest is what
+    # someone asked for by configuring an audio device; a microphone going
+    # into one is this machine listening to the room, which nobody should get
+    # by not having thought about it.
+    "microphone": "disabled",
+}
+
+
 def config_dir():
     # An explicit override keeps tests and portable installs away from the
     # real user settings.

@@ -25,6 +25,7 @@ from gi.repository import GLib, Gtk
 
 from ..api import devices
 from ..api import notes as notes_meta
+from ..config import LOCAL_SWITCH_DEFAULTS
 from ..theme import decorate as theme_decorate
 
 RESPONSE_APPLY = 1
@@ -101,13 +102,19 @@ class VMSettingsDialog(Gtk.Dialog):
     # to fill its dropdown from rather than an AttributeError.
     _bridges = ()
 
-    def __init__(self, parent, api, guest, on_saved=None):
+    def __init__(
+        self, parent, api, guest, on_saved=None, local=None, on_local_saved=None
+    ):
         super().__init__(
             title=f"Settings - {guest.label}", transient_for=parent, modal=True
         )
         self.api = api
         self.guest = guest
         self.on_saved = on_saved or (lambda settings: None)
+        # The local half: what this machine remembers about this guest, and
+        # who to tell once it changes. Passed in rather than reached for, so
+        # the dialog has no opinion about where a client setting is kept.
+        self.on_local_saved = on_local_saved or (lambda values: None)
         self._loading = True
         self._saving = False
 
@@ -122,6 +129,16 @@ class VMSettingsDialog(Gtk.Dialog):
         # there is anything to send and Cancel has something to mean.
         self.saved = notes_meta.normalise_settings(guest.settings)
         self.values = dict(self.saved)
+        # And the same for the local half. A switch never set on this machine
+        # falls back to whatever the notes said before these moved off the
+        # server, so a guest configured before the split keeps its answer.
+        self.local_saved = {
+            name: (local or {}).get(name)
+            or self.saved.get(name)
+            or LOCAL_SWITCH_DEFAULTS[name]
+            for name in LOCAL_SWITCH_DEFAULTS
+        }
+        self.local_values = dict(self.local_saved)
 
         # The guest config as it was read, the keys edited since, and the
         # checksum that lets Proxmox refuse the write if somebody else got
@@ -677,12 +694,26 @@ class VMSettingsDialog(Gtk.Dialog):
         return changes, deletes
 
     def _manager_page(self):
+        """Two groups, because these settings are kept in two places.
+
+        The split is not cosmetic. What belongs to the guest goes in its notes
+        on the server, where every machine running Proxmox Manager sees the
+        same answer; what belongs to the machine you are at stays here, where
+        it cannot reach across and mute somebody else's speakers.
+        """
         grid = self._page()
         container = self.guest.is_container
+        row = 0
 
+        row = self._group(
+            grid,
+            row,
+            "On the server",
+            "Stored in this guest's notes, so every machine sees them.",
+        )
         self._combo(
             grid,
-            0,
+            row,
             "Clipboard",
             CLIPBOARD_CHOICES,
             "clipboard",
@@ -693,35 +724,10 @@ class VMSettingsDialog(Gtk.Dialog):
             ),
             sensitive=not container,
         )
+        row += 1
         self._combo(
             grid,
-            1,
-            "Audio",
-            AUDIO_CHOICES,
-            "audio",
-            tooltip=(
-                "Play the guest's sound on this machine. Needs a SPICE "
-                "console and a SPICE audio device on the VM."
-            ),
-            sensitive=not container,
-        )
-        self._combo(
-            grid,
-            2,
-            "Microphone",
-            MICROPHONE_CHOICES,
-            "microphone",
-            tooltip=(
-                "Let the guest hear this machine's microphone, over SPICE's "
-                "record channel. Needs a SPICE console and an audio device "
-                "on the VM whose codec has an input, which "
-                "device=ich9-intel-hda,driver=spice has."
-            ),
-            sensitive=not container,
-        )
-        self._combo(
-            grid,
-            3,
+            row,
             "Protocol",
             CONTAINER_PROTOCOL_CHOICES if container else PROTOCOL_CHOICES,
             "protocol",
@@ -734,14 +740,52 @@ class VMSettingsDialog(Gtk.Dialog):
                 "setting for a guest whose SPICE display misbehaves."
             ),
         )
+        row += 1
+
+        row = self._group(
+            grid,
+            row,
+            "This computer only",
+            "Kept in this machine's settings. Each of these is about hardware "
+            "you are sitting in front of, so another machine opening the same "
+            "guest is unaffected.",
+        )
+        self._combo(
+            grid,
+            row,
+            "Audio",
+            AUDIO_CHOICES,
+            "audio",
+            tooltip=(
+                "Play the guest's sound on this machine. Needs a SPICE "
+                "console and a SPICE audio device on the VM."
+            ),
+            sensitive=not container,
+            local=True,
+        )
+        row += 1
+        self._combo(
+            grid,
+            row,
+            "Microphone",
+            MICROPHONE_CHOICES,
+            "microphone",
+            tooltip=(
+                "Let the guest hear this machine's microphone, over SPICE's "
+                "record channel. Needs a SPICE console and an audio device "
+                "on the VM whose codec has an input, which "
+                "device=ich9-intel-hda,driver=spice has."
+            ),
+            sensitive=not container,
+            local=True,
+        )
+        row += 1
 
         note = Gtk.Label(xalign=0.0)
         note.get_style_context().add_class("dim")
         note.set_line_wrap(True)
         note.set_margin_top(8)
         text = (
-            "Stored in this guest's notes on the server, so every "
-            "machine running Proxmox Manager sees the same settings.\n\n"
             "The clipboard, audio and microphone buttons in the status "
             "bar, and Reopen Console with VNC, only change the console in "
             "front of you for as long as it is open. They never change "
@@ -756,43 +800,68 @@ class VMSettingsDialog(Gtk.Dialog):
         grid.attach(note, 0, 4, 2, 1)
         return grid
 
-    def _combo(self, grid, row, label, choices, name, tooltip=None, sensitive=True):
+    def _group(self, grid, row, title, explanation):
+        """A heading and its one-line reason. Returns the next free row."""
+        heading = Gtk.Label(xalign=0.0)
+        heading.set_markup(f"<b>{title}</b>")
+        heading.set_margin_top(0 if row == 0 else 14)
+        grid.attach(heading, 0, row, 2, 1)
+
+        note = Gtk.Label(label=explanation, xalign=0.0)
+        note.get_style_context().add_class("dim")
+        note.set_line_wrap(True)
+        note.set_margin_bottom(4)
+        grid.attach(note, 0, row + 1, 2, 1)
+        return row + 2
+
+    def _combo(
+        self,
+        grid,
+        row,
+        label,
+        choices,
+        name,
+        tooltip=None,
+        sensitive=True,
+        local=False,
+    ):
         caption = Gtk.Label(label=label, xalign=1.0)
         caption.get_style_context().add_class("dim")
         grid.attach(caption, 0, row, 1, 1)
 
+        store = self.local_values if local else self.values
         combo = Gtk.ComboBoxText()
         for value, text in choices:
             combo.append(value, text)
-        combo.set_active_id(self.values.get(name))
+        combo.set_active_id(store.get(name))
         if combo.get_active_id() is None:
             # A value this build does not know about. Show it rather than
             # silently rewriting it to the default on the next save.
-            stored = str(self.values.get(name, ""))
+            stored = str(store.get(name, ""))
             combo.append(stored, f"{stored}  (not supported here)")
             combo.set_active_id(stored)
         combo.set_hexpand(True)
         combo.set_sensitive(sensitive)
         if tooltip:
             combo.set_tooltip_text(tooltip)
-        combo.connect("changed", self._on_combo_changed, name)
+        combo.connect("changed", self._on_combo_changed, name, local)
         grid.attach(combo, 1, row, 1, 1)
         return combo
 
     # -- state ---------------------------------------------------------
 
-    def _on_combo_changed(self, combo, name):
+    def _on_combo_changed(self, combo, name, local=False):
         if self._loading:
             return
         value = combo.get_active_id()
         if value is None:
             return
-        self.values[name] = value
+        (self.local_values if local else self.values)[name] = value
         self._sync_buttons()
 
     @property
     def dirty(self):
-        if self.values != self.saved:
+        if self.values != self.saved or self.local_values != self.local_saved:
             return True
         changes, deletes = self._config_edits()
         return bool(changes or deletes)
@@ -839,6 +908,14 @@ class VMSettingsDialog(Gtk.Dialog):
         self.message.set_text("Saving...")
         guest = self.guest
         wanted = dict(self.values)
+        # The local half is this machine's own file rather than a request,
+        # but it is handed over in _save_done with the rest: one "saved"
+        # moment, and nothing this end can do stops the server write going
+        # out. Getting that backwards once meant a typo in the callback threw
+        # before the notes were written and silently saved nothing at all.
+        local = (
+            dict(self.local_values) if self.local_values != self.local_saved else None
+        )
         changes, deletes = self._config_edits()
         notes_changed = wanted != self.saved
 
@@ -876,17 +953,20 @@ class VMSettingsDialog(Gtk.Dialog):
                 config = self.api.guest_config(guest.node, guest.vmid, guest.kind)
             except Exception:
                 config = None
-            GLib.idle_add(self._save_done, wanted, updated, config, close)
+            GLib.idle_add(self._save_done, wanted, updated, config, close, local)
 
         threading.Thread(
             target=worker, daemon=True, name=f"vm-settings-{guest.vmid}"
         ).start()
 
-    def _save_done(self, wanted, updated, config, close):
+    def _save_done(self, wanted, updated, config, close, local=None):
         if not getattr(self, "_alive", True):
             return False
         self._saving = False
         self.saved = dict(wanted)
+        if local is not None:
+            self.local_saved = dict(local)
+            self.on_local_saved(dict(local))
         self.guest.settings = dict(wanted)
         self.guest.settings_loaded = True
         if config:
