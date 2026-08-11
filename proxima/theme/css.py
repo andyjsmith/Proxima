@@ -46,11 +46,18 @@ scrollbar slider  { min-width: 9px; min-height: 9px; }
     border-top: 1px solid alpha(currentColor, 0.15);
 }
 .statusbar-box label  { padding: 0; margin: 0; }
-.statusbar-box image  { margin: 0 1px; }
+/* No margin of its own: StatusIndicator.SPACING owns the gap between
+   indicators, so that a plain one and a switch sit the same distance apart. */
+.statusbar-box image  { margin: 0; }
 
 /* The clipboard and audio indicators are also switches. A real button gets
    the hover feedback and the pointer handling right by itself; it just has
-   to be trimmed to the size of its icon so the strip stays one line high. */
+   to be trimmed to the size of its icon so the strip stays one line high.
+
+   min-height stays at 16 while the icon inside draws at 14, and that gap is
+   the point: the button centres the icon, leaving a pixel above and below,
+   which with the box's own 1px padding is the 2px between icon and strip
+   edge. Lowering it to 14 would put the icon back against the edge. */
 .status-toggle {
     padding: 0 2px;
     margin: 0;

@@ -35,6 +35,22 @@ class StatusIndicator(Gtk.Box):
     OPACITY_OFF = 0.75  # switched off, but by choice -- still legible
     OPACITY_UNSUPPORTED = 0.25
 
+    # Two pixels short of the menu size these used to draw at, which is what
+    # puts air between the icon and the edge of the strip without making the
+    # strip any taller: the button around it keeps its 16px minimum, so the
+    # extra two pixels become one above and one below the icon, and the
+    # statusbar box's own 1px padding makes that 2px to the edge.
+    ICON_PIXELS = 14
+
+    # Matches .status-toggle's horizontal padding, applied by hand because a
+    # plain indicator has no button to take it from CSS. Alignment only, so
+    # that the two kinds sit on the same rhythm.
+    #
+    # NOT the knob for the gap between icons: it does nothing to the switches,
+    # which take theirs from CSS, so raising it only moves the plain ones. To
+    # space the whole row, change MainWindow.INDICATOR_SPACING.
+    ALIGN_PAD = 2
+
     def __init__(self, icon_name, label, on_toggle=None):
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL)
         self.label_text = label
@@ -43,12 +59,16 @@ class StatusIndicator(Gtk.Box):
         self._supported = None
 
         self.image = Gtk.Image.new_from_icon_name(icon_name, Gtk.IconSize.MENU)
+        self.image.set_pixel_size(self.ICON_PIXELS)
         # After the default handler, so the strike lands on top of the icon
         # rather than under it.
         self.image.connect_after("draw", self._on_draw)
 
         if on_toggle is None:
             self.button = None
+            # What .status-toggle's padding does for the others.
+            self.image.set_margin_start(self.ALIGN_PAD)
+            self.image.set_margin_end(self.ALIGN_PAD)
             self.pack_start(self.image, False, False, 0)
         else:
             self.button = Gtk.Button()
@@ -61,6 +81,9 @@ class StatusIndicator(Gtk.Box):
 
     def set_icon_name(self, icon_name):
         self.image.set_from_icon_name(icon_name, Gtk.IconSize.MENU)
+        # set_from_icon_name carries an icon size of its own, so the pixel
+        # size is re-asserted rather than assumed to have survived.
+        self.image.set_pixel_size(self.ICON_PIXELS)
 
     def set_tooltip_text(self, text):
         # On the button too, so hovering the clickable area explains itself.

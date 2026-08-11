@@ -829,6 +829,12 @@ class MainWindow(Gtk.Window):
             # is already correct and does nothing.
             self.task_feed.close()
 
+    # Space between the indicator icons, and nothing else -- the labels on
+    # the same strip want more air than a row of icons does. Two here plus
+    # the three either side of each icon inside its own button is the eight
+    # pixels between one icon and the next.
+    INDICATOR_SPACING = 4
+
     def _build_statusbar(self):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         box.get_style_context().add_class("statusbar-box")
@@ -846,6 +852,17 @@ class MainWindow(Gtk.Window):
         self.telemetry_label.get_style_context().add_class("dim")
         box.pack_start(self.telemetry_label, False, False, 4)
 
+        # A box of their own, so INDICATOR_SPACING is one knob that moves all
+        # six and nothing else. Sharing the strip's spacing meant the icons
+        # could not be tightened without tightening the gaps between the
+        # labels too -- and that raising it eventually ran the strip out of
+        # width, at which point the expanding label had nothing left to give
+        # and the trailing icons were squeezed together instead of spaced.
+        strip = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=self.INDICATOR_SPACING
+        )
+        box.pack_start(strip, False, False, 0)
+        #
         # Two different agents, two indicators. spice-vdagent runs inside the
         # SPICE session and is what clipboard sharing and guest resize need;
         # qemu-guest-agent answers the API and is what exec and IP reporting
@@ -857,19 +874,19 @@ class MainWindow(Gtk.Window):
         self.vdagent_icon = StatusIndicator(
             "edit-paste-symbolic", "SPICE agent", on_toggle=self._toggle_clipboard
         )
-        box.pack_start(self.vdagent_icon, False, False, 2)
+        strip.pack_start(self.vdagent_icon, False, False, 0)
 
         self.qga_icon = StatusIndicator(
             "application-x-executable-symbolic", "Guest agent"
         )
-        box.pack_start(self.qga_icon, False, False, 2)
+        strip.pack_start(self.qga_icon, False, False, 0)
 
         # Whether the guest has an audio device routed over SPICE. Proxmox
         # adds none by default, so silence is nearly always this.
         self.audio_icon = StatusIndicator(
             "audio-volume-high-symbolic", "Audio", on_toggle=self._toggle_audio
         )
-        box.pack_start(self.audio_icon, False, False, 2)
+        strip.pack_start(self.audio_icon, False, False, 0)
 
         # The other direction: SPICE's record channel, carrying this
         # machine's microphone into the guest. Off unless asked for, and it
@@ -879,7 +896,7 @@ class MainWindow(Gtk.Window):
             "Microphone",
             on_toggle=self._toggle_microphone,
         )
-        box.pack_start(self.mic_icon, False, False, 2)
+        strip.pack_start(self.mic_icon, False, False, 0)
 
         # Whether a USB device is currently in the guest's hands. Not a
         # switch like the two before it -- there is nothing to turn on
@@ -889,7 +906,7 @@ class MainWindow(Gtk.Window):
             "USB redirection",
             on_toggle=self.open_usb_dialog,
         )
-        box.pack_start(self.usb_icon, False, False, 2)
+        strip.pack_start(self.usb_icon, False, False, 0)
 
         # Dragging a guest between folders. Not about the console at all,
         # but it belongs with the other two: it is a thing that is either
@@ -897,7 +914,7 @@ class MainWindow(Gtk.Window):
         self.dnd_icon = StatusIndicator(
             "document-send-symbolic", "Drag and drop", on_toggle=self._toggle_dnd
         )
-        box.pack_start(self.dnd_icon, False, False, 2)
+        strip.pack_start(self.dnd_icon, False, False, 0)
 
         self._set_indicator(self.vdagent_icon, None, "SPICE agent")
         self._set_indicator(self.qga_icon, None, "Guest agent")
