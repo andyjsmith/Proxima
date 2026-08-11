@@ -980,6 +980,9 @@ class MainWindow(Gtk.Window):
         changed width with the rate -- a number nobody is reading most of the
         time, moving in the corner of your eye all of the time. On the tooltip
         they are there when looked for and still when not.
+
+        Guarded against setting the same string a second time, which is most
+        seconds on an idle console.
         """
         if text == self._telemetry_text:
             return
@@ -987,11 +990,11 @@ class MainWindow(Gtk.Window):
         self._refresh_protocol_tooltip()
 
     def _refresh_protocol_tooltip(self):
-        """Protocol note and telemetry, in one tooltip owned by both.
+        """The VNC caveat and the telemetry, in one tooltip owned by both.
 
-        Two things write here on different schedules -- the note when the tab
-        changes, the figures every second -- so neither sets the tooltip
-        directly; they leave their half here and this puts the two together.
+        Two things write here on different schedules -- the caveat when the
+        tab changes, the figures every second -- so neither sets the tooltip
+        directly; they leave their half here and this joins the two.
         """
         parts = [part for part in (self._protocol_note, self._telemetry_text) if part]
         self.protocol_label.set_tooltip_text("\n\n".join(parts))
@@ -5156,18 +5159,20 @@ class MainWindow(Gtk.Window):
             self.close_console_item.set_sensitive(console is not None)
             self._sync_protocol_switch(console)
 
-            # The note half of the tooltip only; the telemetry half is left
-            # alone, so a tab switch does not blank the figures until the
-            # next sample lands.
+            # The caveat half of the tooltip only; the telemetry half is left
+            # alone, so a tab switch does not blank the figures until the next
+            # sample lands.
+            #
+            # VNC keeps its note because the word is drawn in orange, and a
+            # word singled out like that owes an explanation. Serial had
+            # instructions for selecting and copying, which is not what a
+            # status bar is for.
             if console is None:
                 self.protocol_label.set_text("")
                 self._protocol_note = ""
             elif console.protocol == "serial":
                 self.protocol_label.set_text("Serial")
-                self._protocol_note = (
-                    "A text console. Select with the mouse, Ctrl+Shift+C to "
-                    "copy, Ctrl+Shift+V to paste."
-                )
+                self._protocol_note = ""
             elif console.protocol == "vnc":
                 self.protocol_label.set_markup("<span foreground='#e5a50a'>VNC</span>")
                 self._protocol_note = "No guest resize, clipboard or audio"
