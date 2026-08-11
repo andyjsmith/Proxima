@@ -273,6 +273,7 @@ class SpiceConsole(Gtk.Box):
         "clipboard": True,
         "audio": True,
         "microphone": True,
+        "view_only": True,
         "usb": True,
         # Whether a guest head can be given a monitor of its own. Capable in
         # principle here; whether this guest actually has a second head is
@@ -303,6 +304,7 @@ class SpiceConsole(Gtk.Box):
         share_clipboard=True,
         play_audio=True,
         capture_audio=False,
+        view_only=False,
         on_usb=None,
         on_usb_plugged=None,
         on_monitors=None,
@@ -341,6 +343,7 @@ class SpiceConsole(Gtk.Box):
         self.enable_audio = bool(enable_audio) and bool(play_audio)
         self.capture_audio = bool(capture_audio)
         self._record_channel = None
+        self.view_only = bool(view_only)
         self._gtk_session = None
         self.auto_resize = auto_resize
         self.scaling = scale_to_fit
@@ -1815,6 +1818,28 @@ class SpiceConsole(Gtk.Box):
         for display in self._all_displays():
             self._apply_scaling(display)
 
+    def set_view_only(self, enabled):
+        """Stop sending input to the guest, or start again.
+
+        spice-gtk's disable-inputs, which is per display widget and takes
+        effect at once -- so this applies to every head, including any opened
+        later: see _apply_scaling, which every display goes through.
+
+        The pointer grab is dropped on the way in. Holding a grab for a
+        console that ignores the pointer is the worst of both.
+        """
+        self.view_only = bool(enabled)
+        for display in self._all_displays():
+            self._apply_view_only(display)
+        if self.view_only:
+            with contextlib.suppress(Exception):
+                self.release_input()
+        return True
+
+    def _apply_view_only(self, display):
+        with contextlib.suppress(Exception):
+            display.set_property("disable-inputs", self.view_only)
+
     def _apply_scaling(self, display):
         """Put `scaling` and `console_scale` onto one display together.
 
@@ -1824,6 +1849,10 @@ class SpiceConsole(Gtk.Box):
         implies scaling and turns it on; the stored scale-to-fit preference
         is not touched, so switching back to 100% restores it.
         """
+        # Every display arrives here, whether it is the tab's own head or one
+        # opened onto a second monitor, so this is where view-only is made to
+        # apply to all of them without a second list to keep.
+        self._apply_view_only(display)
         zoomed = self.console_scale != 100
         with contextlib.suppress(Exception):
             display.set_property("scaling", self.scaling or zoomed)

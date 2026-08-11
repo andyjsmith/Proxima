@@ -198,6 +198,12 @@ class MainWindow(Gtk.Window):
         # that is what makes them useful as a way out of a bad console.
         self._force_vnc = set()
         self._force_spice = set()
+        # Guest keys switched to view-only for this session. Deliberately not
+        # saved: it has to survive a reconnect, since a mode switched on for
+        # safety must not come off when a console rebuilds, but a fresh
+        # session starts able to type rather than inheriting a console that
+        # silently ignores the keyboard.
+        self._view_only = set()
         # The same idea for containers, which choose between a serial console
         # and VNC rather than between SPICE and VNC.
         self._force_serial = set()
@@ -610,6 +616,18 @@ class MainWindow(Gtk.Window):
 
         menu.append(Gtk.SeparatorMenuItem())
 
+        # Deliberately above the picture settings: it changes what the console
+        # *does*, not how it looks, and it is the one entry here somebody
+        # might turn on before handing their screen to someone else.
+        self.view_only_item = Gtk.CheckMenuItem(label="View Only")
+        self.view_only_item.set_tooltip_text(
+            "Watch without sending keyboard or mouse to the guest"
+        )
+        self.view_only_item.connect("toggled", self._on_view_only_toggled)
+        menu.append(self.view_only_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
         self.auto_resize_item = Gtk.CheckMenuItem(label="Auto-resize Guest")
         self.auto_resize_item.set_tooltip_text("Requires spice-vdagent")
         self.auto_resize_item.connect("toggled", self._on_auto_resize_toggled)
@@ -667,6 +685,7 @@ class MainWindow(Gtk.Window):
         self._view_items = [
             self.fullscreen_item,
             self.all_monitors_item,
+            self.view_only_item,
             self.auto_resize_item,
             self.scaling_item,
             self.console_scale_item,
@@ -4021,6 +4040,7 @@ class MainWindow(Gtk.Window):
                 share_clipboard=self._guest_switch(guest, "clipboard"),
                 play_audio=self._guest_switch(guest, "audio"),
                 capture_audio=self._guest_switch(guest, "microphone"),
+                view_only=guest.key in self._view_only,
                 on_agent=lambda connected, c=None: self._on_console_agent(
                     self.consoles.get(guest.key), connected
                 ),
@@ -4063,6 +4083,7 @@ class MainWindow(Gtk.Window):
                 on_font_size=lambda size, k=guest.key: self._save_guest_pref(
                     "font_size", size, key=k
                 ),
+                view_only=guest.key in self._view_only,
             )
         else:
             console = VncConsole(
@@ -4082,6 +4103,7 @@ class MainWindow(Gtk.Window):
                     k, reason
                 ),
                 on_reconnect=lambda k=guest.key: self.reconnect_console(k),
+                view_only=guest.key in self._view_only,
             )
 
         if plan["protocol"] == "spice" and (
@@ -5065,16 +5087,21 @@ class MainWindow(Gtk.Window):
         """Forget the temporary console choices made for one guest.
 
         Closing the tab is what ends a session: the protocol it was switched
-        to, and the clipboard and audio buttons, all go back to what the
+        to, view-only, and the status bar switches all go back to what the
         guest's own settings say the next time it is opened.
         """
         self._force_vnc.discard(key)
         self._force_spice.discard(key)
         self._force_serial.discard(key)
+        self._view_only.discard(key)
         # A rebuild that was in flight is over too, whatever became of it:
         # the tab it would have landed in has gone.
         self._reconnecting.pop(key, None)
-        for name in ("clipboard", "audio"):
+        # Every switch the status bar offers, so a new console starts from the
+        # guest's own settings. Named from the settings rather than by hand:
+        # leaving one out is invisible until somebody notices a switch that
+        # outlived the tab it was flipped on.
+        for name in notes_meta.SETTINGS_DEFAULTS:
             self._session_switches.pop((key, name), None)
 
     def close_console(self, key):
@@ -5178,6 +5205,11 @@ class MainWindow(Gtk.Window):
         try:
             supports = getattr(console, "supports", {}) if console else {}
 
+            self.view_only_item.set_sensitive(bool(supports.get("view_only")))
+            self.view_only_item.set_active(
+                bool(console and getattr(console, "view_only", False))
+            )
+
             self.auto_resize_item.set_sensitive(bool(supports.get("auto_resize")))
             self.auto_resize_item.set_active(
                 bool(console and getattr(console, "auto_resize", False))
@@ -5259,6 +5291,16 @@ class MainWindow(Gtk.Window):
             else:
                 self.protocol_label.set_text("SPICE")
                 self._protocol_note = ""
+
+            # A console that ignores the keyboard has to say so where somebody
+            # will see it before wondering what is broken, so it goes on the
+            # label rather than only in the menu it was switched on from.
+            if console is not None and getattr(console, "view_only", False):
+                self.protocol_label.set_markup(
+                    f"{self.protocol_label.get_text()} "
+                    "<span foreground='#e5a50a'>view only</span>"
+                )
+                self._protocol_note = "Input is not being sent to the guest"
             self._refresh_protocol_tooltip()
         finally:
             self._updating_view_menu = False
@@ -5309,6 +5351,32 @@ class MainWindow(Gtk.Window):
             item.set_tooltip_text(
                 "" if usable else guest.console_note or "SPICE is not available here"
             )
+
+    def _on_view_only_toggled(self, item):
+        if self._updating_view_menu:
+            return
+        console = self.current_console()
+        guest = self.context_guest(console)
+        if console is None or not hasattr(console, "set_view_only"):
+            return
+        wanted = item.get_active()
+        console.set_view_only(wanted)
+        # Held for the session rather than saved: it survives a reconnect,
+        # which a mode you turned on for safety has to, but a new session
+        # starts able to type -- a console that silently ignores you is not
+        # something to inherit from last week.
+        if guest is not None:
+            if wanted:
+                self._view_only.add(guest.key)
+            else:
+                self._view_only.discard(guest.key)
+        self.set_status(
+            f"{guest.label if guest else 'console'}: "
+            + ("view only, input is not sent" if wanted else "input is sent again")
+        )
+        # The protocol label is where this has to show: a mode that stops the
+        # keyboard working needs to be visible without opening a menu.
+        self._sync_view_menu(console)
 
     def _on_auto_resize_toggled(self, item):
         if self._updating_view_menu:

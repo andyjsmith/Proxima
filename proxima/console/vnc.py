@@ -71,6 +71,7 @@ class VncConsole(Gtk.Box):
         "clipboard": False,
         "audio": False,
         "microphone": False,
+        "view_only": True,
         "usb": False,
         # RFB has one framebuffer per connection. A guest with two heads
         # shows them side by side inside that one picture, so there is
@@ -90,12 +91,16 @@ class VncConsole(Gtk.Box):
         console_scale=100,
         on_disconnect=None,
         on_reconnect=None,
+        view_only=False,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.title = title
         self.on_status = on_status or (lambda text: None)
         self.last_status = ""
+        # RFB has no property for this, so every place that would send input
+        # asks. See set_view_only.
+        self.view_only = bool(view_only)
         self.scaling = scale_to_fit
         self.console_scale = clamp_console_scale(console_scale)
         self.on_disconnect = on_disconnect or (lambda reason: None)
@@ -302,6 +307,15 @@ class VncConsole(Gtk.Box):
         self.area.queue_draw()
         return False
 
+    def set_view_only(self, enabled):
+        """Stop sending input to the guest, or start again.
+
+        Nothing is asked of the server: RFB input is client-driven, so not
+        sending is the whole of it. Immediate either way.
+        """
+        self.view_only = bool(enabled)
+        return True
+
     def set_scaling(self, enabled):
         self.scaling = enabled
         self._update_canvas()
@@ -494,7 +508,7 @@ class VncConsole(Gtk.Box):
         return self._last_pos
 
     def _on_button(self, widget, event):
-        if self.client is None:
+        if self.client is None or self.view_only:
             return False
         widget.grab_focus()
         if event.button > 7:
@@ -511,14 +525,14 @@ class VncConsole(Gtk.Box):
         return True
 
     def _on_motion(self, _widget, event):
-        if self.client is None:
+        if self.client is None or self.view_only:
             return False
         guest_x, guest_y = self._widget_to_guest(event.x, event.y)
         self.client.send_pointer(guest_x, guest_y, self._button_mask)
         return True
 
     def _on_scroll(self, _widget, event):
-        if self.client is None:
+        if self.client is None or self.view_only:
             return False
         # RFB models the wheel as buttons 4-7, pressed and released.
         direction = event.direction
@@ -551,7 +565,7 @@ class VncConsole(Gtk.Box):
         return True
 
     def _on_key(self, _widget, event):
-        if self.client is None:
+        if self.client is None or self.view_only:
             return False
         pressed = event.type == Gdk.EventType.KEY_PRESS
         self.client.send_key(event.keyval, pressed)
@@ -566,6 +580,9 @@ class VncConsole(Gtk.Box):
         works here as well as it does over SPICE -- which matters, because
         VNC is what a guest without a SPICE display gets.
         """
+        if self.view_only:
+            self._status("view only: keys are not sent")
+            return False
         if self.client is None:
             self._status("not connected")
             return False

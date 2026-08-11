@@ -666,6 +666,7 @@ class FakeConsole(Gtk.Box):
         "clipboard": True,
         "audio": True,
         "microphone": True,
+        "view_only": True,
         "multi_monitor": True,
     }
     agent_connected = True
@@ -691,6 +692,7 @@ class FakeConsole(Gtk.Box):
         self.share_clipboard = True
         self.play_audio = True
         self.capture_audio = False
+        self.view_only = False
         # Whether the guest offered a record channel at all. True here so the
         # switch is live; set False in a test to model a guest with no input.
         self.has_record_channel = True
@@ -699,6 +701,10 @@ class FakeConsole(Gtk.Box):
 
     def set_auto_resize(self, value):
         self.auto_resize = value
+
+    def set_view_only(self, value):
+        self.view_only = value
+        return True
 
     # Clipboard applies live; audio cannot, exactly as SpiceConsole reports.
     def set_clipboard_enabled(self, value):

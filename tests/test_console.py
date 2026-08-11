@@ -1105,3 +1105,59 @@ def test_every_send_key_entry_is_a_real_combination():
     )
     assert seen >= {f"Ctrl+Alt+F{n}" for n in range(1, 13)}, "a terminal is missing"
     assert {"Alt+Tab", "PrintScreen"} <= seen
+
+
+# -- view only -------------------------------------------------------------
+
+
+def test_view_only_stops_input_and_says_so_on_the_status_bar(window):
+    """A console that ignores the keyboard has to be visibly doing that."""
+    console = FakeConsole("watch-me")
+    console.guest_key = STOPPED
+    window.consoles[STOPPED] = console
+    window.panes.append(console, Gtk.Label(label="v"))
+    pump(0.5)
+    try:
+        assert window.view_only_item.get_sensitive(), (
+            "View Only is greyed out for a console that supports it"
+        )
+        window.view_only_item.set_active(True)
+        pump(0.3)
+        assert console.view_only is True, "the switch did not reach the console"
+        assert "view only" in window.protocol_label.get_text().lower(), (
+            f"the protocol label reads {window.protocol_label.get_text()!r}"
+        )
+
+        window.view_only_item.set_active(False)
+        pump(0.3)
+        assert console.view_only is False, "input was not turned back on"
+        assert "view only" not in window.protocol_label.get_text().lower()
+    finally:
+        window.close_console(STOPPED)
+        pump(0.3)
+
+
+def test_view_only_survives_a_reconnect_but_not_a_closed_tab(window):
+    """It is a safety mode, so a rebuilt console must not start typing again."""
+    console = FakeConsole("watch-me")
+    console.guest_key = STOPPED
+    window.consoles[STOPPED] = console
+    window.panes.append(console, Gtk.Label(label="v"))
+    pump(0.5)
+    try:
+        window.view_only_item.set_active(True)
+        pump(0.3)
+        assert STOPPED in window._view_only, "the choice was not held for the session"
+
+        rebuilt = FakeConsole("watch-me")
+        window._install_console(window.sidebar.guests[STOPPED], rebuilt)
+        pump(0.4)
+        # _install_console does not build the console, so the flag is what a
+        # rebuild would read: assert on that rather than on the stand-in.
+        assert STOPPED in window._view_only, "a reconnect forgot view-only"
+    finally:
+        window.close_console(STOPPED)
+        pump(0.3)
+    assert STOPPED not in window._view_only, (
+        "view-only outlived the tab it was switched on for"
+    )

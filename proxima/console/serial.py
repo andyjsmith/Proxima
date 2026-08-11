@@ -146,6 +146,7 @@ class SerialConsole(Gtk.Box):
         "clipboard": False,
         "audio": False,
         "microphone": False,
+        "view_only": True,
         "usb": False,
         "multi_monitor": False,
     }
@@ -164,10 +165,13 @@ class SerialConsole(Gtk.Box):
         on_reconnect=None,
         on_font_size=None,
         scrollback=5000,
+        view_only=False,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.title = title
+        # Nothing is sent to the far side while this is on. See set_view_only.
+        self.view_only = bool(view_only)
         self.on_status = on_status or (lambda text: None)
         self.on_disconnect = on_disconnect or (lambda reason: None)
         self.on_reconnect = on_reconnect or (lambda: None)
@@ -813,6 +817,9 @@ class SerialConsole(Gtk.Box):
     def paste_text(self, text):
         if not text or self.client is None:
             return False
+        if self.view_only:
+            self._status("view only: nothing was pasted")
+            return False
         # Newlines become carriage returns: a pasted line is a line the shell
         # should see as Enter, and a bare LF at a prompt does nothing useful.
         text = text.replace("\r\n", "\r").replace("\n", "\r")
@@ -873,6 +880,10 @@ class SerialConsole(Gtk.Box):
         )
         if data is None:
             return False
+        if self.view_only:
+            # Swallowed rather than passed on: the keystroke was meant for the
+            # guest, and letting GTK have it instead would move the focus.
+            return True
 
         # Typing means the bottom of the buffer, and means the selection is
         # no longer about anything on screen.
@@ -886,6 +897,9 @@ class SerialConsole(Gtk.Box):
 
     def send_keys(self, keyvals):
         """A Send Key menu combination, where it means anything here."""
+        if self.view_only:
+            self._status("view only: keys are not sent")
+            return False
         if self.client is None:
             self._status("not connected")
             return False
@@ -900,6 +914,16 @@ class SerialConsole(Gtk.Box):
     def send_ctrl_alt_del(self):
         self._status("Ctrl+Alt+Del does not apply to a serial console")
         return False
+
+    def set_view_only(self, enabled):
+        """Stop sending to the far side, or start again.
+
+        Only the sending: copying, scrolling and the font bindings are the
+        terminal's own and stay useful with input switched off -- reading a
+        boot log is most of what a read-only serial console is for.
+        """
+        self.view_only = bool(enabled)
+        return True
 
     def grab_focus_display(self):
         if getattr(self, "area", None) is not None:
