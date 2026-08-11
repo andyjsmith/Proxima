@@ -5,6 +5,7 @@ state; the API client filters it out, so everything here can treat the list
 as real snapshots only.
 """
 
+import logging
 import threading
 
 import gi
@@ -13,8 +14,11 @@ gi.require_version("Gtk", "3.0")
 from gi.repository import GLib, Gtk
 
 from ..api import ProxmoxError
+from ..api.client import task_upid
 from ..api.models import human_age
 from ..theme import decorate as theme_decorate
+
+log = logging.getLogger(__name__)
 
 
 def describe_revert(latest):
@@ -347,10 +351,26 @@ class SnapshotManager(Gtk.Dialog):
 
         def worker():
             try:
-                call()
+                upid = call()
             except ProxmoxError as exc:
                 GLib.idle_add(self._failed, f"{label} failed: {exc}")
                 return
+            # Accepting the request is not doing the work: a rollback onto a
+            # storage with no room is accepted and then fails on the node, and
+            # reloading a list would only show the snapshot still sitting
+            # there with no word of why.
+            upid = task_upid(upid)
+            if upid is not None:
+                try:
+                    outcome = self.api.wait_for_task(self.guest.node, upid)
+                except ProxmoxError as exc:
+                    log.info("could not follow snapshot task %s: %s", upid, exc)
+                else:
+                    if not outcome.ok:
+                        GLib.idle_add(
+                            self._failed, f"{label} failed: {outcome.message}"
+                        )
+                        return
             # The task runs server side; reloading picks it up once it lands.
             GLib.idle_add(self.reload)
 

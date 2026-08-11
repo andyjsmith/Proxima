@@ -26,6 +26,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import namedtuple
 
 from . import certs
 from .models import Guest, Node, parse_spice_clients
@@ -35,6 +36,36 @@ log = logging.getLogger(__name__)
 DEFAULT_PORT = 8006
 TICKET_LIFETIME = 7200  # what PVE grants
 RENEW_MARGIN = 900  # renew with 15 minutes to spare
+
+
+class TaskOutcome(namedtuple("TaskOutcome", "ok status detail")):
+    """How a server-side task ended.
+
+    'status' is Proxmox's own exitstatus line, 'detail' the tail of the task
+    log -- empty when the task succeeded, and empty on failure only if the
+    log could not be read.
+    """
+
+    __slots__ = ()
+
+    @property
+    def message(self):
+        """One string to show a person, headline first."""
+        if self.ok:
+            return ""
+        if self.detail:
+            return f"{self.status}\n\n{self.detail}"
+        return self.status
+
+
+def task_upid(value):
+    """A UPID out of whatever a write returned, or None.
+
+    Most writes answer with one, but not all of them: a few endpoints do the
+    work inline and return null, and there is nothing to follow in that case.
+    """
+    text = value if isinstance(value, str) else ""
+    return text if text.startswith("UPID:") else None
 
 
 class ProxmoxError(Exception):
@@ -601,6 +632,47 @@ class ProxmoxAPI:
 
     def task_status(self, node, upid):
         return self.get(f"/nodes/{node}/tasks/{urllib.parse.quote(upid)}/status")
+
+    def wait_for_task(self, node, upid, timeout=600, poll=1.0, log_lines=6):
+        """Follow a server-side task to its end. Returns a TaskOutcome.
+
+        Blocking, so call it off the main thread.
+
+        Proxmox accepts a write and answers with a UPID long before the work
+        is done or has failed, which is why a start that the server refuses
+        outright looks from here exactly like one still booting. The only way
+        to tell them apart is to ask the task.
+
+        A task that fails carries its reason twice: 'exitstatus' has the one
+        line ("start failed: QEMU exited with code 1") and the log has what
+        actually went wrong ("Could not open '/dev/...': No such file"). Both
+        are collected, because the first alone rarely says enough to act on.
+        """
+        deadline = time.monotonic() + timeout
+        status = {}
+        while True:
+            status = self.task_status(node, upid) or {}
+            if status.get("status") != "running":
+                break
+            if time.monotonic() >= deadline:
+                return TaskOutcome(
+                    False,
+                    "timeout",
+                    f"still running after {timeout}s; see the task log",
+                )
+            time.sleep(poll)
+
+        exit_status = str(status.get("exitstatus") or "")
+        if exit_status.upper() == "OK":
+            return TaskOutcome(True, exit_status, "")
+
+        detail = ""
+        try:
+            lines = [line for line in self.task_log(node, upid) if line.strip()]
+            detail = "\n".join(lines[-log_lines:])
+        except ProxmoxError as exc:
+            log.info("could not read the log of failed task %s: %s", upid, exc)
+        return TaskOutcome(False, exit_status or "failed", detail)
 
     def cluster_tasks(self, limit=50):
         """Recent cluster-wide tasks, newest first."""

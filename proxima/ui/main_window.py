@@ -26,7 +26,7 @@ from gi.repository import Gdk, GLib, Gtk
 from .. import APP_NAME, __version__, logs, secrets, update
 from ..api import AuthError, ProxmoxError, certs
 from ..api import notes as notes_meta
-from ..api.client import CertificateMismatch, CertificateUntrusted
+from ..api.client import CertificateMismatch, CertificateUntrusted, task_upid
 from ..api.connection import CONNECTING, FAILED, Connection, ConnectionManager
 from ..api.models import (
     audio_is_spice,
@@ -2425,7 +2425,7 @@ class MainWindow(Gtk.Window):
 
         def worker():
             try:
-                api.clone_guest(
+                upid = api.clone_guest(
                     guest.node,
                     guest.vmid,
                     vmid,
@@ -2438,17 +2438,20 @@ class MainWindow(Gtk.Window):
             except Exception as exc:
                 GLib.idle_add(self._clone_failed, guest, str(exc))
                 return
-            GLib.idle_add(self._clone_started, guest, vmid, name, full)
+            GLib.idle_add(self._clone_started, guest, vmid, name, full, upid)
 
         threading.Thread(target=worker, daemon=True, name=f"clone-{guest.vmid}").start()
 
-    def _clone_started(self, guest, vmid, name, full):
+    def _clone_started(self, guest, vmid, name, full, upid=None):
         kind = "Full" if full else "Linked"
         self.set_status(f"{kind} clone {vmid} ({name}) requested")
         # A full clone copies disks and can run for minutes; the task feed is
         # where its progress actually is.
         self.task_feed.refresh()
         self.burst_poll(seconds=20)
+        # And minutes in is exactly when it runs out of space, which until now
+        # showed up as a clone that simply never appeared.
+        self._watch_task(guest, f"{kind} clone to {vmid}", upid)
         return False
 
     def _clone_failed(self, guest, message):
@@ -2523,23 +2526,26 @@ class MainWindow(Gtk.Window):
 
         def worker():
             try:
-                self.api_for(guest).delete_guest(
+                upid = self.api_for(guest).delete_guest(
                     guest.node, guest.vmid, guest.kind, purge=purge
                 )
             except Exception as exc:
                 GLib.idle_add(self._delete_failed, guest, str(exc))
                 return
-            GLib.idle_add(self._delete_started, guest)
+            GLib.idle_add(self._delete_started, guest, upid)
 
         threading.Thread(
             target=worker, daemon=True, name=f"delete-{guest.vmid}"
         ).start()
         return False
 
-    def _delete_started(self, guest):
+    def _delete_started(self, guest, upid=None):
         self.set_status(f"{guest.label}: delete requested")
         self.task_feed.refresh()
         self.burst_poll(seconds=20)
+        # A guest that will not go -- a disk in use, a lock held elsewhere --
+        # is refused by the task, not by the request.
+        self._watch_task(guest, "Delete", upid)
         return False
 
     def _delete_failed(self, guest, message):
@@ -3104,7 +3110,7 @@ class MainWindow(Gtk.Window):
 
         def worker():
             try:
-                self.api_for(guest).power(
+                upid = self.api_for(guest).power(
                     guest.node, guest.vmid, action_name, guest.kind
                 )
             except ProxmoxError as exc:
@@ -3115,13 +3121,19 @@ class MainWindow(Gtk.Window):
                     self._action_failed, action, guest, f"{type(exc).__name__}: {exc}"
                 )
                 return
-            GLib.idle_add(self._action_done, action, guest)
+            GLib.idle_add(self._action_done, action, guest, upid)
 
         threading.Thread(target=worker, daemon=True, name=f"power-{guest.vmid}").start()
 
-    def _action_done(self, action, guest):
+    def _action_done(self, action, guest, upid=None):
         self.set_status(f"{guest.label}: {action.label} requested")
         self.task_feed.refresh()
+
+        # Accepted is not done. A start the node refuses -- no memory, a
+        # missing disk, a storage that is full -- is accepted here and fails
+        # seconds later on the node, which used to look exactly like a slow
+        # boot until the spinner gave up without ever saying why.
+        self._watch_task(guest, action.label, upid, action=action)
 
         verb = action_defs.IN_PROGRESS.get(action.name)
         expected = action_defs.EXPECTED_STATUS.get(action.name)
@@ -3184,8 +3196,54 @@ class MainWindow(Gtk.Window):
 
     def _action_failed(self, action, guest, message):
         self._clear_busy(guest.key)
+        # The console panel is the same wait as the row's spinner, so a
+        # failure ends both: leaving "Starting..." over a guest that will
+        # never start is the state this whole path exists to avoid.
+        self._clear_pending(guest.key)
         self.set_status(f"{guest.label}: {action.label} failed - {message}")
         self._error_dialog(f"{action.label} failed", message)
+        return False
+
+    # -- server-side tasks ---------------------------------------------
+
+    def _watch_task(self, guest, label, upid, action=None):
+        """Follow a task off-thread and report it if it fails.
+
+        Says nothing at all when it succeeds: the guest's own status moving is
+        the report, and a dialog for every successful start would be noise.
+
+        'action' is the power action it belongs to, when it belongs to one --
+        that is what lets a failure clear the spinner and the console panel
+        rather than leaving them to time out.
+        """
+        upid = task_upid(upid)
+        if upid is None:
+            return  # nothing to follow; the write did the work inline
+        api = self.api_for(guest)
+        node = guest.node
+
+        def worker():
+            try:
+                outcome = api.wait_for_task(node, upid)
+            except ProxmoxError as exc:
+                # Losing sight of the task is not the same as the task
+                # failing, and saying so would be a lie. It goes in the log.
+                log.info("could not follow task %s: %s", upid, exc)
+                return
+            if outcome.ok:
+                return
+            GLib.idle_add(self._task_failed, guest, label, outcome.message, action)
+
+        threading.Thread(target=worker, daemon=True, name=f"task-{guest.vmid}").start()
+
+    def _task_failed(self, guest, label, message, action=None):
+        if self._closing:
+            return False
+        if action is not None:
+            return self._action_failed(action, guest, message)
+        self._clear_busy(guest.key)
+        self.set_status(f"{guest.label}: {label} failed - {message}")
+        self._error_dialog(f"{label} failed", message)
         return False
 
     # ------------------------------------------------------------------
@@ -3262,19 +3320,22 @@ class MainWindow(Gtk.Window):
 
         def worker():
             try:
-                call()
+                upid = call()
             except ProxmoxError as exc:
                 GLib.idle_add(self.set_status, f"{guest.label}: {label} failed - {exc}")
                 return
-            GLib.idle_add(self._snapshot_done, guest, label)
+            GLib.idle_add(self._snapshot_done, guest, label, upid)
 
         threading.Thread(target=worker, daemon=True, name=f"snap-{guest.vmid}").start()
 
-    def _snapshot_done(self, guest, label):
+    def _snapshot_done(self, guest, label, upid=None):
         self.set_status(f"{guest.label}: {label} requested")
         # Snapshots run as a server-side task; the feed is where progress
         # actually shows up.
         self.task_feed.refresh()
+        # A rollback onto a full storage, or a snapshot of a guest whose disk
+        # cannot hold one, fails here rather than at the request.
+        self._watch_task(guest, label, upid)
         GLib.timeout_add_seconds(
             2,
             lambda: (

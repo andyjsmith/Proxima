@@ -35,6 +35,7 @@ gi.require_version("Gtk", "3.0")
 import pytest
 from gi.repository import Gtk
 
+from proxima.api.client import TaskOutcome
 from proxima.api.connection import CONNECTED, Connection
 from proxima.api.models import Guest
 from proxima.config import Config
@@ -160,6 +161,9 @@ class FakeAPI:
     # the window the tree's spinner exists to cover.
     RENAME_DELAY = False
     _deferred_rename = None
+
+    # Set to an exitstatus string to make every followed task fail with it.
+    task_failure = None
 
     def guests(self):
         self.calls.append("guests")
@@ -371,6 +375,26 @@ class FakeAPI:
 
     def task_log(self, node, upid, limit=200):
         return [f"log line {i} for {upid}" for i in range(3)]
+
+    def task_status(self, node, upid):
+        self.calls.append(("task_status", upid))
+        return {
+            "upid": upid,
+            "status": "stopped",
+            "exitstatus": self.task_failure or "OK",
+        }
+
+    def wait_for_task(self, node, upid, timeout=600, poll=1.0, log_lines=6):
+        """Tasks succeed unless a test sets task_failure to an exitstatus.
+
+        Overridden rather than left to the real implementation so a test does
+        not have to wait a real second per poll; the real one is exercised
+        directly in test_tasks.py.
+        """
+        self.calls.append(("wait_for_task", upid))
+        if not self.task_failure:
+            return TaskOutcome(True, "OK", "")
+        return TaskOutcome(False, self.task_failure, "log line about the failure")
 
     # -- snapshots -----------------------------------------------------
 
