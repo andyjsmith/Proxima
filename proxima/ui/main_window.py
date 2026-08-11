@@ -223,6 +223,10 @@ class MainWindow(Gtk.Window):
         # assembled, before the status bar and menus exist. Handlers that
         # touch them must wait until construction finishes.
         self._ready = False
+        # The two halves of the protocol label's tooltip, written by different
+        # things at different times. See _refresh_protocol_tooltip.
+        self._protocol_note = ""
+        self._telemetry_text = ""
         # The page a switch is on its way to, while the switch is running.
         # GTK emits "switch-page" before the notebook updates which page is
         # current, so this is the only thing that knows. See _front_page.
@@ -846,11 +850,11 @@ class MainWindow(Gtk.Window):
         self.status_label_main.set_ellipsize(3)
         box.pack_start(self.status_label_main, True, True, 0)
 
-        # Console throughput, frame rate and guest resolution.
-        self.telemetry_label = Gtk.Label(xalign=1.0)
-        self.telemetry_label.get_style_context().add_class("mono")
-        self.telemetry_label.get_style_context().add_class("dim")
-        box.pack_start(self.telemetry_label, False, False, 4)
+        # Console throughput, frame rate and guest resolution used to be a
+        # label here. They are on the protocol label's tooltip instead: a
+        # readout that changes every second, and changes width with it, is
+        # movement in the corner of the eye for something read on purpose
+        # perhaps once an hour. See _set_telemetry.
 
         # A box of their own, so INDICATOR_SPACING is one knob that moves all
         # six and nothing else. Sharing the strip's spacing meant the icons
@@ -925,7 +929,8 @@ class MainWindow(Gtk.Window):
 
         # Protocol of the active console tab. This is the persistent signal
         # that a guest is on VNC rather than SPICE, now that the console has
-        # no bar of its own.
+        # no bar of its own -- and, on its tooltip, where the throughput and
+        # resolution figures live.
         self.protocol_label = Gtk.Label(xalign=1.0)
         box.pack_start(self.protocol_label, False, False, 6)
 
@@ -961,20 +966,42 @@ class MainWindow(Gtk.Window):
             return ""
 
         if rate >= 1024 * 1024:
-            s = f"{rate / (1024 * 1024):.1f} MB/s"
-        elif rate >= 1024:
-            s = f"{rate / 1024:.0f} kB/s"
-        else:
-            s = f"{rate:.0f} B/s"
+            return f"{rate / (1024 * 1024):.1f} MB/s"
+        if rate >= 1024:
+            return f"{rate / 1024:.0f} kB/s"
+        # No width padding: this reads in a tooltip now, where nothing shifts
+        # around it, so there is nothing to hold a column against.
+        return f"{rate:.0f} B/s"
 
-        return f"{s:>11}"
+    def _set_telemetry(self, text):
+        """Hand the figures to the protocol label's tooltip.
+
+        They used to be a label of their own, which redrew every second and
+        changed width with the rate -- a number nobody is reading most of the
+        time, moving in the corner of your eye all of the time. On the tooltip
+        they are there when looked for and still when not.
+        """
+        if text == self._telemetry_text:
+            return
+        self._telemetry_text = text
+        self._refresh_protocol_tooltip()
+
+    def _refresh_protocol_tooltip(self):
+        """Protocol note and telemetry, in one tooltip owned by both.
+
+        Two things write here on different schedules -- the note when the tab
+        changes, the figures every second -- so neither sets the tooltip
+        directly; they leave their half here and this puts the two together.
+        """
+        parts = [part for part in (self._protocol_note, self._telemetry_text) if part]
+        self.protocol_label.set_tooltip_text("\n\n".join(parts))
 
     def _sample_telemetry(self):
         if self._closing:
             return False
         console = self.current_console()
         if console is None or not hasattr(console, "telemetry"):
-            self.telemetry_label.set_text("")
+            self._set_telemetry("")
             self.screenshot_item.set_sensitive(False)
             return True
 
@@ -987,12 +1014,12 @@ class MainWindow(Gtk.Window):
 
         data = console.telemetry()
         if not data:
-            self.telemetry_label.set_text("")
+            self._set_telemetry("")
             return True
 
-        parts = [
-            p for p in (data.get("size"), self._format_rate(data.get("rate"))) if p
-        ]
+        # Rate first, then the resolution: the rate is the one being looked
+        # for, and it was the one that used to jump about.
+        parts = [self._format_rate(data.get("rate")), data.get("size")]
         if data.get("fps") is not None:
             parts.append(f"{data['fps']:.0f} fps")
         # The encoding actually in use, when the protocol will say. spice-glib
@@ -1000,7 +1027,8 @@ class MainWindow(Gtk.Window):
         # empty for SPICE rather than echoing back what was requested.
         if data.get("codec"):
             parts.append(data["codec"])
-        self.telemetry_label.set_text("  ".join(parts))
+        # One per line: a tooltip has the room, and they are separate facts.
+        self._set_telemetry("\n".join(p for p in parts if p))
 
         # spice-vdagent state comes from the console; VNC has none.
         self._update_clipboard_indicator(console)
@@ -5128,22 +5156,25 @@ class MainWindow(Gtk.Window):
             self.close_console_item.set_sensitive(console is not None)
             self._sync_protocol_switch(console)
 
+            # The note half of the tooltip only; the telemetry half is left
+            # alone, so a tab switch does not blank the figures until the
+            # next sample lands.
             if console is None:
                 self.protocol_label.set_text("")
+                self._protocol_note = ""
             elif console.protocol == "serial":
                 self.protocol_label.set_text("Serial")
-                self.protocol_label.set_tooltip_text(
+                self._protocol_note = (
                     "A text console. Select with the mouse, Ctrl+Shift+C to "
                     "copy, Ctrl+Shift+V to paste."
                 )
             elif console.protocol == "vnc":
                 self.protocol_label.set_markup("<span foreground='#e5a50a'>VNC</span>")
-                self.protocol_label.set_tooltip_text(
-                    "No guest resize, clipboard or audio"
-                )
+                self._protocol_note = "No guest resize, clipboard or audio"
             else:
                 self.protocol_label.set_text("SPICE")
-                self.protocol_label.set_tooltip_text("")
+                self._protocol_note = ""
+            self._refresh_protocol_tooltip()
         finally:
             self._updating_view_menu = False
 

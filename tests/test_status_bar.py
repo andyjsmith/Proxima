@@ -212,9 +212,11 @@ def test_telemetry_reports_size_rate_and_frame_rate(window):
     pump(0.3)
     try:
         window._sample_telemetry()
-        text = window.telemetry_label.get_text()
+        # On the protocol label's tooltip, not a label of its own: a readout
+        # that redraws every second does not belong in the corner of the eye.
+        text = window.protocol_label.get_tooltip_text() or ""
         assert "1920x1080" in text and "MB/s" in text and "fps" in text, (
-            f"telemetry label reads {text!r}"
+            f"the protocol tooltip reads {text!r}"
         )
         assert window.vdagent_icon.get_opacity() >= 0.9, (
             "vdagent indicator dim despite a connected agent"
