@@ -854,7 +854,9 @@ class MainWindow(Gtk.Window):
         )
         box.pack_start(self.vdagent_icon, False, False, 2)
 
-        self.qga_icon = StatusIndicator("utilities-terminal-symbolic", "Guest agent")
+        self.qga_icon = StatusIndicator(
+            "application-x-executable-symbolic", "Guest agent"
+        )
         box.pack_start(self.qga_icon, False, False, 2)
 
         # Whether the guest has an audio device routed over SPICE. Proxmox
@@ -868,7 +870,7 @@ class MainWindow(Gtk.Window):
         # switch like the two before it -- there is nothing to turn on
         # without saying which device -- so clicking opens the chooser.
         self.usb_icon = StatusIndicator(
-            "drive-removable-media-symbolic",
+            "media-removable-symbolic",
             "USB redirection",
             on_toggle=self.open_usb_dialog,
         )
@@ -878,7 +880,7 @@ class MainWindow(Gtk.Window):
         # but it belongs with the other two: it is a thing that is either
         # armed or not, and this is where you find out which.
         self.dnd_icon = StatusIndicator(
-            "list-drag-handle-symbolic", "Drag and drop", on_toggle=self._toggle_dnd
+            "document-send-symbolic", "Drag and drop", on_toggle=self._toggle_dnd
         )
         box.pack_start(self.dnd_icon, False, False, 2)
 
@@ -1289,8 +1291,7 @@ class MainWindow(Gtk.Window):
             # read, say the truthful weaker thing.
             if guest is not None and guest.config_loaded:
                 detail = (
-                    "no SPICE USB port on this VM. Add one in Proxmox: "
-                    "Hardware -> Add -> USB Device -> Spice Port."
+                    "no SPICE USB port on this VM."
                     if not spice_usb_ports(guest.config)
                     else "the guest's USB port has not connected yet"
                 )
