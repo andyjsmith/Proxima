@@ -2565,7 +2565,19 @@ class MainWindow(Gtk.Window):
             pending = self._pending_actions.get(key)
             if pending is not None:
                 was, deadline = pending
-                if guest.status != was or time.monotonic() >= deadline:
+                # The row's spinner and this panel are one wait, so they end
+                # together: _resolve_busy has already run against this same
+                # poll, so whatever answered the row answers the panel too.
+                # Watching only for a status change left the panel up for the
+                # full deadline after a reset or a reboot, neither of which
+                # moves the status off "running" -- the row stopped spinning
+                # and the guest had visibly finished, while the console still
+                # insisted it was working on it.
+                if (
+                    key not in self._busy
+                    or guest.status != was
+                    or time.monotonic() >= deadline
+                ):
                     self._clear_pending(key)
                 else:
                     # Still waiting; leave the "Stopping..." panel up.
@@ -2886,39 +2898,47 @@ class MainWindow(Gtk.Window):
         self.set_status(f"{guest.label}: {action.label} requested")
         self.task_feed.refresh()
 
+        verb = action_defs.IN_PROGRESS.get(action.name)
+        expected = action_defs.EXPECTED_STATUS.get(action.name)
+        # A reset or reboot ends where it started, so nothing in the
+        # inventory will ever confirm it. Acknowledge the click briefly
+        # rather than waiting the full timeout for a change that is not
+        # coming. One deadline for both the row and the console: they are
+        # the same wait, and when they had one each they visibly disagreed.
+        timeout = self.PENDING_TIMEOUT if expected else self.REBOOT_ACK
+
         # Proxmox takes a few seconds to report the new status, so say what
         # was asked for rather than leaving the console looking untouched.
-        verb = action_defs.IN_PROGRESS.get(action.name)
+        # Instant actions are exempt -- see actions.INSTANT_ACTIONS.
         console = self.consoles.get(guest.key)
-        if verb and console is not None:
+        if (
+            verb
+            and console is not None
+            and action.name not in action_defs.INSTANT_ACTIONS
+        ):
             self._pending_actions[guest.key] = (
                 guest.status,
-                time.monotonic() + self.PENDING_TIMEOUT,
+                time.monotonic() + timeout,
             )
             console.show_pending_state(f"{verb}...")
 
         # Starting a guest goes straight to its console, saying "Starting...",
         # rather than sitting on the summary until the cluster catches up.
         # Watching it boot is the point of having pressed the button.
-        if action_defs.EXPECTED_STATUS.get(action.name) == "running":
+        if expected == "running":
             self._show_console_for_start(guest.key)
 
         # And on the row, whether or not a console is open: the task can
         # finish before the next inventory poll, which used to leave the
         # tree claiming the guest was still running for a couple of seconds
         # after everything else said otherwise.
-        expected = action_defs.EXPECTED_STATUS.get(action.name)
         self._mark_busy(
             guest.key,
             "status",
             guest.status,
             expected,
             f"{verb or action.label}...",
-            # A reboot ends where it started, so nothing in the inventory
-            # will ever confirm it. Acknowledge the click briefly rather
-            # than spinning for the full timeout waiting for a change that
-            # is not coming.
-            self.PENDING_TIMEOUT if expected else self.REBOOT_ACK,
+            timeout,
         )
 
         self.burst_poll()

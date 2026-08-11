@@ -108,6 +108,17 @@ IN_PROGRESS = {
 }
 
 
+# Actions that take effect the moment Proxmox accepts them, so there is no
+# waiting to report on the console. A reset yanks the virtual power line:
+# the guest is already back at its firmware splash by the time a panel
+# saying "Resetting..." could be drawn, and the panel then greys out and
+# hides the very thing it claims to be waiting for.
+#
+# The row still spins, because the inventory genuinely has not caught up
+# yet -- it is the console overlay that has nothing to say.
+INSTANT_ACTIONS = frozenset({"reset"})
+
+
 # The status each action is trying to reach, where there is one. Used to
 # stop waiting the moment the inventory shows it.
 #

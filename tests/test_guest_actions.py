@@ -92,6 +92,78 @@ def test_a_requested_action_shows_before_proxmox_reports_it(window):
         pump(0.5)
 
 
+def test_a_reset_does_not_cover_the_console_it_has_already_finished(window):
+    """Reset is instant, so the panel arrives too late to say anything.
+
+    The guest is back at its firmware splash before the panel could draw,
+    and the panel then greys out the one thing worth looking at.
+    """
+    window.open_console(RUNNING)
+    pump(1.2)
+    live = window.consoles.get(RUNNING)
+    assert live is not None, "no console opened for the running guest"
+    try:
+        window._run_action(RUNNING, "reset", confirm=False)
+        pump(1.0)
+        assert RUNNING not in window._pending_actions, (
+            "reset recorded a pending state, so it still covers the console"
+        )
+        assert not live.pending, "reset greyed out the console it just restarted"
+        assert "Resetting" not in live.status_panel.title.get_text(), (
+            "reset still puts a panel over the console"
+        )
+        # Only the console panel goes: the inventory really has not caught
+        # up yet, so the row is still right to say so.
+        assert RUNNING in window._busy, "the row stopped acknowledging a reset"
+    finally:
+        window.close_console(RUNNING)
+        pump(0.5)
+
+
+def test_a_pending_panel_does_not_outlive_the_rows_spinner(window):
+    """The panel and the spinner are one wait, so they end together.
+
+    A reboot ends at "running", where it began, so no status change ever
+    contradicts the panel. It used to sit there for the full PENDING_TIMEOUT
+    after the row had already stopped spinning.
+    """
+    window.open_console(RUNNING)
+    pump(1.2)
+    live = window.consoles.get(RUNNING)
+    assert live is not None, "no console opened for the running guest"
+    try:
+        window._run_action(RUNNING, "reboot", confirm=False)
+        pump(1.0)
+        assert RUNNING in window._pending_actions, "the reboot said nothing at all"
+        assert "Rebooting" in live.status_panel.title.get_text(), (
+            f"panel reads {live.status_panel.title.get_text()!r}, expected Rebooting"
+        )
+
+        # End the row's wait, as its shorter deadline does. The guest is
+        # still "running", so nothing else could release the panel.
+        window._clear_busy(RUNNING)
+        window.refresh()
+        pump_until(lambda: RUNNING not in window._pending_actions, 6, step=0.3)
+        assert RUNNING not in window._pending_actions, (
+            "the panel outlived the row's spinner"
+        )
+        assert not live.pending, "the console stayed greyed out after the wait ended"
+    finally:
+        window.close_console(RUNNING)
+        pump(0.5)
+
+
+def test_the_row_and_the_console_wait_on_one_deadline(window):
+    """Two deadlines for one action is what let them disagree on screen."""
+    assert window.REBOOT_ACK < window.PENDING_TIMEOUT, (
+        "the short acknowledgement is no shorter than the full timeout"
+    )
+    for name in ("reset", "reboot"):
+        assert name not in action_defs.EXPECTED_STATUS, (
+            f"{name} claims a target status; it ends where it began"
+        )
+
+
 def test_renaming_reaches_the_api_and_updates_the_tree(window, api):
     before = len(api.calls)
     window.rename_guest(RUNNING, "web01-renamed")
