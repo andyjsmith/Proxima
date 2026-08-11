@@ -143,6 +143,19 @@ VIDEO_CODECS = [
     ("VP9", ("VideoCodecType", "VP9", 4)),
 ]
 
+# Guest desktop effects that can be asked away for the sake of the link, as
+# (label, spice-gtk name). The guest agent carries these out, so a guest
+# without spice-vdagent running simply keeps its wallpaper.
+#
+# "color-depth" is deliberately not offered beside them: spice-gtk deprecated
+# it in 0.37 and now ignores it outright ("lack of support in drivers, only
+# Windows 7 and older"), so a menu entry for it would do nothing at all.
+DISABLE_EFFECTS = [
+    ("Wallpaper", "wallpaper"),
+    ("Font Smoothing", "font-smooth"),
+    ("Animation", "animation"),
+]
+
 IMAGE_COMPRESSION = [
     ("server default", None),
     ("off (lossless)", ("ImageCompression", "OFF", 1)),
@@ -274,6 +287,7 @@ class SpiceConsole(Gtk.Box):
         "audio": True,
         "microphone": True,
         "view_only": True,
+        "effects": True,
         "usb": True,
         # Whether a guest head can be given a monitor of its own. Capable in
         # principle here; whether this guest actually has a second head is
@@ -305,6 +319,7 @@ class SpiceConsole(Gtk.Box):
         play_audio=True,
         capture_audio=False,
         view_only=False,
+        disable_effects=(),
         on_usb=None,
         on_usb_plugged=None,
         on_monitors=None,
@@ -344,6 +359,9 @@ class SpiceConsole(Gtk.Box):
         self.capture_audio = bool(capture_audio)
         self._record_channel = None
         self.view_only = bool(view_only)
+        # Guest desktop effects to ask the agent to drop, for a link where
+        # the wallpaper is not worth the bandwidth. See _build_session.
+        self.disable_effects = tuple(disable_effects or ())
         self._gtk_session = None
         self.auto_resize = auto_resize
         self.scaling = scale_to_fit
@@ -517,6 +535,17 @@ class SpiceConsole(Gtk.Box):
             except Exception as exc:
                 log.warning("could not disable audio: %s", exc)
 
+        if self.disable_effects:
+            # Applied to display channels as they are created, which is why
+            # this is a session property rather than something to switch on a
+            # live console -- see set_disable_effects. The guest agent is what
+            # carries these out, so a guest without spice-vdagent ignores them.
+            try:
+                session.set_property("disable-effects", list(self.disable_effects))
+                log.info("effects disabled: %s", ", ".join(self.disable_effects))
+            except Exception as exc:
+                log.warning("could not disable effects: %s", exc)
+
         # host is the Proxmox proxy ticket, passed through verbatim.
         if params.get("host"):
             session.set_property("host", str(params["host"]))
@@ -593,6 +622,16 @@ class SpiceConsole(Gtk.Box):
         what it needs.
         """
         self.play_audio = bool(enabled)
+        return False
+
+    def set_disable_effects(self, effects):
+        """Record which guest effects to drop. Returns False: needs a rebuild.
+
+        spice-gtk applies disable-effects to display channels as they are
+        created, so a live session keeps whatever it was built with. Reported
+        rather than pretended, exactly as with audio: the caller rebuilds.
+        """
+        self.disable_effects = tuple(effects or ())
         return False
 
     # -- the microphone ------------------------------------------------

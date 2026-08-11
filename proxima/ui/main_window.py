@@ -53,7 +53,7 @@ from ..console.scaling import (
     console_scale_index,
 )
 from ..console.serial import DEFAULT_FONT_SIZE
-from ..console.spice import IMAGE_COMPRESSION, VIDEO_CODECS
+from ..console.spice import DISABLE_EFFECTS, IMAGE_COMPRESSION, VIDEO_CODECS
 from ..console.termproxy import open_session as open_term_session
 from ..theme import apply as apply_theme
 from ..theme import current_row_ypad as theme_row_ypad
@@ -663,6 +663,26 @@ class MainWindow(Gtk.Window):
             self._on_compression_selected,
         )
 
+        # Asking the guest to stop drawing things nobody is looking at. Not
+        # radio buttons: they are independent, and on a slow link you want all
+        # three. spice-gtk reads these when a display channel is created, so
+        # changing one rebuilds the console -- which is why they sit in a
+        # submenu rather than loose in the menu where they are easy to brush.
+        self.effects_item = Gtk.MenuItem(label="Bandwidth")
+        effects_menu = Gtk.Menu()
+        self.effects_items = {}
+        for label, name in DISABLE_EFFECTS:
+            entry = Gtk.CheckMenuItem(label=f"Disable {label}")
+            entry.set_tooltip_text(
+                "Asks the guest to drop this. Needs spice-vdagent in the "
+                "guest, and reconnects the console"
+            )
+            entry.connect("toggled", self._on_effect_toggled, name)
+            effects_menu.append(entry)
+            self.effects_items[name] = entry
+        self.effects_item.set_submenu(effects_menu)
+        menu.append(self.effects_item)
+
         menu.append(Gtk.SeparatorMenuItem())
 
         # One entry, not two. Splitting and unsplitting were separate
@@ -684,6 +704,7 @@ class MainWindow(Gtk.Window):
 
         self._view_items = [
             self.fullscreen_item,
+            self.effects_item,
             self.all_monitors_item,
             self.view_only_item,
             self.auto_resize_item,
@@ -3970,6 +3991,10 @@ class MainWindow(Gtk.Window):
             ),
             "codec_index": stored.get("codec_index", 0),
             "compression_index": stored.get("compression_index", 0),
+            # Which guest desktop effects to ask away. A property of the link
+            # to this guest rather than of the guest, so it lives here with
+            # the other things that are about this machine's view of it.
+            "disable_effects": list(stored.get("disable_effects") or ()),
             # How big the text is on a serial console. This machine's
             # business, like the two above it: the same container read on a
             # laptop and on a 27" monitor wants different answers.
@@ -4041,6 +4066,7 @@ class MainWindow(Gtk.Window):
                 play_audio=self._guest_switch(guest, "audio"),
                 capture_audio=self._guest_switch(guest, "microphone"),
                 view_only=guest.key in self._view_only,
+                disable_effects=prefs["disable_effects"],
                 on_agent=lambda connected, c=None: self._on_console_agent(
                     self.consoles.get(guest.key), connected
                 ),
@@ -5205,6 +5231,12 @@ class MainWindow(Gtk.Window):
         try:
             supports = getattr(console, "supports", {}) if console else {}
 
+            self.effects_item.set_sensitive(bool(supports.get("effects")))
+            if console is not None and supports.get("effects"):
+                active = set(getattr(console, "disable_effects", ()) or ())
+                for name, entry in self.effects_items.items():
+                    entry.set_active(name in active)
+
             self.view_only_item.set_sensitive(bool(supports.get("view_only")))
             self.view_only_item.set_active(
                 bool(console and getattr(console, "view_only", False))
@@ -5377,6 +5409,36 @@ class MainWindow(Gtk.Window):
         # The protocol label is where this has to show: a mode that stops the
         # keyboard working needs to be visible without opening a menu.
         self._sync_view_menu(console)
+
+    def _on_effect_toggled(self, item, name):
+        """Ask the guest to drop an effect, or to draw it again.
+
+        Saved per guest and applied by rebuilding: spice-gtk reads
+        disable-effects when a display channel is created, so the console in
+        front keeps whatever it was built with until it is built again.
+        """
+        if self._updating_view_menu:
+            return
+        console = self.current_console()
+        guest = self.context_guest(console)
+        if guest is None:
+            return
+        wanted = set(self.guest_prefs(guest.key)["disable_effects"])
+        if item.get_active():
+            wanted.add(name)
+        else:
+            wanted.discard(name)
+        # Ordered as DISABLE_EFFECTS lists them, so what is stored reads the
+        # way the menu does rather than in whatever order they were clicked.
+        ordered = [n for _label, n in DISABLE_EFFECTS if n in wanted]
+        self._save_guest_pref("disable_effects", ordered, key=guest.key)
+
+        setter = getattr(console, "set_disable_effects", None)
+        if setter is None:
+            return
+        setter(ordered)
+        self.set_status(f"{guest.label}: display effects changed, reconnecting...")
+        self.reconnect_console(guest.key)
 
     def _on_auto_resize_toggled(self, item):
         if self._updating_view_menu:

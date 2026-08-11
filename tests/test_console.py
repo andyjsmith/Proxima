@@ -1161,3 +1161,53 @@ def test_view_only_survives_a_reconnect_but_not_a_closed_tab(window):
     assert STOPPED not in window._view_only, (
         "view-only outlived the tab it was switched on for"
     )
+
+
+def test_disabling_an_effect_is_saved_and_reconnects(window, config):
+    """spice-gtk reads disable-effects at channel creation, so it rebuilds."""
+    console = FakeConsole("effects")
+    console.guest_key = STOPPED
+    window.consoles[STOPPED] = console
+    window.panes.append(console, Gtk.Label(label="e"))
+    pump(0.5)
+    try:
+        assert window.effects_item.get_sensitive(), "Bandwidth is greyed out on SPICE"
+        window.effects_items["wallpaper"].set_active(True)
+        pump(0.4)
+
+        stored = (config.get("guest_prefs") or {}).get(STOPPED, {})
+        assert stored.get("disable_effects") == ["wallpaper"], (
+            f"the choice was not saved against the guest: {stored}"
+        )
+        assert console.disable_effects == ("wallpaper",), (
+            "the console was not told what to drop"
+        )
+        assert STOPPED in window._reconnecting, (
+            "a change that only applies to a new session did not reconnect"
+        )
+    finally:
+        config["guest_prefs"] = {}
+        window.close_console(STOPPED)
+        pump(0.4)
+
+
+def test_the_effects_are_stored_in_menu_order(window, config):
+    console = FakeConsole("effects")
+    console.guest_key = STOPPED
+    window.consoles[STOPPED] = console
+    window.panes.append(console, Gtk.Label(label="e"))
+    pump(0.5)
+    try:
+        # Clicked in the wrong order on purpose.
+        window.effects_items["animation"].set_active(True)
+        pump(0.3)
+        window.effects_items["wallpaper"].set_active(True)
+        pump(0.3)
+        stored = (config.get("guest_prefs") or {}).get(STOPPED, {})
+        assert stored.get("disable_effects") == ["wallpaper", "animation"], (
+            f"stored out of menu order: {stored}"
+        )
+    finally:
+        config["guest_prefs"] = {}
+        window.close_console(STOPPED)
+        pump(0.4)

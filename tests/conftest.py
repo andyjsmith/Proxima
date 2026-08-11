@@ -667,6 +667,7 @@ class FakeConsole(Gtk.Box):
         "audio": True,
         "microphone": True,
         "view_only": True,
+        "effects": True,
         "multi_monitor": True,
     }
     agent_connected = True
@@ -693,6 +694,7 @@ class FakeConsole(Gtk.Box):
         self.play_audio = True
         self.capture_audio = False
         self.view_only = False
+        self.disable_effects = ()
         # Whether the guest offered a record channel at all. True here so the
         # switch is live; set False in a test to model a guest with no input.
         self.has_record_channel = True
@@ -705,6 +707,12 @@ class FakeConsole(Gtk.Box):
     def set_view_only(self, value):
         self.view_only = value
         return True
+
+    # As SpiceConsole reports it: the session reads disable-effects when a
+    # display channel is created, so a live console cannot take a change.
+    def set_disable_effects(self, effects):
+        self.disable_effects = tuple(effects)
+        return False
 
     # Clipboard applies live; audio cannot, exactly as SpiceConsole reports.
     def set_clipboard_enabled(self, value):
