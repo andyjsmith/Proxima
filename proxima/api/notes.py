@@ -116,6 +116,11 @@ def with_folder(notes, path):
 SETTINGS_DEFAULTS = {
     "clipboard": "enabled",
     "audio": "enabled",
+    # The one switch that defaults off. Sound coming out of a guest is what
+    # someone asked for by configuring an audio device; a microphone going
+    # into one is this machine listening to the room, which nobody should
+    # get by not having thought about it.
+    "microphone": "disabled",
     "protocol": "default",
 }
 

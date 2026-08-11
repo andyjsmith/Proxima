@@ -3,11 +3,174 @@
 import pytest
 from gi.repository import Gtk
 
-from .conftest import FakeConsole, key_for, pump
+from .conftest import FakeConsole, key_for, pump, pump_until
 
 RUNNING = key_for(100)
 NO_AGENT = key_for(101)
 CONTAINER = key_for(202, node="pve-node-02", kind="lxc")
+
+
+# -- the microphone -------------------------------------------------------
+# SPICE's record channel, carrying this machine's microphone into the guest.
+# Unlike audio it moves live, because it is a channel rather than a property
+# of the session -- and unlike every other switch it defaults to off.
+
+SPICE_AUDIO = "device=ich9-intel-hda,driver=spice"
+
+
+@pytest.fixture
+def audio_guest(window, api):
+    """The running guest, with a SPICE audio device on it."""
+    api.HARDWARE[100] = {"audio0": SPICE_AUDIO}
+    window.refresh()
+    pump_until(
+        lambda: (
+            (window.sidebar.guests[RUNNING].config or {}).get("audio0") == SPICE_AUDIO
+        ),
+        8,
+    )
+    yield window.sidebar.guests[RUNNING]
+    api.HARDWARE.pop(100, None)
+    window.refresh()
+    pump(0.4)
+
+
+def test_the_microphone_defaults_to_off(window, audio_guest, switch_console):
+    """Nothing else defaults off. This one has to."""
+    assert window._guest_switch(audio_guest, "microphone") is False, (
+        "the microphone was on for a guest that never asked for it"
+    )
+    assert switch_console.capture_audio is False, (
+        "a console was built with the microphone already open"
+    )
+    window._update_microphone_indicator(switch_console)
+    pump(0.2)
+    assert window.mic_icon.struck, "the microphone icon is not struck when off"
+
+
+def test_the_microphone_toggles_live_and_needs_no_reconnect(
+    window, config, audio_guest, switch_console
+):
+    window._toggle_microphone()
+    status = window.status_label_main.get_text()
+    try:
+        assert switch_console.capture_audio is True, (
+            "the microphone switch did not reach the console"
+        )
+        assert RUNNING not in window._reconnecting, (
+            f"turning the microphone on rebuilt the console, said {status!r}"
+        )
+        assert not window.mic_icon.struck, "icon stayed struck with the mic on"
+        assert (config.get("guest_prefs") or {}).get(RUNNING, {}) == {}, (
+            "the microphone button wrote a saved preference"
+        )
+
+        window._toggle_microphone()
+        pump(0.2)
+        assert switch_console.capture_audio is False, "the microphone would not go off"
+        assert window.mic_icon.struck
+    finally:
+        config["guest_prefs"] = {}
+
+
+def test_the_microphone_is_not_offered_while_audio_is_off(
+    window, audio_guest, switch_console
+):
+    """spice-gtk builds playback and record together or not at all."""
+    # Set directly rather than through _toggle_audio: that one rebuilds the
+    # console, and the replacement would outlive this test.
+    window._session_switches[(RUNNING, "audio")] = False
+    try:
+        window._update_microphone_indicator(switch_console)
+        pump(0.2)
+        assert not window.mic_icon.can_toggle, (
+            "the microphone offered itself with the audio backend switched off"
+        )
+        assert "Audio" in (window.mic_icon.get_tooltip_text() or ""), (
+            f"no explanation given: {window.mic_icon.get_tooltip_text()!r}"
+        )
+    finally:
+        window._session_switches.pop((RUNNING, "audio"), None)
+
+
+def test_a_guest_with_no_audio_input_cannot_turn_the_microphone_on(
+    window, audio_guest, switch_console
+):
+    """No record channel means no reconnect would help, so none is tried."""
+    switch_console.has_record_channel = False
+    window._update_microphone_indicator(switch_console)
+    pump(0.2)
+    assert not window.mic_icon.can_toggle, (
+        "offered a microphone the guest never provided an input for"
+    )
+
+    window._toggle_microphone()
+    status = window.status_label_main.get_text()
+    assert RUNNING not in window._reconnecting, (
+        f"rebuilt the console for a channel that does not exist, said {status!r}"
+    )
+
+
+def test_spice_declares_the_microphone_contract():
+    """The fake console in conftest mirrors this; keep them honest."""
+    from proxima.console.spice import SpiceConsole
+
+    assert SpiceConsole.supports["microphone"] is True
+    assert "audio" in SpiceConsole.RECONNECT_SWITCHES, (
+        "audio no longer asks for a rebuild"
+    )
+    assert "microphone" not in SpiceConsole.RECONNECT_SWITCHES, (
+        "the microphone asks for a rebuild it does not need"
+    )
+
+
+def test_the_status_bar_follows_the_tab_it_switches_to(window, audio_guest):
+    """Switching tabs must not leave the indicators describing the old one.
+
+    The tree selection made at the end of a page switch refreshes the
+    indicators with no console of its own to go on, so it read the notebook
+    -- which mid-switch still reports the tab being *left*. The incoming tab
+    ended up described by the outgoing one: a SPICE console with sound
+    claiming to be VNC, or reporting the other guest's missing audio device.
+    """
+    # Let anything already in flight for these guests land first.
+    pump(1.0)
+    window._console_offline.pop(RUNNING, None)
+
+    spice = FakeConsole("with-audio")
+    spice.guest_key = RUNNING
+    window.consoles[RUNNING] = spice
+    window.panes.append(spice, Gtk.Label(label="spice"))
+
+    vnc = FakeConsole("no-audio")
+    vnc.guest_key = NO_AGENT
+    vnc.protocol = "vnc"
+    vnc.supports = dict(FakeConsole.supports, audio=False, microphone=False)
+    window.consoles[NO_AGENT] = vnc
+    window.panes.append(vnc, Gtk.Label(label="vnc"))
+    pump(0.5)
+    try:
+        window.notebook.set_current_page(window.notebook.page_num(vnc))
+        pump(0.5)
+        assert window.current_console() is vnc, "the VNC tab did not come forward"
+
+        window.notebook.set_current_page(window.notebook.page_num(spice))
+        pump(0.5)
+        assert window.current_console() is spice, "the SPICE tab did not come forward"
+
+        tip = window.audio_icon.get_tooltip_text() or ""
+        assert "VNC" not in tip, f"audio indicator describes the other tab: {tip!r}"
+        assert "no device" not in tip, (
+            f"audio indicator describes the other guest: {tip!r}"
+        )
+        assert SPICE_AUDIO in tip, f"the audio device is not reported: {tip!r}"
+        assert window.audio_icon.can_toggle, (
+            "audio cannot be switched on the SPICE tab it belongs to"
+        )
+    finally:
+        window.close_console_widget(spice)
+        window.close_console_widget(vnc)
+        pump(0.4)
 
 
 def test_the_agent_menu_is_enabled_when_the_agent_answers(window):

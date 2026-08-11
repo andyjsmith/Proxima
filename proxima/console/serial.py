@@ -145,6 +145,7 @@ class SerialConsole(Gtk.Box):
         "send_keys": True,
         "clipboard": False,
         "audio": False,
+        "microphone": False,
         "usb": False,
         "multi_monitor": False,
     }

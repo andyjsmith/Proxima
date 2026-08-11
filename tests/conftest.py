@@ -641,9 +641,13 @@ class FakeConsole(Gtk.Box):
         "ctrl_alt_del": True,
         "clipboard": True,
         "audio": True,
+        "microphone": True,
         "multi_monitor": True,
     }
     agent_connected = True
+    # As SpiceConsole declares it: audio needs the session rebuilt, the
+    # microphone does not.
+    RECONNECT_SWITCHES = ("audio",)
 
     def __init__(self, title="fake-guest", heads=1):
         super().__init__()
@@ -662,6 +666,10 @@ class FakeConsole(Gtk.Box):
         self.keys_sent = []
         self.share_clipboard = True
         self.play_audio = True
+        self.capture_audio = False
+        # Whether the guest offered a record channel at all. True here so the
+        # switch is live; set False in a test to model a guest with no input.
+        self.has_record_channel = True
         self.last_status = ""
         self.pack_start(Gtk.Label(label="console"), True, True, 0)
 
@@ -676,6 +684,15 @@ class FakeConsole(Gtk.Box):
     def set_audio_enabled(self, value):
         self.play_audio = value
         return False
+
+    # The microphone applies live, and reports False only when there is no
+    # record channel -- which no reconnect would produce either.
+    def microphone_available(self):
+        return self.has_record_channel
+
+    def set_microphone_enabled(self, value):
+        self.capture_audio = value
+        return self.has_record_channel
 
     def set_scaling(self, value):
         self.scaling = value

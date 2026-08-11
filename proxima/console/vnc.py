@@ -70,6 +70,7 @@ class VncConsole(Gtk.Box):
         # protocol extension, so there is nothing to carry it here.
         "clipboard": False,
         "audio": False,
+        "microphone": False,
         "usb": False,
         # RFB has one framebuffer per connection. A guest with two heads
         # shows them side by side inside that one picture, so there is

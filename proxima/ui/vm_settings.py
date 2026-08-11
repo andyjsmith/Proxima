@@ -71,6 +71,13 @@ AUDIO_CHOICES = [
     ("disabled", "Disabled"),
 ]
 
+# Off unless somebody says otherwise, here as everywhere else -- see
+# notes.SETTINGS_DEFAULTS. The order is deliberate: the default reads first.
+MICROPHONE_CHOICES = [
+    ("disabled", "Disabled"),
+    ("enabled", "Enabled"),
+]
+
 PROTOCOL_CHOICES = [
     ("default", "Default  -  SPICE when the display supports it"),
     ("vnc", "VNC only"),
@@ -701,6 +708,20 @@ class VMSettingsDialog(Gtk.Dialog):
         self._combo(
             grid,
             2,
+            "Microphone",
+            MICROPHONE_CHOICES,
+            "microphone",
+            tooltip=(
+                "Let the guest hear this machine's microphone, over SPICE's "
+                "record channel. Needs a SPICE console and an audio device "
+                "on the VM whose codec has an input, which "
+                "device=ich9-intel-hda,driver=spice has."
+            ),
+            sensitive=not container,
+        )
+        self._combo(
+            grid,
+            3,
             "Protocol",
             CONTAINER_PROTOCOL_CHOICES if container else PROTOCOL_CHOICES,
             "protocol",
@@ -721,18 +742,18 @@ class VMSettingsDialog(Gtk.Dialog):
         text = (
             "Stored in this guest's notes on the server, so every "
             "machine running Proxmox Manager sees the same settings.\n\n"
-            "The clipboard and audio buttons in the status bar, and "
-            "Reopen Console with VNC, only change the console in front "
-            "of you for as long as it is open. They never change what "
-            "is set here."
+            "The clipboard, audio and microphone buttons in the status "
+            "bar, and Reopen Console with VNC, only change the console in "
+            "front of you for as long as it is open. They never change "
+            "what is set here."
         )
         if container:
             text = (
-                "Containers have no SPICE console, so clipboard and "
-                "audio do not apply to them.\n\n" + text
+                "Containers have no SPICE console, so clipboard, audio "
+                "and the microphone do not apply to them.\n\n" + text
             )
         note.set_text(text)
-        grid.attach(note, 0, 3, 2, 1)
+        grid.attach(note, 0, 4, 2, 1)
         return grid
 
     def _combo(self, grid, row, label, choices, name, tooltip=None, sensitive=True):

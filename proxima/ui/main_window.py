@@ -223,6 +223,10 @@ class MainWindow(Gtk.Window):
         # assembled, before the status bar and menus exist. Handlers that
         # touch them must wait until construction finishes.
         self._ready = False
+        # The page a switch is on its way to, while the switch is running.
+        # GTK emits "switch-page" before the notebook updates which page is
+        # current, so this is the only thing that knows. See _front_page.
+        self._switching_to = None
 
         # Restored in two parts: the size the window has when it is not
         # maximised, and whether it was maximised. Setting the default size
@@ -867,6 +871,16 @@ class MainWindow(Gtk.Window):
         )
         box.pack_start(self.audio_icon, False, False, 2)
 
+        # The other direction: SPICE's record channel, carrying this
+        # machine's microphone into the guest. Off unless asked for, and it
+        # sits next to Audio because they are the same device on the VM.
+        self.mic_icon = StatusIndicator(
+            "audio-input-microphone-symbolic",
+            "Microphone",
+            on_toggle=self._toggle_microphone,
+        )
+        box.pack_start(self.mic_icon, False, False, 2)
+
         # Whether a USB device is currently in the guest's hands. Not a
         # switch like the two before it -- there is nothing to turn on
         # without saying which device -- so clicking opens the chooser.
@@ -888,6 +902,7 @@ class MainWindow(Gtk.Window):
         self._set_indicator(self.vdagent_icon, None, "SPICE agent")
         self._set_indicator(self.qga_icon, None, "Guest agent")
         self._set_indicator(self.audio_icon, None, "Audio")
+        self._set_indicator(self.mic_icon, None, "Microphone")
         self._set_indicator(self.usb_icon, None, "USB redirection")
         self._update_dnd_indicator()
 
@@ -988,20 +1003,26 @@ class MainWindow(Gtk.Window):
         GLib.idle_add(update)
 
     def _guest_switch(self, guest, name):
-        """Whether clipboard sharing or audio is on for a guest right now.
+        """Whether one of the status bar switches is on for a guest now.
 
         Two sources, in order: whatever the status bar button was last set
         to for this console, and otherwise the guest's own settings from the
         server. The button is a session-length override and nothing more --
         it never writes back into the settings, which is what makes it safe
         to click while poking at something.
+
+        The fallback is the stored default rather than a flat "on", because
+        not every switch defaults on: the microphone defaults off, and a
+        guest we know nothing about must not read as one listening.
         """
+        default = notes_meta.SETTINGS_DEFAULTS.get(name, "enabled") != "disabled"
         if guest is None:
-            return True
+            return default
         override = self._session_switches.get((guest.key, name))
         if override is not None:
             return bool(override)
-        return self.guest_settings(guest).get(name, "enabled") != "disabled"
+        stored = self.guest_settings(guest).get(name)
+        return default if stored is None else stored != "disabled"
 
     def guest_settings(self, guest):
         """The Proxmox Manager settings stored in a guest's notes."""
@@ -1022,10 +1043,12 @@ class MainWindow(Gtk.Window):
         setter = getattr(console, f"set_{name}_enabled", None) if console else None
         applied = bool(supported and setter and setter(enabled))
 
+        needs_rebuild = name in getattr(console, "RECONNECT_SWITCHES", ())
+
         state = "on" if enabled else "off"
         if applied:
             self.set_status(f"{guest.label}: {label} {state} for this console")
-        elif supported:
+        elif supported and needs_rebuild:
             # The console knows the new setting but cannot act on it without
             # being rebuilt -- audio, which is fixed when the SPICE session
             # is created. Rebuild in place: the tab stays where it is.
@@ -1034,6 +1057,15 @@ class MainWindow(Gtk.Window):
             # the poll's own reconnects, and this is somebody flipping a
             # switch. See reconnect_console.
             self.reconnect_console(guest.key)
+        elif supported:
+            # The console does this in principle but has nothing to act on:
+            # a microphone switch on a guest that offered no record channel.
+            # Reconnecting would not conjure one up, so the choice is simply
+            # held -- the indicator's tooltip is where the why lives.
+            self.set_status(
+                f"{guest.label}: {label} {state}, "
+                "but this guest has nothing to apply it to"
+            )
         else:
             # No console open, or one that cannot do it at all. The choice
             # is still held for this session and takes hold the next time it
@@ -1048,6 +1080,9 @@ class MainWindow(Gtk.Window):
 
     def _toggle_audio(self):
         self._toggle_switch("audio", "audio")
+
+    def _toggle_microphone(self):
+        self._toggle_switch("microphone", "microphone")
 
     def _toggle_dnd(self):
         """Arm or disarm dragging guests between folders.
@@ -1230,6 +1265,113 @@ class MainWindow(Gtk.Window):
                     "device=ich9-intel-hda,driver=spice in Proxmox."
                 ),
             )
+
+    def _update_microphone_indicator(self, console=_CURRENT):
+        """This machine's microphone, carried into the guest.
+
+        SPICE's record channel, which rides on the same audio backend as
+        playback and the same device on the VM. spice-gtk builds that backend
+        from one property covering both directions, so a microphone with the
+        sound switched off is not something this can honestly offer -- the
+        button says so rather than pretending.
+        """
+        if console is _CURRENT:
+            console = self.current_console()
+        guest = self.context_guest(console)
+        enabled = self._guest_switch(guest, "microphone")
+        label = "Microphone"
+
+        audio = (guest.config or {}).get("audio0") if guest else None
+        has_device = audio_is_spice(audio)
+        # The icon says whether the guest could hear anything; the strike
+        # says whether it is allowed to. Same division as Audio.
+        self.mic_icon.set_icon_name(
+            "audio-input-microphone-symbolic"
+            if has_device
+            else "microphone-sensitivity-muted-symbolic"
+        )
+
+        if guest is None or guest.is_container:
+            self._set_indicator(self.mic_icon, None, label, can_toggle=False)
+            return
+        if not self.config.get("enable_audio", True):
+            self._set_indicator(
+                self.mic_icon,
+                None,
+                label,
+                can_toggle=False,
+                detail="audio is off for every console in Preferences",
+            )
+            return
+        if console is None or not getattr(console, "supports", {}).get("microphone"):
+            self._set_indicator(
+                self.mic_icon,
+                None,
+                label,
+                enabled=enabled,
+                can_toggle=False,
+                detail=(
+                    "n/a - "
+                    + (
+                        "this console is VNC, which carries no audio"
+                        if console is not None
+                        else "needs an open SPICE console"
+                    )
+                ),
+            )
+            return
+        if not self._guest_switch(guest, "audio"):
+            # Not a policy choice: spice-gtk's "enable-audio" builds the
+            # playback and record channels together or not at all, so with
+            # sound off there is no record channel to open.
+            self._set_indicator(
+                self.mic_icon,
+                None,
+                label,
+                enabled=enabled,
+                can_toggle=False,
+                detail="n/a - needs Audio on: SPICE carries both or neither",
+            )
+            return
+        if not guest.config_loaded:
+            return  # unknown until the config is read
+
+        if not has_device:
+            self._set_indicator(
+                self.mic_icon,
+                False,
+                label,
+                enabled=enabled,
+                can_toggle=False,
+                detail=(
+                    f"{audio} (not routed over SPICE)"
+                    if audio
+                    else "no device. Add audio0: "
+                    "device=ich9-intel-hda,driver=spice in Proxmox."
+                ),
+            )
+            return
+        # There is a device, so the only remaining question is whether the
+        # guest actually offered an input to go with it.
+        available = getattr(console, "microphone_available", lambda: False)()
+        if not available:
+            self._set_indicator(
+                self.mic_icon,
+                False,
+                label,
+                enabled=enabled,
+                can_toggle=False,
+                detail=f"{audio} - this guest offered no audio input",
+            )
+            return
+        self._set_indicator(
+            self.mic_icon,
+            True,
+            label,
+            enabled=enabled,
+            can_toggle=True,
+            detail=f"{audio} - click to turn {'off' if enabled else 'on'}",
+        )
 
     # -- USB redirection -----------------------------------------------
 
@@ -2138,6 +2280,19 @@ class MainWindow(Gtk.Window):
             if setter is not None:
                 setter(wanted)
 
+        # The microphone is a channel rather than a session property, so it
+        # takes hold live like the clipboard does and never lands in pending.
+        # The default is spelled out because "absent" means off for this one,
+        # and a missing key must not read as consent.
+        if "microphone" not in {name for k, name in self._session_switches if k == key}:
+            wanted = (
+                settings.get("microphone", notes_meta.SETTINGS_DEFAULTS["microphone"])
+                != "disabled"
+            )
+            setter = getattr(console, "set_microphone_enabled", None)
+            if setter is not None:
+                setter(wanted)
+
         if (
             console is not None
             and getattr(console, "supports", {}).get("audio")
@@ -2775,6 +2930,7 @@ class MainWindow(Gtk.Window):
         self._refresh_guest_agent_indicator(guest)
         self._refresh_snapshot_state(guest)
         self._update_audio_indicator(console)
+        self._update_microphone_indicator(console)
         self._update_clipboard_indicator(console)
         self._update_usb_indicator(console)
         self._ensure_config_loaded(guest)
@@ -2839,6 +2995,7 @@ class MainWindow(Gtk.Window):
         current = self.context_guest()
         if current is not None and current.key == key:
             self._update_audio_indicator()
+            self._update_microphone_indicator()
             self._update_clipboard_indicator()
         return False
 
@@ -3735,6 +3892,7 @@ class MainWindow(Gtk.Window):
                 console_scale=prefs["console_scale"],
                 share_clipboard=self._guest_switch(guest, "clipboard"),
                 play_audio=self._guest_switch(guest, "audio"),
+                capture_audio=self._guest_switch(guest, "microphone"),
                 on_agent=lambda connected, c=None: self._on_console_agent(
                     self.consoles.get(guest.key), connected
                 ),
@@ -4369,8 +4527,24 @@ class MainWindow(Gtk.Window):
 
     # -- flipping a tab between its console and its summary -------------
 
+    def _front_page(self):
+        """The page the window is pointed at.
+
+        During a page switch that is the page being switched *to*. GTK emits
+        "switch-page" before the notebook updates its current page, so asking
+        the notebook mid-switch answers with the tab being left -- and every
+        refresh that runs inside the switch has to agree about which console
+        is in front. When they disagreed the last one to run won, which is
+        how the status bar ended up describing the previous tab: the tree
+        selection made at the end of the switch fires _on_guest_selected,
+        which refreshes the indicators with no console of its own to go on.
+        """
+        if self._switching_to is not None:
+            return self._switching_to
+        return self.panes.current_page()
+
     def current_tab(self):
-        return tab_of(self.panes.current_page())
+        return tab_of(self._front_page())
 
     def toggle_tab_view(self):
         """The toolbar button: flip the tab in front, and only that one."""
@@ -4447,6 +4621,7 @@ class MainWindow(Gtk.Window):
         if console is not self.current_console():
             return
         self._update_audio_indicator(console)
+        self._update_microphone_indicator(console)
         self._update_clipboard_indicator(console)
         self._update_usb_indicator(console)
 
@@ -4755,6 +4930,7 @@ class MainWindow(Gtk.Window):
         self._sync_tab_view()
         self._context_changed()
         self._update_audio_indicator()
+        self._update_microphone_indicator()
         self._update_clipboard_indicator()
 
     def _clear_session_choices(self, key):
@@ -4810,30 +4986,43 @@ class MainWindow(Gtk.Window):
         if not self._ready:
             return
 
-        # "switch-page" fires before the page becomes current, so the
-        # incoming widget is passed in rather than read back a frame later.
-        # Reading it back is what made the toolbar flash the old state.
-        incoming = console_of(page_widget)
-        self._sync_view_menu(incoming)
-        self._context_changed(incoming)
-        self._sync_tab_view(tab_of(page_widget))
+        # Held for the whole switch, not just the calls made directly here:
+        # selecting in the tree at the end sets off its own refresh, and
+        # without this that one reads the notebook -- which still says the
+        # tab being left -- and overwrites everything below with the old
+        # console's state. See _front_page.
+        self._switching_to = page_widget
+        try:
+            # "switch-page" fires before the page becomes current, so the
+            # incoming widget is passed in rather than read back a frame
+            # later. Reading it back is what made the toolbar flash the old
+            # state.
+            incoming = console_of(page_widget)
+            self._sync_view_menu(incoming)
+            self._context_changed(incoming)
+            self._sync_tab_view(tab_of(page_widget))
 
-        tab = tab_of(page_widget)
-        key = getattr(page_widget, "guest_key", None)
-        node_key = getattr(page_widget, "node_key", None)
-        if tab is not None and tab.view == VIEW_SUMMARY:
-            guest = self.sidebar.guests.get(key)
-            if guest is not None:
-                tab.summary.show_guest(guest, self.api_for(guest))
-            node = self.node_for(node_key)
-            if node is not None:
-                # A node page that has been sitting behind another tab is
-                # showing figures from whenever it was last in front, so it
-                # is brought up to date on the way in rather than at the
-                # next poll.
-                tab.summary.show_node(node, self.api_for(node), self.guests_on(node))
-        if key or node_key:
-            self.sidebar.select_key(key or node_key)
+            tab = tab_of(page_widget)
+            key = getattr(page_widget, "guest_key", None)
+            node_key = getattr(page_widget, "node_key", None)
+            if tab is not None and tab.view == VIEW_SUMMARY:
+                guest = self.sidebar.guests.get(key)
+                if guest is not None:
+                    tab.summary.show_guest(guest, self.api_for(guest))
+                node = self.node_for(node_key)
+                if node is not None:
+                    # A node page that has been sitting behind another tab is
+                    # showing figures from whenever it was last in front, so
+                    # it is brought up to date on the way in rather than at
+                    # the next poll.
+                    tab.summary.show_node(
+                        node, self.api_for(node), self.guests_on(node)
+                    )
+            if key or node_key:
+                self.sidebar.select_key(key or node_key)
+        finally:
+            self._switching_to = None
+
         # Give the console the keyboard as soon as its tab is shown, unless
         # the tab is showing its summary, which has its own focus.
         if tab is not None:
@@ -4846,7 +5035,7 @@ class MainWindow(Gtk.Window):
 
     def current_console(self):
         """The console in the tab in front, if it has one."""
-        return console_of(self.panes.current_page())
+        return console_of(self._front_page())
 
     def _sync_view_menu(self, console=_CURRENT):
         """Point the view menu at the active console.

@@ -84,6 +84,33 @@ def session_disconnect(session):
     return False
 
 
+# spice_channel_connect/disconnect collide the same way, and here the bound
+# method that might win is worse than useless: GObject's disconnect takes a
+# handler id, so handing it a SpiceChannelEvent would quietly detach some
+# signal instead of closing the socket and report nothing. The unbound class
+# method is therefore tried first and the bound one only as a fallback.
+
+
+def channel_connect(channel):
+    for attempt in (
+        lambda: SpiceGLib.Channel.connect(channel),
+        lambda: channel.connect(),
+    ):
+        try:
+            return bool(attempt())
+        except TypeError:
+            continue
+    raise RuntimeError("could not call spice_channel_connect")
+
+
+def channel_disconnect(channel, reason):
+    try:
+        SpiceGLib.Channel.disconnect(channel, reason)
+        return True
+    except TypeError as exc:
+        raise RuntimeError(f"could not call spice_channel_disconnect: {exc}") from exc
+
+
 def disconnect_signal(obj, handler):
     """Drop a signal handler, without complaining if it is already gone.
 
@@ -210,6 +237,21 @@ CHANNEL_EVENTS = {
     8: "migration",
 }
 
+
+def _channel_opened():
+    """SPICE_CHANNEL_OPENED, asked for rather than assumed.
+
+    Deliberately not taken from CHANNEL_EVENTS above: that table's numbers
+    do not match the SpiceChannelEvent enum in current spice-gtk, where
+    OPENED is 10 and CLOSED is 12. Anything that has to *act* on an event
+    rather than merely name it asks the library.
+    """
+    try:
+        return int(SpiceGLib.ChannelEvent.OPENED)
+    except Exception:
+        return 10
+
+
 _REPORTED_GSTREAMER = False
 
 
@@ -230,12 +272,21 @@ class SpiceConsole(Gtk.Box):
         "ctrl_alt_del": True,
         "clipboard": True,
         "audio": True,
+        "microphone": True,
         "usb": True,
         # Whether a guest head can be given a monitor of its own. Capable in
         # principle here; whether this guest actually has a second head is
         # monitor_count()'s question, not this one's.
         "multi_monitor": True,
     }
+
+    # Switches that cannot take hold until the session is rebuilt, so a
+    # caller that gets False back from the setter should reconnect rather
+    # than report failure. Audio is one because "enable-audio" is read when
+    # the session is created. The microphone deliberately is not: it is a
+    # channel, so it moves live, and a False from it means there is no
+    # record channel -- which reconnecting would not change.
+    RECONNECT_SWITCHES = ("audio",)
 
     def __init__(
         self,
@@ -251,6 +302,7 @@ class SpiceConsole(Gtk.Box):
         on_reconnect=None,
         share_clipboard=True,
         play_audio=True,
+        capture_audio=False,
         on_usb=None,
         on_usb_plugged=None,
         on_monitors=None,
@@ -279,9 +331,16 @@ class SpiceConsole(Gtk.Box):
         # playback channel is created at all. Muting the channel instead
         # only asks spice-gtk's audio backend nicely and does not reliably
         # silence it, so the honest implementation reconnects.
+        # The microphone is the other direction of the same backend, and it
+        # is a channel rather than a property, so unlike audio it can be
+        # switched live. It cannot be switched on without the backend
+        # existing, though, which is what ties it to play_audio -- see
+        # set_microphone_enabled.
         self.share_clipboard = share_clipboard
         self.play_audio = play_audio
         self.enable_audio = bool(enable_audio) and bool(play_audio)
+        self.capture_audio = bool(capture_audio)
+        self._record_channel = None
         self._gtk_session = None
         self.auto_resize = auto_resize
         self.scaling = scale_to_fit
@@ -533,6 +592,75 @@ class SpiceConsole(Gtk.Box):
         self.play_audio = bool(enabled)
         return False
 
+    # -- the microphone ------------------------------------------------
+    #
+    # SPICE carries the client's microphone into the guest on the record
+    # channel, which is a real channel of its own: QEMU feeds it to the VM's
+    # audio input device, so the guest hears this machine's microphone with
+    # no USB redirection involved. There is no equivalent for a webcam --
+    # SPICE has no camera channel at all, in any version, which is why
+    # redirecting the USB device is the only way to give a guest a camera.
+    #
+    # spice-gtk offers no switch for the direction on its own: "enable-audio"
+    # builds the whole audio backend, playback and record together, so it
+    # cannot say "sound out, nothing in". The channel underneath it can, and
+    # a channel that is not connected cannot carry a microphone anywhere.
+
+    def microphone_available(self):
+        """Whether there is a record channel to switch at all.
+
+        False means the guest never offered one -- no audio device, or one
+        with no input -- so there is nothing a switch could do.
+        """
+        return self._record_channel is not None
+
+    def _apply_microphone(self):
+        """Open or shut the record channel to match self.capture_audio.
+
+        Disconnecting leaves the rest of the session untouched: the guest
+        sees a client with no microphone, which is a state every guest
+        already has to cope with.
+
+        Mute is set as well, for a guest that reads the volume rather than
+        noticing the channel. It is not what makes this work -- spice-gtk
+        passes mute to whichever GStreamer source it managed to build, which
+        need not honour it -- so the socket is what the switch really is.
+        """
+        channel = self._record_channel
+        if channel is None or self._closed:
+            return False
+        wanted = bool(self.capture_audio)
+        with contextlib.suppress(Exception):
+            channel.set_property("mute", not wanted)
+        try:
+            if wanted:
+                channel_connect(channel)
+            else:
+                # NONE, so no channel-event is emitted for a close nobody
+                # needs to hear about: this is a switch, not a failure.
+                channel_disconnect(channel, SpiceGLib.ChannelEvent.NONE)
+        except Exception as exc:
+            log.warning("could not turn the microphone %s: %s", wanted, exc)
+            return False
+        log.info("microphone %s", "on" if wanted else "off")
+        self._status(f"microphone {'on' if wanted else 'off'}")
+        return True
+
+    def set_microphone_enabled(self, enabled):
+        """Turn the guest's microphone on or off, immediately.
+
+        Unlike playback this needs no reconnect: closing the channel stops
+        the capture at its source rather than asking a pipeline to be quiet.
+
+        Returns False when there is no record channel, which a reconnect
+        would not conjure up either -- the caller is expected to say so
+        rather than to rebuild the console. See RECONNECT_SWITCHES.
+        """
+        self.capture_audio = bool(enabled)
+        if self._record_channel is None:
+            return False
+        return self._apply_microphone()
+
     # -- USB redirection -----------------------------------------------
 
     def usb_devices(self):
@@ -591,6 +719,15 @@ class SpiceConsole(Gtk.Box):
             self._refresh_heads()
             GLib.idle_add(self._attach_display, channel_id)
 
+        elif isinstance(channel, SpiceGLib.RecordChannel):
+            # The microphone. Not acted on from in here: spice-gtk's own
+            # handler for this signal has not run yet, and it connects the
+            # channel, which would undo a disconnect made now. The idle
+            # callback lands after it.
+            self._record_channel = channel
+            self._status("microphone channel offered")
+            GLib.idle_add(lambda: (self._apply_microphone(), False)[1])
+
         elif isinstance(channel, SpiceGLib.MainChannel):
             self._main_channel = channel
             self._status("main channel connected")
@@ -605,6 +742,19 @@ class SpiceConsole(Gtk.Box):
         except (TypeError, ValueError):
             code = -1
         name = CHANNEL_EVENTS.get(code, f"event {code}")
+
+        # The microphone coming back up on its own -- a migration, or
+        # spice-gtk reconnecting the channel. Shut it again rather than
+        # assuming it could only ever be opened once: a switch that says the
+        # microphone is off has to keep being true.
+        if (
+            channel is self._record_channel
+            and not self.capture_audio
+            and code == _channel_opened()
+        ):
+            GLib.idle_add(lambda: (self._apply_microphone(), False)[1])
+            return
+
         if code < 6 and isinstance(channel, SpiceGLib.DisplayChannel):
             # A head the guest has taken away is not one to offer a monitor to.
             with contextlib.suppress(Exception):

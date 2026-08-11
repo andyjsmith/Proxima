@@ -191,6 +191,26 @@ def test_saving_vm_settings_keeps_the_user_text_in_the_notes(
     )
 
 
+def test_the_microphone_is_the_one_setting_that_defaults_off(window, settings_guest):
+    """A guest nobody has configured must not be listening to the room."""
+    assert notes_mod.SETTINGS_DEFAULTS["microphone"] == "disabled"
+    assert notes_mod.normalise_settings({})["microphone"] == "disabled", (
+        "an empty settings block produced a live microphone"
+    )
+    assert notes_mod.settings_of("")["microphone"] == "disabled", (
+        "a guest with no notes at all produced a live microphone"
+    )
+    # And the trimming that keeps notes clean has to keep the *enabled* value,
+    # since that is the one that differs from the default.
+    written = notes_mod.with_settings("", {"microphone": "enabled"})
+    assert notes_mod.settings_of(written)["microphone"] == "enabled", (
+        f"an enabled microphone was not stored: {written!r}"
+    )
+    assert "microphone" not in notes_mod.with_settings(
+        "", {"microphone": "disabled"}
+    ), "the default was written into the notes"
+
+
 def test_settings_reset_to_the_defaults_leave_the_notes_clean(
     window, api, settings_guest
 ):
