@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   format:
-    name: Format (advisory)
+    name: Format
     runs-on: ubuntu-latest
     # The tree is hand-formatted in places -- aligned trailing comments,
     # narrower wrapping than ruff's. This job reports the difference without
@@ -57,7 +57,7 @@ jobs:
         run: uv run --only-group dev ruff check --output-format=github .
 
   test:
-    name: Tests (GTK, headless)
+    name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

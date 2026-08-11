@@ -27,7 +27,7 @@ permissions:
 # compiler on any of the three.
 jobs:
   linux:
-    name: Linux (PyInstaller, standalone)
+    name: Linux
     # `labeled` fires for every label, so the one that means "build this" has
     # to be checked here. Dispatched and release-called runs have no label and
     # fall through the first clause.
@@ -162,7 +162,7 @@ jobs:
           retention-days: 7
 
   windows:
-    name: Windows (PyInstaller, standalone)
+    name: Windows
     if: github.event_name != 'pull_request' || github.event.label.name == 'build-please'
     runs-on: windows-latest
     timeout-minutes: 45
@@ -261,7 +261,7 @@ jobs:
           retention-days: 7
 
   macos:
-    name: macOS (PyInstaller, standalone)
+    name: macOS
     if: github.event_name != 'pull_request' || github.event.label.name == 'build-please'
     # arm64. An Intel bundle has to be built on an Intel Mac -- Homebrew
     # ships no cross-compiled bottles and the GTK stack here comes entirely
