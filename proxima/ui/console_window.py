@@ -49,6 +49,11 @@ class ConsoleWindow(Gtk.Window):
             get_console=lambda: self.console,
             chrome=lambda: [self.toolbar],
             on_ctrl_alt_del=self._send_ctrl_alt_del,
+            on_send_keys=self._send_key,
+            on_power=lambda which: self.main.run_action_for(self.guest_key, which),
+            on_snapshot=lambda which: self.main.snapshot_action_for(
+                self.guest_key, which
+            ),
             title=guest.name,
             # A popped-out console has no menu of its own to offer the
             # choice in, and it is a client-wide preference rather than a
@@ -123,10 +128,29 @@ class ConsoleWindow(Gtk.Window):
 
     # -- state ---------------------------------------------------------
 
+    @staticmethod
+    def _with_bar(items, on_bar):
+        """Each toolbar control together with the fullscreen bar's twin.
+
+        They mean the same thing and answer to the same guest, so they are
+        enabled by one call. Paired here rather than by folding the bar's
+        buttons into _action_items, which everything else reads as one widget
+        per action.
+        """
+        return {
+            name: tuple(w for w in (item, on_bar.get(name)) if w is not None)
+            for name, item in items.items()
+        }
+
     def update_sensitivity(self):
         guest = self.main.sidebar.guests.get(self.guest_key)
-        toolbar.apply_power_state(self._action_items, guest)
-        toolbar.apply_snapshot_state(self._snapshot_items, guest)
+        bar = self.fullscreen_control
+        toolbar.apply_power_state(
+            self._with_bar(self._action_items, bar.power_items), guest
+        )
+        toolbar.apply_snapshot_state(
+            self._with_bar(self._snapshot_items, bar.snapshot_items), guest
+        )
         self.usb_item.set_sensitive(
             bool(
                 getattr(self.console, "supports", {}).get("usb")

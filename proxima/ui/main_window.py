@@ -349,10 +349,18 @@ class MainWindow(Gtk.Window):
                 self.task_feed,
             ],
             on_ctrl_alt_del=self._send_ctrl_alt_del,
+            on_send_keys=self._send_key,
+            on_power=self._run_action_on_selection,
+            on_snapshot=self._snapshot_action,
             on_enter=lambda: self.panes.set_show_tabs(False),
             on_leave=lambda: self.panes.set_show_tabs(True),
             all_monitors=self.all_monitors_enabled,
         )
+        # The bar's power buttons join the toolbar's and the menu's, so the
+        # one call that enables those enables these. Snapshots are paired up
+        # the same way in _update_snapshot_buttons.
+        for name, item in self.fullscreen_control.power_items.items():
+            self._action_items.setdefault(name, []).append(item)
 
         root.pack_start(self.paned, True, True, 0)
 
@@ -1749,9 +1757,20 @@ class MainWindow(Gtk.Window):
     def _update_snapshot_buttons(self, console=_CURRENT):
         """Revert is only offered when there is something to revert to."""
         guest = self.context_guest(console)
-        # The toolbar button and the menu entry for each one, together.
+        # The toolbar button, the menu entry and the fullscreen bar's button
+        # for each one, together -- they say the same thing, so they are
+        # enabled and relabelled by one call rather than three.
+        on_bar = self.fullscreen_control.snapshot_items
         paired = {
-            name: (self.snapshot_items[name], self.snapshot_menu_items[name])
+            name: tuple(
+                widget
+                for widget in (
+                    self.snapshot_items[name],
+                    self.snapshot_menu_items[name],
+                    on_bar.get(name),
+                )
+                if widget is not None
+            )
             for name in self.snapshot_items
         }
         toolbar_defs.apply_snapshot_state(paired, guest)

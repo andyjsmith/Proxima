@@ -118,6 +118,80 @@ def add_snapshot_buttons(bar, on_click, important=()):
     return items
 
 
+# -- the same controls, for a box rather than a toolbar --------------------
+#
+# The fullscreen bar is a GtkBox, so it cannot hold GtkToolButtons. Plain
+# buttons carrying a menu-size icon are what it already uses for pin and
+# leave, and they come out smaller than the toolbar's -- which is the point
+# of them on a strip floating over somebody's console.
+
+
+class BarButton(Gtk.Button):
+    """A flat icon-only button, the size the fullscreen bar's own controls are.
+
+    set_label is deliberately inert. apply_power_state relabels the combined
+    Start/Resume control, which is right for a tool button showing a word and
+    here would throw away the icon to put a word in its place. The tooltip
+    that the same function sets carries the difference instead -- and Start
+    and Resume share an icon anyway, so nothing is lost.
+    """
+
+    def __init__(self, icon, tooltip, sensitive=False):
+        super().__init__()
+        self.set_relief(Gtk.ReliefStyle.NONE)
+        self.set_focus_on_click(False)
+        self.add(Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.MENU))
+        self.set_tooltip_text(tooltip)
+        self.set_sensitive(sensitive)
+
+    def set_label(self, _label):
+        """Inert on purpose -- see the class docstring."""
+
+
+def add_bar_power_buttons(bar, on_click):
+    """Pack the power actions into a box. Returns {name: widget}."""
+    items = {}
+    for name in action_defs.TOOLBAR_ACTIONS:
+        action = action_defs.ACTIONS_BY_NAME[name]
+        item = BarButton(action.icon, action.tooltip)
+        item.connect("clicked", lambda _b, which=name: on_click(which))
+        items[name] = item
+        bar.pack_start(item, False, False, 0)
+    return items
+
+
+def add_bar_snapshot_buttons(bar, on_click):
+    """Pack Manage/Snapshot/Revert into a box. Returns {name: widget}."""
+    items = {}
+    for name, _label, icon, tooltip in SNAPSHOT_BUTTONS:
+        item = BarButton(icon, tooltip)
+        item.connect("clicked", lambda _b, which=name: on_click(which))
+        items[name] = item
+        bar.pack_start(item, False, False, 0)
+    return items
+
+
+def add_bar_send_key_button(bar, on_send):
+    """Ctrl+Alt+Del, with the rest of the keys behind an arrow beside it.
+
+    A GtkMenuToolButton puts the arrow inside one control; a box has to make
+    it two, so the arrow is its own MenuButton wearing the same flat relief.
+    Returns (button, arrow).
+    """
+    keys = BarButton(SEND_KEY_ICON, SEND_KEY_TOOLTIP, sensitive=True)
+    keys.connect("clicked", lambda *_: on_send(console_keys.CTRL_ALT_DEL))
+    bar.pack_start(keys, False, False, 0)
+
+    arrow = Gtk.MenuButton()
+    arrow.set_relief(Gtk.ReliefStyle.NONE)
+    arrow.set_focus_on_click(False)
+    arrow.add(Gtk.Image.new_from_icon_name("pan-down-symbolic", Gtk.IconSize.MENU))
+    arrow.set_tooltip_text("Send another key combination")
+    arrow.set_popup(send_key_menu(on_send))
+    bar.pack_start(arrow, False, False, 0)
+    return keys, arrow
+
+
 def _widgets(entry):
     """A button may be shared with a menu entry, so take one or many."""
     if isinstance(entry, (list, tuple, set)):

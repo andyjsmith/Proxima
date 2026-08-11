@@ -24,6 +24,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gdk, GLib, Gtk
 
+from . import toolbar
+
 log = logging.getLogger(__name__)
 
 HOT_ZONE = 2  # px from the top edge that re-reveals the bar
@@ -106,12 +108,24 @@ class FullscreenController:
         on_leave=None,
         title="",
         all_monitors=None,
+        on_send_keys=None,
+        on_power=None,
+        on_snapshot=None,
     ):
         self.window = window
         self.overlay = overlay
         self.get_console = get_console
         self.chrome = chrome  # callable returning widgets to hide
         self.on_ctrl_alt_del = on_ctrl_alt_del or (lambda: None)
+        # Given one of these, the bar grows the matching controls. The owner
+        # is expected to fold power_items and snapshot_items into whatever it
+        # already hands to toolbar.apply_power_state, so they follow the guest
+        # without a second thing to keep in step.
+        self.on_send_keys = on_send_keys
+        self.on_power = on_power
+        self.on_snapshot = on_snapshot
+        self.power_items = {}
+        self.snapshot_items = {}
         self.on_enter = on_enter or (lambda: None)
         self.on_leave = on_leave or (lambda: None)
         # Asked, not passed in. Every way into full screen has to agree, and
@@ -154,14 +168,36 @@ class FullscreenController:
         self.title_label.set_max_width_chars(30)
         bar.pack_start(self.title_label, False, False, 4)
 
-        bar.pack_start(
-            Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 2
-        )
+        def separator():
+            bar.pack_start(
+                Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 2
+            )
 
-        keys = Gtk.Button(label="Ctrl+Alt+Del")
-        keys.set_relief(Gtk.ReliefStyle.NONE)
-        keys.connect("clicked", lambda *_: self.on_ctrl_alt_del())
-        bar.pack_start(keys, False, False, 0)
+        separator()
+
+        # The guest's own controls, in the order the toolbar has them, so that
+        # going full screen stops meaning "leave the buttons behind".
+        if self.on_power is not None:
+            self.power_items = toolbar.add_bar_power_buttons(bar, self.on_power)
+            separator()
+
+        if self.on_snapshot is not None:
+            self.snapshot_items = toolbar.add_bar_snapshot_buttons(
+                bar, self.on_snapshot
+            )
+            separator()
+
+        if self.on_send_keys is not None:
+            toolbar.add_bar_send_key_button(bar, self.on_send_keys)
+        else:
+            # No key menu to offer, so the one key this ever really sends.
+            keys = toolbar.BarButton(
+                toolbar.SEND_KEY_ICON, toolbar.SEND_KEY_TOOLTIP, sensitive=True
+            )
+            keys.connect("clicked", lambda *_: self.on_ctrl_alt_del())
+            bar.pack_start(keys, False, False, 0)
+
+        separator()
 
         self.pin = Gtk.ToggleButton()
         self.pin.set_relief(Gtk.ReliefStyle.NONE)

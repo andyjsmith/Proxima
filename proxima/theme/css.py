@@ -106,6 +106,13 @@ scrollbar slider  { min-width: 9px; min-height: 9px; }
 }
 .fullscreen-bar label            { color: #ffffff; }
 .fullscreen-bar button           { color: #ffffff; padding: 2px 8px; }
+/* Fixing the colour above also overrode the theme's own insensitive styling,
+   so a control that cannot be used came out the same full white as one that
+   can -- Reset on a stopped guest, Revert with no snapshot. Symbolic icons
+   are drawn in the foreground colour, so this is what dims them. */
+.fullscreen-bar button:disabled,
+.fullscreen-bar button:disabled image,
+.fullscreen-bar button:disabled label { color: rgba(255, 255, 255, 0.32); }
 .fullscreen-bar button:hover     { background-color: rgba(255,255,255,0.16); }
 .fullscreen-bar button:checked   { background-color: rgba(255,255,255,0.28); }
 .fullscreen-bar separator        { background-color: rgba(255,255,255,0.24); }
