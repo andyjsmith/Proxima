@@ -17,6 +17,9 @@ STATUS_ICONS = {
     "stopped": "media-playback-stop-symbolic",
     "paused": "media-playback-pause-symbolic",
     "suspended": "media-playback-pause-symbolic",
+    # Up, but never yet allowed to execute. Held rather than stopped, and a
+    # resume is what releases it, so it wears what a paused guest wears.
+    "prelaunch": "media-playback-pause-symbolic",
     # The caution mark Proxmox shows for a guest stopped by a storage
     # failure. "unknown" keeps the question mark: that one also means "not
     # polled yet", and a new row must not flash a warning.
@@ -30,6 +33,7 @@ PALETTES = {
         "stopped": "#77767b",
         "paused": "#c88800",
         "suspended": "#c88800",
+        "prelaunch": "#c88800",
         "io-error": "#e5a50a",
         "unknown": "#77767b",
         "template": "#77767b",
@@ -42,6 +46,7 @@ PALETTES = {
         "stopped": "#9a9996",
         "paused": "#f8e45c",
         "suspended": "#f8e45c",
+        "prelaunch": "#f8e45c",
         "io-error": "#f9f06b",
         "unknown": "#9a9996",
         "template": "#9a9996",

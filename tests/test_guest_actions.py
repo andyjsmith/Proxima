@@ -333,3 +333,67 @@ def test_an_io_error_guest_wears_a_warning_not_a_question_mark(window, io_error)
 def test_an_io_error_guest_still_has_a_console(window, io_error):
     """QEMU is up and still serving the frame it froze on."""
     assert io_error.has_console, "an io-error guest was treated as powered off"
+
+
+# -- a guest held before its first instruction -----------------------------
+# "prelaunch" is QEMU up with its vCPUs never released: started with
+# --paused, or held at the start of a migration or restore. The web UI
+# offers every live-guest control plus Resume; Proxima greyed out all of it.
+
+
+@pytest.fixture
+def prelaunch(window):
+    sample_row(100)["status"] = "prelaunch"
+    window.refresh()
+    pump_until(lambda: window.sidebar.guests[RUNNING].status == "prelaunch", 8)
+    yield window.sidebar.guests[RUNNING]
+    sample_row(100)["status"] = "running"
+    window.refresh()
+    pump_until(lambda: window.sidebar.guests[RUNNING].status == "running", 8)
+
+
+def test_a_prelaunch_guest_offers_every_control_the_web_ui_does(window, prelaunch):
+    offered = {
+        action.name
+        for action in action_defs.visible_actions(prelaunch)
+        if action_defs.enabled_for(action, prelaunch)
+    }
+    # Hibernate is Proxmox-only for now, so it is not in the comparison.
+    assert {"shutdown", "stop", "reset", "reboot", "suspend", "resume"} <= offered, (
+        f"a prelaunch guest is still greyed out: {sorted(offered)}"
+    )
+
+
+def test_a_prelaunch_guest_is_resumed_not_started(window, prelaunch):
+    """It is already up, so a start would be refused. Resume releases it."""
+    assert action_defs.start_action_for(prelaunch).name == "resume", (
+        "the combined button offered Start for a guest that is already up"
+    )
+    assert start_button_for(window, RUNNING) == ("Resume", True), (
+        "the combined button is wrong for a prelaunch guest"
+    )
+
+
+def test_resuming_a_prelaunch_guest_calls_resume(window, api, prelaunch):
+    window._run_action(RUNNING, "start", confirm=False)
+    pump(0.8)
+    powered = [c for c in api.calls if c[0] == "power" and c[1] == 100]
+    assert powered, "no power action reached the API"
+    assert powered[-1][2] == "resume", (
+        f"prelaunch guest got '{powered[-1][2]}', expected 'resume'"
+    )
+
+
+def test_a_prelaunch_guest_has_a_console(window, prelaunch):
+    """Every device including the display is up; only the vCPUs are held."""
+    assert prelaunch.has_console, "a prelaunch guest was treated as powered off"
+
+
+def test_a_prelaunch_guest_is_not_drawn_as_unknown(window, prelaunch):
+    icon = icons_mod.STATUS_ICONS.get(prelaunch.status)
+    assert icon and icon != icons_mod.STATUS_ICONS["unknown"], (
+        f"prelaunch drew {icon!r}, the not-polled-yet question mark"
+    )
+    for dark in (False, True):
+        palette = icons_mod.PALETTES[dark]
+        assert "prelaunch" in palette, "prelaunch has no colour, so it draws grey"

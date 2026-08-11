@@ -18,6 +18,14 @@ Action = namedtuple("Action", "name label icon tooltip confirm states kinds")
 #
 # start and resume are deliberately not offered: there is nothing to start,
 # and resuming before the storage is back simply faults again.
+#
+# "prelaunch" is QEMU up with its vCPUs never yet released -- a guest started
+# with --paused, or held at the start of an incoming migration or restore.
+# Every device including the display is initialised, so it has a console and
+# the same controls a paused guest does, plus reset. It is not "stopped": a
+# start would be refused, and resume is what sets it running, which is why
+# start_action_for treats it like paused. Proxmox's web UI offers exactly
+# this set, and Proxima greyed out all of it.
 POWER_ACTIONS = [
     # A suspended guest is resumed with start, not resume: resume is for a
     # guest paused in memory, start is what brings back one suspended to
@@ -37,7 +45,7 @@ POWER_ACTIONS = [
         "system-shutdown-symbolic",
         "ACPI shutdown",
         "Shut down {name}?",
-        ("running", "paused", "io-error"),
+        ("running", "paused", "prelaunch", "io-error"),
         ("qemu", "lxc"),
     ),
     Action(
@@ -46,7 +54,7 @@ POWER_ACTIONS = [
         "media-playback-stop-symbolic",
         "Immediate power off",
         "Stop {name}? The guest OS will not shut down cleanly.",
-        ("running", "paused", "suspended", "io-error"),
+        ("running", "paused", "suspended", "prelaunch", "io-error"),
         ("qemu", "lxc"),
     ),
     Action(
@@ -55,7 +63,7 @@ POWER_ACTIONS = [
         "view-refresh-symbolic",
         "Hard reset",
         "Reset {name}? The guest OS will not shut down cleanly.",
-        ("running", "io-error"),
+        ("running", "prelaunch", "io-error"),
         ("qemu",),
     ),
     Action(
@@ -64,7 +72,7 @@ POWER_ACTIONS = [
         "system-reboot-symbolic",
         "ACPI reboot",
         None,
-        ("running", "io-error"),
+        ("running", "prelaunch", "io-error"),
         ("qemu", "lxc"),
     ),
     Action(
@@ -73,7 +81,7 @@ POWER_ACTIONS = [
         "media-playback-pause-symbolic",
         "Pause",
         "Pause {name}? The guest stops running until it is resumed.",
-        ("running", "io-error"),
+        ("running", "prelaunch", "io-error"),
         ("qemu", "lxc"),
     ),
     Action(
@@ -82,7 +90,7 @@ POWER_ACTIONS = [
         "media-playback-start-symbolic",
         "Resume",
         None,
-        ("paused",),
+        ("paused", "prelaunch"),
         ("qemu", "lxc"),
     ),
 ]
@@ -136,13 +144,19 @@ EXPECTED_STATUS = {
 }
 
 
+# Statuses in which the combined button offers Resume rather than Start.
+# A prelaunch guest is already up, so a start would be refused; releasing
+# its vCPUs is a resume, which is what the web UI offers too.
+RESUMABLE = ("paused", "prelaunch")
+
+
 def start_action_for(guest):
     """Whichever of Start/Resume applies to a guest.
 
     They are mutually exclusive, so they share one button that relabels
     itself rather than sitting side by side with one always dead.
     """
-    if guest is not None and guest.status == "paused":
+    if guest is not None and guest.status in RESUMABLE:
         return ACTIONS_BY_NAME["resume"]
     return ACTIONS_BY_NAME["start"]
 

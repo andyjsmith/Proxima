@@ -381,7 +381,13 @@ def os_type_name(code):
 # had to stop because a disk went away -- the yellow caution mark in the web
 # UI -- and the process, its console and its power controls are all still
 # there.
-LIVE_STATUSES = ("running", "io-error")
+#
+# "prelaunch" is the same bargain from the other end: QEMU has initialised
+# every device, including the display, but has never released the vCPUs.
+# There is a screen to look at, and it is the screen you want, because
+# watching what the guest does on its first instruction is the reason to
+# have started it held in the first place.
+LIVE_STATUSES = ("running", "prelaunch", "io-error")
 
 
 @dataclass

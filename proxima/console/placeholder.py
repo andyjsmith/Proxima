@@ -18,6 +18,7 @@ TITLES = {
     "io-error": "Guest stopped on an I/O error",
     "suspended": "Guest is suspended",
     "paused": "Guest is paused",
+    "prelaunch": "Guest has not been started yet",
     "connecting": CONNECTING_TITLE,
 }
 
@@ -26,6 +27,7 @@ DETAILS = {
     "io-error": "Proxmox stopped it because its storage stopped answering. Fix the storage, then reset or stop the guest.",
     "suspended": "Resume the guest to connect.",
     "paused": "Resume the guest to connect.",
+    "prelaunch": "It is up and waiting to run its first instruction. Resume it to let it boot.",
     "connecting": "Fetching a console ticket from Proxmox.",
 }
 
@@ -33,6 +35,7 @@ ICONS = {
     "io-error": "dialog-warning-symbolic",
     "paused": "media-playback-pause-symbolic",
     "suspended": "media-playback-pause-symbolic",
+    "prelaunch": "media-playback-pause-symbolic",
     "connecting": CONNECTING_ICON,
 }
 

@@ -4538,6 +4538,16 @@ class MainWindow(Gtk.Window):
                 icon="media-playback-pause-symbolic",
                 can_reconnect=False,
             )
+        elif guest.status == "prelaunch":
+            # QEMU is up and serving, so unlike paused this one really can
+            # be reconnected to -- there is a screen, waiting to boot.
+            panel.show_message(
+                "Guest has not been started yet",
+                "It is up and waiting to run its first instruction. "
+                "Resume it to let it boot.",
+                icon="media-playback-pause-symbolic",
+                can_reconnect=True,
+            )
         elif guest.status == "io-error":
             panel.show_message(
                 "Guest stopped on an I/O error",
