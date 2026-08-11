@@ -42,6 +42,7 @@ from ..console import (
     SerialConsole,
     SpiceConsole,
     VncConsole,
+    guest_state,
 )
 from ..console import keys as console_keys
 from ..console.placeholder import PlaceholderConsole
@@ -4524,37 +4525,18 @@ class MainWindow(Gtk.Window):
             # a network blip from here, and only QEMU knows the difference.
             if getattr(console, "protocol", "") == "spice":
                 self._check_displaced(key)
-        elif guest.status in ("stopped", "suspended"):
+        else:
+            # Everything else is the guest not being up, or not being up
+            # enough, which the consoles already know how to describe. A
+            # prelaunch or io-error guest gets a Reconnect button out of
+            # this and the rest do not, which is the point of asking.
+            noun = guest_state.CONTAINER if guest.is_container else guest_state.GUEST
+            state = guest_state.describe(guest.status, noun=noun)
             panel.show_message(
-                f"Guest is {guest.status}",
-                "Start the guest to open a console again.",
-                icon="media-playback-stop-symbolic",
-                can_reconnect=False,
-            )
-        elif guest.status == "paused":
-            panel.show_message(
-                "Guest is paused",
-                "Resume the guest to reconnect.",
-                icon="media-playback-pause-symbolic",
-                can_reconnect=False,
-            )
-        elif guest.status == "prelaunch":
-            # QEMU is up and serving, so unlike paused this one really can
-            # be reconnected to -- there is a screen, waiting to boot.
-            panel.show_message(
-                "Guest has not been started yet",
-                "It is up and waiting to run its first instruction. "
-                "Resume it to let it boot.",
-                icon="media-playback-pause-symbolic",
-                can_reconnect=True,
-            )
-        elif guest.status == "io-error":
-            panel.show_message(
-                "Guest stopped on an I/O error",
-                "Proxmox stopped it because its storage stopped answering. "
-                "Fix the storage, then reset or stop the guest.",
-                icon="dialog-warning-symbolic",
-                can_reconnect=True,
+                state.title,
+                state.detail,
+                icon=state.icon,
+                can_reconnect=state.can_reconnect,
             )
 
     def _check_displaced(self, key):

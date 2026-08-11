@@ -39,6 +39,7 @@ try:
 except ImportError:  # pragma: no cover
     cairo = None
 
+from . import guest_state
 from .status_panel import (
     CONNECTING_ICON,
     CONNECTING_TITLE,
@@ -986,27 +987,13 @@ class SerialConsole(Gtk.Box):
         if self._closed or getattr(self, "status_panel", None) is None:
             return
         self.connected = False
-        titles = {
-            "stopped": "Container is stopped",
-            "io-error": "Container stopped on an I/O error",
-            "suspended": "Container is suspended",
-            "paused": "Container is paused",
-        }
-        details = {
-            "stopped": "Start it to reconnect.",
-            "io-error": "Proxmox stopped it because its storage stopped answering. Fix the storage, then reset or stop it.",
-            "suspended": "Resume it to reconnect.",
-            "paused": "Resume it to reconnect.",
-        }
-        icons = {
-            "io-error": "dialog-warning-symbolic",
-            "paused": "media-playback-pause-symbolic",
-            "suspended": "media-playback-pause-symbolic",
-        }
+        # The only console that never serves a VM, so the only one that can
+        # call the thing on the other end a container.
+        state = guest_state.describe(status, noun=guest_state.CONTAINER)
         self.status_panel.show_message(
-            titles.get(status, f"Guest is {status}"),
-            details.get(status, ""),
-            icon=icons.get(status, "media-playback-stop-symbolic"),
+            state.title,
+            state.detail,
+            icon=state.icon,
             can_reconnect=False,
         )
         self._invalidate()

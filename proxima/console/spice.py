@@ -24,6 +24,7 @@ gi.require_version("Gtk", "3.0")
 
 from gi.repository import Gdk, GLib, GObject, Gtk
 
+from . import guest_state
 from .decoders import gstreamer_report
 from .keys import CTRL_ALT_DEL
 from .scaling import clamp_console_scale
@@ -1776,27 +1777,14 @@ class SpiceConsole(Gtk.Box):
         self._notify_monitors()
         with contextlib.suppress(Exception):
             self.release_input()
-        titles = {
-            "stopped": "Guest is stopped",
-            "io-error": "Guest stopped on an I/O error",
-            "suspended": "Guest is suspended",
-            "paused": "Guest is paused",
-        }
-        details = {
-            "stopped": "Start the guest to reconnect.",
-            "io-error": "Proxmox stopped it because its storage stopped answering. Fix the storage, then reset or stop the guest.",
-            "suspended": "Resume the guest to reconnect.",
-            "paused": "Resume the guest to reconnect.",
-        }
-        icons = {
-            "io-error": "dialog-warning-symbolic",
-            "paused": "media-playback-pause-symbolic",
-            "suspended": "media-playback-pause-symbolic",
-        }
+        state = guest_state.describe(status)
         self.status_panel.show_message(
-            titles.get(status, f"Guest is {status}"),
-            details.get(status, ""),
-            icon=icons.get(status, "media-playback-stop-symbolic"),
+            state.title,
+            state.detail,
+            icon=state.icon,
+            # Not state.can_reconnect: this is only reached for a guest with
+            # no console at all, and the poll rebuilds the session itself the
+            # moment one comes back. A button here would only ever fail.
             can_reconnect=False,
         )
         if self._display is not None:

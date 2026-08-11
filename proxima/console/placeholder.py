@@ -11,36 +11,8 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk
 
-from .status_panel import CONNECTING_ICON, CONNECTING_TITLE, ConsoleStatusPanel
-
-TITLES = {
-    "stopped": "Guest is stopped",
-    "io-error": "Guest stopped on an I/O error",
-    "suspended": "Guest is suspended",
-    "paused": "Guest is paused",
-    "prelaunch": "Guest has not been started yet",
-    "connecting": CONNECTING_TITLE,
-}
-
-DETAILS = {
-    "stopped": "The console will connect when the guest starts.",
-    "io-error": "Proxmox stopped it because its storage stopped answering. Fix the storage, then reset or stop the guest.",
-    "suspended": "Resume the guest to connect.",
-    "paused": "Resume the guest to connect.",
-    "prelaunch": "It is up and waiting to run its first instruction. Resume it to let it boot.",
-    "connecting": "Fetching a console ticket from Proxmox.",
-}
-
-ICONS = {
-    "io-error": "dialog-warning-symbolic",
-    "paused": "media-playback-pause-symbolic",
-    "suspended": "media-playback-pause-symbolic",
-    "prelaunch": "media-playback-pause-symbolic",
-    "connecting": CONNECTING_ICON,
-}
-
-# States the user cannot act on, so no Reconnect button is offered.
-NO_RECONNECT = ("stopped", "suspended", "paused", "connecting")
+from . import guest_state
+from .status_panel import ConsoleStatusPanel
 
 
 class PlaceholderConsole(Gtk.Box):
@@ -79,11 +51,14 @@ class PlaceholderConsole(Gtk.Box):
 
     def show_guest_state(self, status):
         self.last_status = status
+        # This tab has never had a console, so it connects rather than
+        # reconnecting -- the one wording difference from the live consoles.
+        state = guest_state.describe(status, reconnecting=False)
         self.status_panel.show_message(
-            TITLES.get(status, f"Guest is {status}"),
-            DETAILS.get(status, ""),
-            icon=ICONS.get(status, "media-playback-stop-symbolic"),
-            can_reconnect=status not in NO_RECONNECT,
+            state.title,
+            state.detail,
+            icon=state.icon,
+            can_reconnect=state.can_reconnect,
             # "Connecting..." is a wait; "stopped" is a result.
             busy=status == "connecting",
         )
