@@ -563,3 +563,74 @@ def test_a_switch_set_before_the_move_is_still_honoured(window, api, settings_gu
     assert window._guest_switch(settings_guest, "audio") is True, (
         "the local value did not take precedence"
     )
+
+
+# -- folder sharing --------------------------------------------------------
+# Two halves on purpose: whether the guest may have a shared folder is the
+# guest's business and lives on the server, while which folder is shared is a
+# fact about the machine connecting to it.
+
+
+def test_folder_sharing_is_split_between_the_server_and_this_machine():
+    assert notes_mod.SETTINGS_DEFAULTS["folder_sharing"] == "disabled", (
+        "a guest nobody configured was offering to take a folder"
+    )
+    for name in ("shared_folder", "shared_folder_ro"):
+        assert name in config_mod.LOCAL_VALUE_DEFAULTS, f"{name} is not local"
+        assert name not in notes_mod.SETTINGS_DEFAULTS, (
+            f"{name} would be written to the server"
+        )
+    assert config_mod.LOCAL_VALUE_DEFAULTS["shared_folder_ro"] is True, (
+        "a shared folder defaulted to writable"
+    )
+    assert config_mod.LOCAL_VALUE_DEFAULTS["shared_folder"] == "", (
+        "a folder was shared before anyone chose one"
+    )
+
+
+def test_a_path_alone_shares_nothing_until_the_server_allows_it(window, config):
+    """Both halves have to agree, so a stray path cannot share by itself."""
+    window._save_guest_pref("shared_folder", "C:/tmp/share", key=STOPPED)
+    try:
+        guest = window.sidebar.guests[STOPPED]
+        assert window._guest_switch(guest, "folder_sharing") is False, (
+            "folder sharing was on for a guest that never asked"
+        )
+        prefs = window.guest_prefs(STOPPED)
+        assert prefs["shared_folder"] == "C:/tmp/share", "the path was not stored"
+        assert prefs["shared_folder_ro"] is True, "the default was not read only"
+    finally:
+        config["guest_prefs"] = {}
+
+
+def test_the_folder_row_saves_the_path_locally(window, api, settings_guest):
+    dialog = VMSettingsDialog(
+        window,
+        api,
+        settings_guest,
+        on_local_saved=lambda values: window._guest_local_saved(RUNNING, values),
+        local={"shared_folder": "", "shared_folder_ro": True},
+    )
+    pump(0.3)
+    try:
+        dialog.local_values["shared_folder"] = "C:/tmp/from-dialog"
+        dialog.folder_ro.set_active(False)
+        dialog._sync_buttons()
+        assert dialog.dirty, "changing the shared folder did not mark the dialog dirty"
+        dialog.emit("response", RESPONSE_APPLY)
+        pump_until(lambda: not dialog._saving, 6)
+        pump(0.3)
+
+        stored = (window.config.get("guest_prefs") or {}).get(RUNNING, {})
+        assert stored.get("shared_folder") == "C:/tmp/from-dialog", (
+            f"the path was not stored on this machine: {stored}"
+        )
+        assert stored.get("shared_folder_ro") is False, (
+            "the read-only choice was not stored"
+        )
+        assert "shared_folder" not in FakeAPI.NOTES.get(100, ""), (
+            "the path was written to the guest's notes on the server"
+        )
+    finally:
+        dialog.destroy()
+        pump(0.2)

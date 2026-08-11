@@ -36,7 +36,7 @@ from ..api.models import (
     vga_is_spice,
     vga_memory_mib,
 )
-from ..config import LOCAL_SWITCH_DEFAULTS
+from ..config import LOCAL_SWITCH_DEFAULTS, LOCAL_VALUE_DEFAULTS
 from ..console import (
     SERIAL_AVAILABLE,
     SPICE_AVAILABLE,
@@ -2471,8 +2471,16 @@ class MainWindow(Gtk.Window):
                 k, settings
             ),
             local={
-                name: self.guest_local_switch(guest.key, name)
-                for name in LOCAL_SWITCH_DEFAULTS
+                **{
+                    name: self.guest_local_switch(guest.key, name)
+                    for name in LOCAL_SWITCH_DEFAULTS
+                },
+                **{
+                    name: (self.config.get("guest_prefs") or {})
+                    .get(guest.key, {})
+                    .get(name)
+                    for name in LOCAL_VALUE_DEFAULTS
+                },
             },
             on_local_saved=lambda values, k=guest.key: self._guest_local_saved(
                 k, values
@@ -4129,6 +4137,17 @@ class MainWindow(Gtk.Window):
             # to this guest rather than of the guest, so it lives here with
             # the other things that are about this machine's view of it.
             "disable_effects": list(stored.get("disable_effects") or ()),
+            # The folder shared with this guest from this machine, and whether
+            # the guest may write into it. Local for the plainest of reasons:
+            # the same path somewhere else is a different directory.
+            "shared_folder": stored.get(
+                "shared_folder", LOCAL_VALUE_DEFAULTS["shared_folder"]
+            ),
+            "shared_folder_ro": bool(
+                stored.get(
+                    "shared_folder_ro", LOCAL_VALUE_DEFAULTS["shared_folder_ro"]
+                )
+            ),
             # How big the text is on a serial console. This machine's
             # business, like the two above it: the same container read on a
             # laptop and on a 27" monitor wants different answers.
@@ -4200,6 +4219,14 @@ class MainWindow(Gtk.Window):
                 play_audio=self._guest_switch(guest, "audio"),
                 capture_audio=self._guest_switch(guest, "microphone"),
                 share_smartcard=self._guest_switch(guest, "smartcard"),
+                # Both halves have to agree: the guest has to allow sharing at
+                # all, and this machine has to have said which folder.
+                shared_folder=(
+                    prefs["shared_folder"]
+                    if self._guest_switch(guest, "folder_sharing")
+                    else ""
+                ),
+                shared_folder_ro=prefs["shared_folder_ro"],
                 view_only=guest.key in self._view_only,
                 disable_effects=prefs["disable_effects"],
                 on_agent=lambda connected, c=None: self._on_console_agent(

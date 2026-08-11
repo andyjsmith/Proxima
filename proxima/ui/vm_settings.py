@@ -25,7 +25,7 @@ from gi.repository import GLib, Gtk
 
 from ..api import devices
 from ..api import notes as notes_meta
-from ..config import LOCAL_SWITCH_DEFAULTS
+from ..config import LOCAL_SWITCH_DEFAULTS, LOCAL_VALUE_DEFAULTS
 from ..theme import decorate as theme_decorate
 
 RESPONSE_APPLY = 1
@@ -75,6 +75,13 @@ AUDIO_CHOICES = [
 # Off unless somebody says otherwise, here as everywhere else -- see
 # notes.SETTINGS_DEFAULTS. The order is deliberate: the default reads first.
 MICROPHONE_CHOICES = [
+    ("disabled", "Disabled"),
+    ("enabled", "Enabled"),
+]
+
+# The server half of folder sharing: whether this guest may be given one at
+# all. Which folder is a local matter -- see the shared-folder row.
+FOLDER_SHARING_CHOICES = [
     ("disabled", "Disabled"),
     ("enabled", "Enabled"),
 ]
@@ -138,12 +145,18 @@ class VMSettingsDialog(Gtk.Dialog):
         # And the same for the local half. A switch never set on this machine
         # falls back to whatever the notes said before these moved off the
         # server, so a guest configured before the split keeps its answer.
+        stored_local = local or {}
         self.local_saved = {
-            name: (local or {}).get(name)
+            name: stored_local.get(name)
             or self.saved.get(name)
             or LOCAL_SWITCH_DEFAULTS[name]
             for name in LOCAL_SWITCH_DEFAULTS
         }
+        # Values rather than switches, so no notes fallback: these never lived
+        # on the server to be migrated from.
+        for name, fallback in LOCAL_VALUE_DEFAULTS.items():
+            value = stored_local.get(name)
+            self.local_saved[name] = fallback if value is None else value
         self.local_values = dict(self.local_saved)
 
         # The guest config as it was read, the keys edited since, and the
@@ -734,6 +747,21 @@ class VMSettingsDialog(Gtk.Dialog):
         self._combo(
             grid,
             row,
+            "Folder sharing",
+            FOLDER_SHARING_CHOICES,
+            "folder_sharing",
+            tooltip=(
+                "Whether this guest may be given a folder from the machine "
+                "connecting to it. Needs a webdav spiceport on the VM and "
+                "spice-webdavd running in the guest. Which folder is chosen "
+                "below, per machine."
+            ),
+            sensitive=not container,
+        )
+        row += 1
+        self._combo(
+            grid,
+            row,
             "Protocol",
             CONTAINER_PROTOCOL_CHOICES if container else PROTOCOL_CHOICES,
             "protocol",
@@ -801,6 +829,7 @@ class VMSettingsDialog(Gtk.Dialog):
             local=True,
         )
         row += 1
+        row = self._folder_row(grid, row, sensitive=not container)
 
         note = Gtk.Label(xalign=0.0)
         note.get_style_context().add_class("dim")
@@ -820,6 +849,65 @@ class VMSettingsDialog(Gtk.Dialog):
         note.set_text(text)
         grid.attach(note, 0, 4, 2, 1)
         return grid
+
+    def _folder_row(self, grid, row, sensitive=True):
+        """The folder to share with this guest, and whether it may be written.
+
+        A path and not a switch, which is exactly why it is local: the same
+        string on another machine is a different directory, or nothing at all.
+        Sharing also has to be allowed on the server side before this does
+        anything -- the row says so rather than failing quietly.
+        """
+        caption = Gtk.Label(label="Shared folder", xalign=1.0)
+        caption.get_style_context().add_class("dim")
+        grid.attach(caption, 0, row, 1, 1)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.folder_button = Gtk.FileChooserButton(
+            title="Folder to share with this guest",
+            action=Gtk.FileChooserAction.SELECT_FOLDER,
+        )
+        self.folder_button.set_hexpand(True)
+        current = self.local_values.get("shared_folder") or ""
+        if current:
+            self.folder_button.set_filename(current)
+        self.folder_button.connect("file-set", self._on_folder_set)
+        box.pack_start(self.folder_button, True, True, 0)
+
+        clear = Gtk.Button(label="Clear")
+        clear.set_tooltip_text("Share no folder with this guest")
+        clear.connect("clicked", lambda *_: self._on_folder_cleared())
+        box.pack_start(clear, False, False, 0)
+
+        self.folder_ro = Gtk.CheckButton(label="Read only")
+        self.folder_ro.set_active(bool(self.local_values.get("shared_folder_ro", True)))
+        self.folder_ro.set_tooltip_text(
+            "Leave this on unless the guest needs to write into the folder"
+        )
+        self.folder_ro.connect("toggled", self._on_folder_ro_toggled)
+        box.pack_start(self.folder_ro, False, False, 0)
+
+        for widget in (self.folder_button, clear, self.folder_ro):
+            widget.set_sensitive(sensitive)
+        grid.attach(box, 1, row, 1, 1)
+        return row + 1
+
+    def _on_folder_set(self, button):
+        if self._loading:
+            return
+        self.local_values["shared_folder"] = button.get_filename() or ""
+        self._sync_buttons()
+
+    def _on_folder_cleared(self):
+        self.folder_button.unselect_all()
+        self.local_values["shared_folder"] = ""
+        self._sync_buttons()
+
+    def _on_folder_ro_toggled(self, button):
+        if self._loading:
+            return
+        self.local_values["shared_folder_ro"] = button.get_active()
+        self._sync_buttons()
 
     def _group(self, grid, row, title, explanation):
         """A heading and its one-line reason. Returns the next free row."""

@@ -320,6 +320,8 @@ class SpiceConsole(Gtk.Box):
         play_audio=True,
         capture_audio=False,
         share_smartcard=False,
+        shared_folder="",
+        shared_folder_ro=True,
         view_only=False,
         disable_effects=(),
         on_usb=None,
@@ -364,6 +366,10 @@ class SpiceConsole(Gtk.Box):
         # its own. Off unless asked for: a smartcard is somebody's identity.
         self.share_smartcard = bool(share_smartcard)
         self._smartcard_channel = None
+        # A directory on this machine, offered to the guest over WebDAV. Empty
+        # means share nothing, which is the default. See _build_session.
+        self.shared_folder = str(shared_folder or "")
+        self.shared_folder_ro = bool(shared_folder_ro)
         self.view_only = bool(view_only)
         # Guest desktop effects to ask the agent to drop, for a link where
         # the wallpaper is not worth the bandwidth. See _build_session.
@@ -541,6 +547,22 @@ class SpiceConsole(Gtk.Box):
             except Exception as exc:
                 log.warning("could not disable audio: %s", exc)
 
+        if self.shared_folder:
+            # spice-gtk runs a small WebDAV server of its own and offers it on
+            # the guest's webdav port; spice-webdavd in the guest is what
+            # mounts it. Both properties are construct-time, hence the
+            # reconnect in set_shared_folder.
+            try:
+                session.set_property("shared-dir", self.shared_folder)
+                session.set_property("share-dir-ro", self.shared_folder_ro)
+                log.info(
+                    "sharing %s (%s)",
+                    self.shared_folder,
+                    "read only" if self.shared_folder_ro else "writable",
+                )
+            except Exception as exc:
+                log.warning("could not share a folder: %s", exc)
+
         if self.share_smartcard:
             # spice-gtk defaults this off and reads it when the session is
             # built, which is why the switch asks for a reconnect. The channel
@@ -649,6 +671,17 @@ class SpiceConsole(Gtk.Box):
         rather than pretended, exactly as with audio: the caller rebuilds.
         """
         self.disable_effects = tuple(effects or ())
+        return False
+
+    def set_shared_folder(self, path, read_only=True):
+        """Record which folder to share. Returns False: it needs a rebuild.
+
+        "shared-dir" is a construct property and the channel is negotiated
+        when the session connects, so a live session keeps what it was built
+        with. Reported rather than pretended, as with audio.
+        """
+        self.shared_folder = str(path or "")
+        self.shared_folder_ro = bool(read_only)
         return False
 
     # -- smartcard redirection -----------------------------------------

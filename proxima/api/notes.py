@@ -120,6 +120,12 @@ def with_folder(notes, path):
 SETTINGS_DEFAULTS = {
     "clipboard": "enabled",
     "protocol": "default",
+    # Whether this guest is allowed a shared folder at all. The decision
+    # belongs to the guest -- it needs a webdav port on the VM and
+    # spice-webdavd inside it, which is somebody's deliberate setup -- while
+    # *which* folder is shared is a fact about each machine that connects.
+    # See config.LOCAL_VALUE_DEFAULTS for the other half.
+    "folder_sharing": "disabled",
 }
 
 # Settings that used to live here and have since moved to this machine's own

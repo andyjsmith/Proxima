@@ -171,6 +171,16 @@ DEFAULTS = {
 # "enabled"/"disabled" rather than true/false so they read the same as the
 # server-side settings in notes.SETTINGS_DEFAULTS, which the same dialog rows
 # and the same status bar switches drive.
+# Per-guest values, as opposed to switches, that belong to this computer.
+# The folder to share with a guest is the clearest case there is: the same
+# path on another machine is a different directory, or nothing at all.
+LOCAL_VALUE_DEFAULTS = {
+    "shared_folder": "",
+    # Read-only unless somebody says otherwise. A guest with write access to a
+    # host directory is a guest that can delete what is in it.
+    "shared_folder_ro": True,
+}
+
 LOCAL_SWITCH_DEFAULTS = {
     "audio": "enabled",
     # The one switch that defaults off. Sound coming out of a guest is what
