@@ -1,5 +1,6 @@
 # Proxima
 
+[Documentation](https://andyjsmith.github.io/Proxima/docs/) | [Download](https://github.com/andyjsmith/proxima/releases/latest)
 
 A VMware Workstation style desktop client for Proxmox VE. Your whole
 datacenter in a tree down one side, guests in tabs, and a real console in
@@ -62,6 +63,10 @@ sha256sum -c SHA256SUMS --ignore-missing        # Linux
 ```powershell
 Get-FileHash proxima-0.2.0-windows-x86_64-setup.exe   # Windows, compare by eye
 ```
+
+## Documentation
+
+[View the documentation](https://andyjsmith.github.io/Proxima/docs/)
 
 ## Contributing
 
