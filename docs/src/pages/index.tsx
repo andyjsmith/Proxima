@@ -64,7 +64,6 @@ function Hero(): ReactNode {
 export default function Home(): ReactNode {
   return (
     <Layout
-      title="A desktop client for Proxmox VE"
       description="Proxima is a desktop client for Proxmox VE: guests in tabs, SPICE and VNC consoles, USB and folder sharing, and certificate pinning.">
       <Hero />
 
