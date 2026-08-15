@@ -122,13 +122,16 @@ jobs:
       - name: Unpack the bundles
         run: |
           set -euo pipefail
-          mkdir -p work/linux work/windows work/macos
+          mkdir -p work/linux work/windows
           tar -C work/linux -xzf proxima-linux-x86_64-dist.tar.gz
           tar -C work/windows -xzf proxima-windows-x86_64-dist.tar.gz
-          tar -C work/macos -xzf proxima-macos-arm64-app.tar.gz
           test -x work/linux/proxima/proxima
           test -f work/windows/proxima/proxima.exe
-          test -x work/macos/Proxima.app/Contents/MacOS/proxima
+          # The macOS build arrives as a finished disk image, which this job
+          # cannot mount: hdiutil is a Mac tool. Nothing is lost by that --
+          # the build job ran the bundle's own --diagnose before packing it,
+          # which is a stronger check than anything possible here.
+          test -f Proxima.dmg
           mkdir -p out
 
       # -- Linux: archive ------------------------------------------------
@@ -242,21 +245,19 @@ jobs:
           fi
           makensis "${args[@]}" packaging/proxima.nsi
 
-      # -- macOS: archive ------------------------------------------------
-      - name: macOS archive
-        # A tarball rather than a .dmg: this job runs on Linux, and hdiutil
-        # only exists on a Mac. tar is also the only common format that
-        # keeps a .app's symlinks and executable bits intact, which is what
-        # decides whether the thing opens at all after a download.
+      # -- macOS: disk image ---------------------------------------------
+      - name: macOS disk image
+        # Built by the macOS job, which is the only one with hdiutil; all
+        # that happens here is the naming, so the version comes from the
+        # same place as every other artifact.
         #
-        # Not notarized, and not signed with anything but the ad-hoc
-        # signature PyInstaller applies, so Gatekeeper will refuse it on the
-        # first open until it is cleared in System Settings -> Privacy &
-        # Security. Signing needs a paid Developer ID; see the README.
+        # Not notarized, and signed with nothing but the ad-hoc signature
+        # PyInstaller applies, so Gatekeeper refuses the first open until it
+        # is cleared in System Settings -> Privacy & Security. Signing needs
+        # a paid Developer ID; see the README.
         run: |
           set -euo pipefail
-          tar -C work/macos -czf "out/proxima-${VERSION}-macos-arm64.tar.gz" \
-            Proxima.app
+          mv Proxima.dmg "out/proxima-${VERSION}-macos-arm64.dmg"
 
       - name: Checksums
         run: |
