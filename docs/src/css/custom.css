@@ -1,0 +1,449 @@
+/**
+ * Proxima documentation theme.
+ *
+ * Two colours, taken from the application icon: an orange and a near black.
+ * Everything else is a neutral built from them, so the site reads as one
+ * thing rather than as Infima's defaults with a hue swapped in.
+ */
+
+:root {
+	/* Orange, darkened enough for body text contrast on white. */
+	--ifm-color-primary: #d2560a;
+	--ifm-color-primary-dark: #bd4e09;
+	--ifm-color-primary-darker: #b24a09;
+	--ifm-color-primary-darkest: #933d07;
+	--ifm-color-primary-light: #e75f0b;
+	--ifm-color-primary-lighter: #f2650c;
+	--ifm-color-primary-lightest: #f87a2b;
+
+	/* The icon's own orange, for marks rather than for text. */
+	--proxima-orange: #ff7a18;
+	--proxima-ink: #17171a;
+
+	--ifm-background-color: #ffffff;
+	--ifm-background-surface-color: #fbf9f7;
+	--ifm-font-color-base: #24242a;
+	--ifm-heading-color: var(--proxima-ink);
+
+	--ifm-font-family-base:
+		system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+		sans-serif;
+	--ifm-font-family-monospace:
+		"JetBrains Mono", "Cascadia Mono", ui-monospace, SFMono-Regular,
+		"SF Mono", Menlo, Consolas, monospace;
+	--ifm-code-font-size: 88%;
+	--ifm-line-height-base: 1.7;
+	--ifm-h1-font-size: 2.35rem;
+	--ifm-heading-font-weight: 650;
+
+	--ifm-navbar-height: 3.75rem;
+	--ifm-navbar-background-color: rgba(255, 255, 255, 0.86);
+	--ifm-navbar-shadow: none;
+	--ifm-toc-border-color: rgba(23, 23, 26, 0.08);
+	--ifm-hr-border-color: rgba(23, 23, 26, 0.09);
+
+	--ifm-code-background: rgba(210, 86, 10, 0.09);
+	--ifm-pre-background: #fbf7f3;
+	--ifm-blockquote-color: var(--ifm-font-color-base);
+	--ifm-blockquote-border-color: var(--proxima-orange);
+
+	--ifm-menu-color-background-active: rgba(255, 122, 24, 0.1);
+	--ifm-menu-color-background-hover: rgba(23, 23, 26, 0.045);
+
+	--ifm-table-border-color: rgba(23, 23, 26, 0.1);
+	--ifm-table-head-background: rgba(23, 23, 26, 0.035);
+	--ifm-table-stripe-background: transparent;
+
+	--docusaurus-highlighted-code-line-bg: rgba(255, 122, 24, 0.16);
+
+	--proxima-border: rgba(23, 23, 26, 0.11);
+	--proxima-muted: rgba(23, 23, 26, 0.6);
+}
+
+[data-theme="dark"] {
+	--ifm-color-primary: #ff8a35;
+	--ifm-color-primary-dark: #ff7716;
+	--ifm-color-primary-darker: #fa6d06;
+	--ifm-color-primary-darkest: #cd5a05;
+	--ifm-color-primary-light: #ff9d54;
+	--ifm-color-primary-lighter: #ffa764;
+	--ifm-color-primary-lightest: #ffc294;
+
+	--ifm-background-color: #131316;
+	--ifm-background-surface-color: #1a1a1e;
+	--ifm-font-color-base: #dededf;
+	--ifm-heading-color: #f4f4f5;
+
+	--ifm-navbar-background-color: rgba(19, 19, 22, 0.85);
+	--ifm-toc-border-color: rgba(255, 255, 255, 0.1);
+	--ifm-hr-border-color: rgba(255, 255, 255, 0.1);
+
+	--ifm-code-background: rgba(255, 122, 24, 0.16);
+	--ifm-pre-background: #0f0f12;
+
+	--ifm-menu-color-background-active: rgba(255, 122, 24, 0.14);
+	--ifm-menu-color-background-hover: rgba(255, 255, 255, 0.06);
+
+	--ifm-table-border-color: rgba(255, 255, 255, 0.11);
+	--ifm-table-head-background: rgba(255, 255, 255, 0.045);
+
+	--docusaurus-highlighted-code-line-bg: rgba(255, 122, 24, 0.2);
+
+	--proxima-border: rgba(255, 255, 255, 0.12);
+	--proxima-muted: rgba(255, 255, 255, 0.58);
+}
+
+/* -- chrome ------------------------------------------------------------ */
+
+.navbar {
+	border-bottom: 1px solid var(--proxima-border);
+	backdrop-filter: saturate(180%) blur(12px);
+	-webkit-backdrop-filter: saturate(180%) blur(12px);
+}
+
+.navbar__title {
+	font-weight: 680;
+	letter-spacing: -0.015em;
+}
+
+.navbar__logo img {
+	/* The icon is a flat mark. A drop shadow on it looks like a mistake. */
+	filter: none;
+}
+
+.navbar__link {
+	font-weight: 520;
+}
+
+/* An orange underline on the active tab, rather than colouring the word. */
+.navbar__link--active {
+	color: var(--ifm-heading-color);
+	position: relative;
+}
+
+.navbar__link--active::after {
+	content: "";
+	position: absolute;
+	left: var(--ifm-navbar-item-padding-horizontal);
+	right: var(--ifm-navbar-item-padding-horizontal);
+	bottom: -0.6rem;
+	height: 2px;
+	border-radius: 2px;
+	background: var(--proxima-orange);
+}
+
+.footer--dark {
+	--ifm-footer-background-color: #101013;
+	--ifm-footer-color: rgba(255, 255, 255, 0.66);
+	--ifm-footer-link-color: rgba(255, 255, 255, 0.8);
+	--ifm-footer-title-color: #ffffff;
+	border-top: 3px solid var(--proxima-orange);
+}
+
+/* -- sidebar ----------------------------------------------------------- */
+
+.menu {
+	font-size: 0.92rem;
+	padding: 1rem 0.75rem !important;
+}
+
+.menu__link {
+	border-radius: 6px;
+	line-height: 1.35;
+	padding: 0.4rem 0.65rem;
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+	font-weight: 600;
+	box-shadow: inset 2px 0 0 var(--proxima-orange);
+}
+
+.menu__list-item-collapsible .menu__link {
+	font-weight: 600;
+}
+
+/* Category headings read as headings, not as more links. */
+.theme-doc-sidebar-item-category-level-1
+	> .menu__list-item-collapsible
+	> .menu__link {
+	font-size: 0.78rem;
+	text-transform: uppercase;
+	letter-spacing: 0.07em;
+	color: var(--proxima-muted);
+}
+
+.table-of-contents {
+	font-size: 0.82rem;
+}
+
+.table-of-contents__link--active {
+	font-weight: 600;
+}
+
+/* -- content ----------------------------------------------------------- */
+
+.markdown h1 {
+	letter-spacing: -0.025em;
+}
+
+.markdown h2 {
+	letter-spacing: -0.015em;
+	margin-top: 2.6rem;
+	padding-bottom: 0.35rem;
+	border-bottom: 1px solid var(--proxima-border);
+}
+
+.markdown h3 {
+	margin-top: 2rem;
+}
+
+.markdown a {
+	text-decoration-color: rgba(255, 122, 24, 0.45);
+	text-underline-offset: 0.15em;
+}
+
+.markdown code {
+	border: 1px solid rgba(255, 122, 24, 0.22);
+	border-radius: 5px;
+	padding: 0.1rem 0.32rem;
+}
+
+.markdown a code {
+	border-color: transparent;
+}
+
+.theme-code-block {
+	border: 1px solid var(--proxima-border);
+	border-radius: 10px;
+	box-shadow: none !important;
+}
+
+.markdown blockquote {
+	border-left-width: 3px;
+	background: var(--ifm-background-surface-color);
+	border-radius: 0 8px 8px 0;
+	padding: 0.85rem 1.1rem;
+}
+
+/* Tables carry most of the reference material, so they get room and rules
+   that separate rows rather than boxing every cell in. */
+.markdown table {
+	display: table;
+	width: 100%;
+	border-collapse: collapse;
+	border: none;
+	font-size: 0.94rem;
+}
+
+.markdown table thead {
+	background: var(--ifm-table-head-background);
+}
+
+.markdown table th {
+	font-size: 0.78rem;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--proxima-muted);
+	font-weight: 650;
+	text-align: left;
+	border: none;
+	border-bottom: 1px solid var(--ifm-table-border-color);
+}
+
+.markdown table td {
+	border: none;
+	border-bottom: 1px solid var(--ifm-table-border-color);
+	vertical-align: top;
+}
+
+.markdown table tr {
+	background: transparent !important;
+}
+
+/* Several tables here are two unlabelled columns, where a blank header row
+   is just an empty band above the content. */
+.markdown table th:empty {
+	padding-top: 0;
+	padding-bottom: 0;
+}
+
+.markdown table thead tr:has(th:only-of-type:empty),
+.markdown table thead tr:not(:has(th:not(:empty))) {
+	display: none;
+}
+
+/* The first column of a two column table is a term, so it reads as one. */
+.markdown table td:first-child {
+	font-weight: 560;
+	color: var(--ifm-heading-color);
+}
+
+.pagination-nav__link {
+	border-color: var(--proxima-border);
+	border-radius: 10px;
+}
+
+.pagination-nav__link:hover {
+	border-color: var(--proxima-orange);
+}
+
+.breadcrumbs__item--active .breadcrumbs__link {
+	background: var(--ifm-menu-color-background-active);
+	color: var(--ifm-color-primary);
+}
+
+/* -- the overview page's opening block --------------------------------- */
+
+.lede {
+	font-size: 1.2rem;
+	line-height: 1.55;
+	color: var(--proxima-muted);
+	margin-bottom: 2rem;
+}
+
+.card-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+	gap: 0.85rem;
+	margin: 1.5rem 0 2.5rem;
+}
+
+.card-grid a {
+	display: block;
+	padding: 1rem 1.15rem;
+	border: 1px solid var(--proxima-border);
+	border-radius: 10px;
+	background: var(--ifm-background-surface-color);
+	text-decoration: none;
+	transition:
+		border-color 120ms ease,
+		transform 120ms ease;
+}
+
+.card-grid a:hover {
+	border-color: var(--proxima-orange);
+	transform: translateY(-1px);
+	text-decoration: none;
+}
+
+.card-grid strong {
+	display: block;
+	color: var(--ifm-heading-color);
+	font-size: 1rem;
+	margin-bottom: 0.2rem;
+}
+
+.card-grid span {
+	display: block;
+	color: var(--proxima-muted);
+	font-size: 0.88rem;
+	line-height: 1.45;
+}
+
+/* -- local search ------------------------------------------------------ */
+/*
+ * The search box and its results, from @easyops-cn/docusaurus-search-local.
+ * Its defaults are Infima's; these bring it onto the same rhythm as the rest
+ * of the navbar and mark hits in the icon's orange.
+ */
+
+.navbar__search-input {
+	border: 1px solid var(--proxima-border);
+	border-radius: 8px;
+	background-color: var(--ifm-background-surface-color);
+	height: 2.1rem;
+	width: 12rem;
+	transition:
+		width 140ms ease,
+		border-color 140ms ease;
+}
+
+.navbar__search-input:focus {
+	outline: none;
+	border-color: var(--proxima-orange);
+	width: 15rem;
+}
+
+[data-theme="dark"] .navbar__search-input {
+	background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* The results panel. */
+.dropdown-menu.suggestion-dropdown,
+.aa-dropdown-menu {
+	border: 1px solid var(--proxima-border);
+	border-radius: 10px;
+	box-shadow: 0 12px 32px rgba(23, 23, 26, 0.16);
+	padding: 0.35rem;
+}
+
+.search-result-match {
+	color: var(--ifm-color-primary);
+	background: rgba(255, 122, 24, 0.14);
+	border-radius: 3px;
+	padding: 0 0.1em;
+	font-weight: 600;
+}
+
+.aa-suggestion:hover,
+.aa-cursor .aa-suggestion {
+	background: var(--ifm-menu-color-background-hover);
+	border-radius: 6px;
+}
+
+/* Terms marked on the page you land on. */
+.markdown mark,
+mark.search-highlight {
+	background: rgba(255, 122, 24, 0.28);
+	color: inherit;
+	border-radius: 3px;
+	padding: 0 0.12em;
+}
+
+/* -- screenshots ------------------------------------------------------- */
+/*
+ * Applies to any image in a doc page, so a screenshot needs no wrapper of
+ * its own: write plain markdown and it comes out framed like the one on the
+ * landing page.
+ */
+
+.markdown img {
+	display: block;
+	max-width: 100%;
+	height: auto;
+	margin: 1.75rem 0;
+	border: 1px solid var(--proxima-border);
+	border-radius: 10px;
+	box-shadow: 0 10px 26px rgba(23, 23, 26, 0.12);
+}
+
+[data-theme="dark"] .markdown img {
+	box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45);
+}
+
+/* An image with a caption. The figure carries the spacing, so the image
+   inside it does not add its own. */
+.markdown figure {
+	margin: 1.75rem 0;
+}
+
+.markdown figure img {
+	margin: 0;
+}
+
+.markdown figure figcaption {
+	margin-top: 0.6rem;
+	font-size: 0.88rem;
+	color: var(--proxima-muted);
+	text-align: center;
+}
+
+/* Inline images, badges and icons opt out. */
+.markdown img.inline,
+.markdown p > a > img.inline {
+	display: inline;
+	margin: 0;
+	border: none;
+	border-radius: 0;
+	box-shadow: none;
+}

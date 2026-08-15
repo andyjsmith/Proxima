@@ -68,7 +68,7 @@ need no root.
 
 | File | |
 | --- | --- |
-| `proxima-<version>-macos-arm64.tar.gz` | Unpack it and drag `Proxima.app` to Applications. A tarball rather than a zip, because zip keeps neither the symlinks nor the executable bits an app bundle is made of. |
+| `proxima-<version>-macos-arm64.dmg` | Open it and drag **Proxima** onto the Applications alias inside. |
 
 Apple silicon only, and not notarized: the app carries an ad-hoc signature,
 which is enough to run but not enough for Gatekeeper. The first open is
@@ -144,8 +144,7 @@ whatever the guests below are sorted by.
 The search box matches tags too, so filtering to one is a matter of typing
 it.
 
-Guests can be dragged between folders. If you would rather they could not,
-turn dragging off in **Preferences -> Behaviour**.
+Guests can be dragged between folders.
 
 ---
 

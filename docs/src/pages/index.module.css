@@ -1,0 +1,263 @@
+/* The landing page. Scoped to this page; the shared theme lives in
+   src/css/custom.css. */
+
+.hero {
+	position: relative;
+	overflow: hidden;
+	background: #131316;
+	color: #f1f1f2;
+	padding: 5.5rem 0 4.5rem;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* The icon's orange, thrown behind the text as light rather than as a block
+   of colour. */
+.hero::before {
+	content: "";
+	position: absolute;
+	top: -14rem;
+	left: 50%;
+	width: 46rem;
+	height: 32rem;
+	transform: translateX(-50%);
+	background: radial-gradient(
+		closest-side,
+		rgba(255, 122, 24, 0.34),
+		rgba(255, 122, 24, 0)
+	);
+	pointer-events: none;
+}
+
+.heroInner {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	text-align: center;
+	gap: 1.1rem;
+}
+
+.mark {
+	width: 76px;
+	height: 76px;
+	image-rendering: auto;
+}
+
+.title {
+	font-size: clamp(2.6rem, 6vw, 3.8rem);
+	line-height: 1.05;
+	letter-spacing: -0.035em;
+	font-weight: 700;
+	margin: 0;
+	color: #ffffff;
+}
+
+.tagline {
+	font-size: clamp(1.05rem, 2.4vw, 1.3rem);
+	line-height: 1.5;
+	max-width: 34rem;
+	margin: 0;
+	color: rgba(255, 255, 255, 0.72);
+}
+
+.buttons {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.7rem;
+	justify-content: center;
+	margin-top: 0.6rem;
+}
+
+.primaryButton,
+.secondaryButton {
+	display: inline-block;
+	padding: 0.7rem 1.4rem;
+	border-radius: 8px;
+	font-weight: 600;
+	font-size: 0.98rem;
+	text-decoration: none !important;
+	transition:
+		background-color 120ms ease,
+		border-color 120ms ease;
+}
+
+.primaryButton {
+	background: #ff7a18;
+	color: #17171a;
+	border: 1px solid #ff7a18;
+}
+
+.primaryButton:hover {
+	background: #ff8c39;
+	border-color: #ff8c39;
+	color: #17171a;
+}
+
+.secondaryButton {
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	color: rgba(255, 255, 255, 0.9);
+}
+
+.secondaryButton:hover {
+	border-color: #ff7a18;
+	color: #ffffff;
+}
+
+.platforms {
+	margin-top: 0.4rem;
+	font-size: 0.84rem;
+	color: rgba(255, 255, 255, 0.5);
+}
+
+/* -- the shot ---------------------------------------------------------- */
+
+.shotWrap {
+	max-width: 60rem;
+	margin: 3rem auto 0;
+	padding: 0 1rem 3.5rem;
+}
+
+.shotWrap img {
+	display: block;
+	width: 100%;
+	height: auto;
+	border: 1px solid var(--proxima-border);
+	border-radius: 12px;
+	box-shadow: 0 18px 45px rgba(23, 23, 26, 0.18);
+}
+
+[data-theme="dark"] .shotWrap img {
+	box-shadow: 0 18px 45px rgba(0, 0, 0, 0.5);
+}
+
+/* -- sections ---------------------------------------------------------- */
+
+.section {
+	padding: 0 0 4rem;
+}
+
+.sectionTitle {
+	font-size: 1.55rem;
+	letter-spacing: -0.02em;
+	margin-bottom: 0.4rem;
+}
+
+.sectionNote {
+	color: var(--proxima-muted);
+	max-width: 44rem;
+	margin-bottom: 1.8rem;
+}
+
+.grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+	gap: 1rem;
+}
+
+.card {
+	border: 1px solid var(--proxima-border);
+	border-radius: 12px;
+	padding: 1.25rem 1.35rem;
+	background: var(--ifm-background-surface-color);
+}
+
+.cardTitle {
+	font-weight: 650;
+	font-size: 1.02rem;
+	color: var(--ifm-heading-color);
+	margin-bottom: 0.35rem;
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.cardTitle::before {
+	content: "";
+	width: 0.45rem;
+	height: 0.45rem;
+	border-radius: 2px;
+	background: #ff7a18;
+	flex: none;
+}
+
+.card p {
+	margin: 0;
+	color: var(--proxima-muted);
+	font-size: 0.93rem;
+	line-height: 1.55;
+}
+
+.card a {
+	font-size: 0.9rem;
+	font-weight: 600;
+}
+
+/* Links out to the documentation, as a plain list of routes. */
+.linkList {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+	gap: 0.6rem;
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.linkList li {
+	margin: 0;
+}
+
+.linkList a {
+	display: flex;
+	align-items: baseline;
+	gap: 0.6rem;
+	padding: 0.75rem 1rem;
+	border: 1px solid var(--proxima-border);
+	border-radius: 9px;
+	text-decoration: none !important;
+	transition:
+		border-color 120ms ease,
+		transform 120ms ease;
+}
+
+.linkList a:hover {
+	border-color: #ff7a18;
+	transform: translateY(-1px);
+}
+
+.linkName {
+	font-weight: 600;
+	color: var(--ifm-heading-color);
+}
+
+.linkNote {
+	color: var(--proxima-muted);
+	font-size: 0.86rem;
+}
+
+/* -- requirements strip ------------------------------------------------ */
+
+.strip {
+	border-top: 1px solid var(--proxima-border);
+	border-bottom: 1px solid var(--proxima-border);
+	background: var(--ifm-background-surface-color);
+	padding: 2.5rem 0;
+	margin-bottom: 4rem;
+}
+
+.stripGrid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+	gap: 1.5rem;
+}
+
+.stripItem strong {
+	display: block;
+	color: var(--ifm-heading-color);
+	margin-bottom: 0.25rem;
+}
+
+.stripItem span {
+	color: var(--proxima-muted);
+	font-size: 0.92rem;
+	line-height: 1.5;
+}

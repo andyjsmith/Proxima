@@ -1,0 +1,76 @@
+---
+id: intro
+title: What Proxima is
+sidebar_label: Overview
+slug: /
+sidebar_position: 1
+---
+
+import Link from "@docusaurus/Link";
+
+# Proxima
+
+<div className="lede">
+	A desktop client for Proxmox VE. Open multiple tabbed consoles for all of
+	your VMs.
+</div>
+
+Proxima lets you open SPICE consoles for VMs with compatible displays, and falls back to VNC for the rest. It features auto-resizing, copy-paste, file transfer, USB redirection, and more.
+
+Proxima talks to the Proxmox HTTPS/websocket API directly; nothing needs to be installed on the server.
+
+![Main window](/img/screenshots/main_window.png)
+
+## Advantages over the web interface
+
+|                             |                                                                                                                                   |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Consoles in tabs            | Several guests open at once, or full screen across every monitor.                                                                 |
+| Local hardware in the guest | Pass through USB devices, a microphone, or a smartcard reader, all over SPICE.                                                    |
+| Folder tree                 | Sort your VMs into folders, a feature missing from Proxmox. Saved in the VMs' notes for synchronization across Proxima instances. |
+| Console tuning              | Video codec, image compression, guest desktop effects and display scaling, per guest.                                             |
+
+## Proxmox requirements
+
+Proxmox Virtual Environment 9.2+ has been tested and works with Proxima. Earlier versions likely work as well, but have not been tested.
+
+### Privileges
+
+Proxima uses ordinary API endpoints, so an account can do whatever its privileges allow in the web interface.
+
+If you are using a non-admin user, Proxima also benefits from one optional privilege. The VM status is read through
+`VM.Monitor` to check whether another SPICE client is already attached. Without it,
+the check is skipped, and connecting will disconnect the other party rather than offering to switch to VNC.
+
+### VM Configuration
+
+**USB redirection** needs a SPICE USB port on the VM. See [USB redirection](sharing/usb-redirection.md).
+
+Audio, microphone, and smartcard redirection require a matching device on the VM.
+
+## Where to start
+
+<div className="card-grid">
+	<Link to="/docs/getting-started/installation">
+		<strong>Installation</strong>
+		<span>The packages for each platform and what is inside them.</span>
+	</Link>
+	<Link to="/docs/getting-started/connecting">
+		<strong>Connecting</strong>
+		<span>The first connection, and how certificate pinning works.</span>
+	</Link>
+	<Link to="/docs/using/consoles">
+		<strong>Consoles</strong>
+		<span>Protocol choice, display scaling, splitting the window.</span>
+	</Link>
+	<Link to="/docs/using/status-bar">
+		<strong>The status bar</strong>
+		<span>What each indicator means, and which of them are switches.</span>
+	</Link>
+	<Link to="/docs/troubleshooting">
+		<strong>Troubleshooting</strong>
+		<span>
+			The log, <code>--diagnose</code>, and symptom by symptom fixes.
+		</span>
+	</Link>
+</div>

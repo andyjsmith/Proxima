@@ -4144,9 +4144,7 @@ class MainWindow(Gtk.Window):
                 "shared_folder", LOCAL_VALUE_DEFAULTS["shared_folder"]
             ),
             "shared_folder_ro": bool(
-                stored.get(
-                    "shared_folder_ro", LOCAL_VALUE_DEFAULTS["shared_folder_ro"]
-                )
+                stored.get("shared_folder_ro", LOCAL_VALUE_DEFAULTS["shared_folder_ro"])
             ),
             # How big the text is on a serial console. This machine's
             # business, like the two above it: the same container read on a
@@ -5993,9 +5991,7 @@ class MainWindow(Gtk.Window):
         dialog = Gtk.AboutDialog(transient_for=self, modal=True)
         dialog.set_program_name(APP_NAME)
         dialog.set_version(__version__)
-        dialog.set_comments(
-            "Proxmox VE console client.\nSPICE via spice-gtk, with VNC fallback."
-        )
+        dialog.set_comments("A desktop client for Proxmox VE.")
         theme_decorate(dialog)
         dialog.run()
         dialog.destroy()

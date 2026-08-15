@@ -1,0 +1,8 @@
+{
+	"label": "Sharing hardware and files",
+	"position": 4,
+	"link": {
+		"type": "generated-index",
+		"description": "Handing a USB device, sound, or a smartcard reader from this machine to a guest over SPICE."
+	}
+}
