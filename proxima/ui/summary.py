@@ -652,6 +652,28 @@ class GuestSummary(Gtk.ScrolledWindow):
             self._detailed_key = guest.key
             self._load_details(guest, api, generation)
 
+    def reload_guest(self, guest=None, api=None):
+        """Read this guest's details again, now.
+
+        show_guest() deliberately only makes the per-guest calls -- config,
+        agent ping, interfaces -- when the selection changes, because they
+        are not cheap and the poll refreshes the volatile fields either way.
+        That leaves one gap: something that changes the config out from under
+        an open summary, which is the settings dialog saving. It would
+        otherwise go on showing the display adapter, processors and NICs from
+        before the save until the tab happened to change guest, which for a
+        tab sitting on one guest may be never.
+
+        Clearing the cache key is what makes the next show_guest treat this
+        as a fresh selection, so there is no second path through the fetch to
+        keep in step with the first.
+        """
+        guest = guest or self.guest
+        if guest is None:
+            return
+        self._detailed_key = None
+        self.show_guest(guest, api)
+
     def _set_status_icon(self, guest):
         """The tree's icon for this guest, beside its name."""
         pixbuf = (

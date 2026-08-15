@@ -474,3 +474,64 @@ def test_spice_declares_the_smartcard_contract():
     assert "smartcard" in SpiceConsole.RECONNECT_SWITCHES, (
         "enable-smartcard is read at session build, so it needs a rebuild"
     )
+
+
+# -- file transfer --------------------------------------------------------
+# Files dragged onto a console, which spice-gtk sends to the guest. The
+# switch is the display widget's drop target, so it applies live and never
+# needs the session rebuilt.
+
+
+def test_file_transfer_is_on_by_default(window, switch_console):
+    guest = window.context_guest(switch_console)
+    assert window._guest_switch(guest, "file_transfer") is True, (
+        "file transfer defaulted to off"
+    )
+    assert switch_console.allow_file_transfer is True, (
+        "the console was built refusing dropped files"
+    )
+    window._update_file_transfer_indicator(switch_console)
+    pump(0.2)
+    assert not window.transfer_icon.struck, (
+        "the file transfer icon is struck through while it is on"
+    )
+
+
+def test_file_transfer_toggles_live(window, config, switch_console):
+    window._toggle_file_transfer()
+    status = window.status_label_main.get_text()
+    try:
+        assert switch_console.allow_file_transfer is False, (
+            "the file transfer switch did not reach the console"
+        )
+        assert RUNNING not in window._reconnecting, (
+            f"turning file transfer off rebuilt the console, said {status!r}"
+        )
+        assert window.transfer_icon.struck, "the icon is not struck when off"
+
+        window._toggle_file_transfer()
+        pump(0.2)
+        assert switch_console.allow_file_transfer is True, (
+            "file transfer would not go back on"
+        )
+        assert not window.transfer_icon.struck
+    finally:
+        config["guest_prefs"] = {}
+
+
+def test_file_transfer_needs_the_guest_agent(window, switch_console):
+    """The agent writes the file, so without one there is nothing to receive
+    it. Still clickable: the switch is ours, the agent is the guest's."""
+    switch_console.agent_connected = False
+    try:
+        window._update_file_transfer_indicator(switch_console)
+        pump(0.2)
+        tooltip = window.transfer_icon.get_tooltip_text() or ""
+        assert "spice-vdagent" in tooltip, (
+            f"the indicator does not say the agent is missing, said {tooltip!r}"
+        )
+        assert not window.transfer_icon.struck, (
+            "a missing agent read as somebody switching the feature off"
+        )
+    finally:
+        switch_console.agent_connected = True

@@ -623,29 +623,16 @@ def test_a_reboot_acknowledges_briefly_rather_than_waiting(window, busy):
 # -- drag and drop --------------------------------------------------------
 
 
-def test_the_drag_and_drop_switch_disarms_the_tree(window, config):
-    assert window.sidebar.dnd_enabled, "drag and drop starts disabled"
-    window._toggle_dnd()
-    pump(0.2)
-    try:
-        assert not window.sidebar.dnd_enabled, (
-            "the drag and drop switch did not reach the sidebar"
-        )
-        assert config.get("enable_dnd") is False, "the switch was not saved"
-        assert window.dnd_icon.struck, "the icon is not struck through when off"
-        # Unset rather than refused later: with no drag source the tree cannot
-        # start a drag at all, which is the point of the switch.
-        targets = window.sidebar.view.drag_dest_get_target_list()
-        assert not (
-            targets is not None
-            and targets.find(Gdk.Atom.intern("proxima/guest", False))[0]
-        ), "the tree still accepts guest drops with dnd off"
-    finally:
-        window._toggle_dnd()
-        pump(0.2)
-    assert window.sidebar.dnd_enabled and not window.dnd_icon.struck, (
-        "drag and drop did not switch back on"
-    )
+def test_the_tree_accepts_guest_drops(window):
+    """Dragging guests between folders, which the tree is always armed for.
+
+    The status bar's drag indicator is a different thing entirely: it governs
+    files dropped on a console, not rows dropped on a folder.
+    """
+    targets = window.sidebar.view.drag_dest_get_target_list()
+    assert targets is not None and targets.find(
+        Gdk.Atom.intern("proxima/guest", False)
+    )[0], "the tree does not accept guest drops"
 
 
 # -- several servers at once ----------------------------------------------

@@ -119,6 +119,15 @@ def with_folder(notes, path):
 # folder -- is not here; see config.LOCAL_SWITCH_DEFAULTS.
 SETTINGS_DEFAULTS = {
     "clipboard": "enabled",
+    # Files dragged onto the console and sent to the guest. The guest's
+    # business for the same reason the clipboard is: it is the agent inside
+    # it that receives the file, and a guest nobody should be able to drop a
+    # file on is that whichever machine is looking at it.
+    #
+    # On by default, unlike the switches in config.LOCAL_SWITCH_DEFAULTS that
+    # default off: nothing moves until somebody drags a file onto a guest's
+    # screen, which is about as deliberate as an action gets.
+    "file_transfer": "enabled",
     "protocol": "default",
     # Whether this guest is allowed a shared folder at all. The decision
     # belongs to the guest -- it needs a webdav port on the VM and

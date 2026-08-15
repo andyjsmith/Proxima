@@ -670,6 +670,7 @@ class FakeConsole(Gtk.Box):
         "view_only": True,
         "effects": True,
         "multi_monitor": True,
+        "file_transfer": True,
     }
     agent_connected = True
     # As SpiceConsole declares it: audio needs the session rebuilt, the
@@ -701,6 +702,9 @@ class FakeConsole(Gtk.Box):
         self.readers = ["Fake Reader 0"]
         self.has_smartcard_channel = True
         self.view_only = False
+        # Files dropped on the console. On, as SpiceConsole has it, and the
+        # agent above is what would receive one.
+        self.allow_file_transfer = True
         self.disable_effects = ()
         # Whether the guest offered a record channel at all. True here so the
         # switch is live; set False in a test to model a guest with no input.
@@ -738,6 +742,15 @@ class FakeConsole(Gtk.Box):
     def set_microphone_enabled(self, value):
         self.capture_audio = value
         return self.has_record_channel
+
+    # File transfer applies live: it is the widget's drop target, not
+    # anything the session was built with.
+    def file_transfer_available(self):
+        return self.agent_connected
+
+    def set_file_transfer_enabled(self, value):
+        self.allow_file_transfer = value
+        return True
 
     def smartcard_readers(self):
         return list(self.readers)

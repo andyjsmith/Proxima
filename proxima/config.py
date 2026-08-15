@@ -127,10 +127,6 @@ DEFAULTS = {
     # Both panes are toggled from the toolbar. The tree is open by default
     # and the task list is not, which is where each of them starts.
     "sidebar_visible": True,
-    # Dragging a guest between folders. Worth being able to switch off: in a
-    # tree you click around all day, a slipped drag silently rewrites a
-    # guest's notes on the server.
-    "enable_dnd": True,
     # Polling. Two cadences rather than one, because the two situations are
     # not alike: with nothing outstanding the inventory is being watched in
     # case somebody else changes something, and once a second is a lot of

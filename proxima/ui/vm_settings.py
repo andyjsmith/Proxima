@@ -25,6 +25,7 @@ from gi.repository import GLib, Gtk
 
 from ..api import devices
 from ..api import notes as notes_meta
+from ..api.models import DEFAULT_VGA_MEMORY_MIB
 from ..config import LOCAL_SWITCH_DEFAULTS, LOCAL_VALUE_DEFAULTS
 from ..theme import decorate as theme_decorate
 
@@ -35,6 +36,13 @@ RESPONSE_APPLY = 1
 VGA_CHOICES = [
     ("", "Default  -  Standard VGA"),
     ("qxl", "SPICE (QXL)"),
+    # Extra QXL *devices*, not extra heads: plain qxl already carries four
+    # monitors for a guest whose driver splits them, which spice-vdagent does
+    # on Linux. Windows needs one device per monitor, so these earn their
+    # place. See api.models.vga_head_limit.
+    ("qxl2", "SPICE (QXL)  -  2 displays"),
+    ("qxl3", "SPICE (QXL)  -  3 displays"),
+    ("qxl4", "SPICE (QXL)  -  4 displays"),
     ("virtio", "VirtIO-GPU"),
     ("virtio-gl", "VirGL (VirtIO-GPU, 3D)"),
     ("std", "Standard VGA"),
@@ -43,6 +51,11 @@ VGA_CHOICES = [
     ("serial0", "Serial terminal 0"),
     ("none", "None"),
 ]
+
+# What Proxmox will accept as memory= on a vga line. Below 4 MiB it refuses
+# the write; 512 is its ceiling.
+VGA_MEMORY_MIN = 4
+VGA_MEMORY_MAX = 512
 
 NIC_MODEL_CHOICES = [
     ("virtio", "VirtIO (paravirtualised)"),
@@ -90,6 +103,13 @@ FOLDER_SHARING_CHOICES = [
 SMARTCARD_CHOICES = [
     ("disabled", "Disabled"),
     ("enabled", "Enabled"),
+]
+
+# On by default, like the clipboard it sits beside: a file only moves when
+# somebody drags one onto the guest's screen. See notes.SETTINGS_DEFAULTS.
+FILE_TRANSFER_CHOICES = [
+    ("enabled", "Enabled"),
+    ("disabled", "Disabled"),
 ]
 
 PROTOCOL_CHOICES = [
@@ -320,11 +340,38 @@ class VMSettingsDialog(Gtk.Dialog):
             combo.set_active_id(current)
         combo.set_hexpand(True)
         combo.set_tooltip_text(
-            "SPICE needs QXL or VirtIO-GPU. Anything else opens on VNC."
+            "SPICE needs QXL or VirtIO-GPU. Anything else opens on VNC.\n\n"
+            "Plain QXL is already a four-monitor adapter for a guest whose "
+            "driver splits it, which spice-vdagent does on Linux. The qxl2 to "
+            "qxl4 entries add QXL devices instead, which is how a Windows "
+            "guest gets more than one monitor. Give them the video memory to "
+            "match."
         )
         self._gate(combo, "vga", live=False)
         combo.connect("changed", self._on_vga_changed)
+        self._vga_combo = combo
         grid.attach(combo, 1, row, 1, 1)
+        row += 1
+
+        grid.attach(self._caption("Memory (MiB)"), 0, row, 1, 1)
+        memory = Gtk.Entry()
+        memory.set_width_chars(7)
+        memory.set_halign(Gtk.Align.START)
+        # Proxmox's own default when the line carries no memory= at all, and
+        # the reason this is an entry rather than a spin button: empty is a
+        # real answer, meaning "leave it unset and let Proxmox decide".
+        memory.set_placeholder_text(str(DEFAULT_VGA_MEMORY_MIB))
+        memory.set_text(devices.get_pair(vga_pairs, "memory", "") or "")
+        memory.set_tooltip_text(
+            "Video memory for the display, 4 to 512 MiB. Empty leaves it "
+            f"unset, which Proxmox reads as {DEFAULT_VGA_MEMORY_MIB} MiB -- "
+            "not enough for two 1080p displays on QXL."
+        )
+        self._gate(memory, "vga", live=False)
+        memory.connect("changed", self._on_vga_memory_changed)
+        self._vga_memory = memory
+        grid.attach(memory, 1, row, 1, 1)
+        self._sync_vga_memory()
         row += 1
 
         grid.attach(self._heading("Network devices"), 0, row, 2, 1)
@@ -374,12 +421,60 @@ class VMSettingsDialog(Gtk.Dialog):
     def _on_vga_changed(self, combo):
         if self._loading:
             return
-        chosen = combo.get_active_id() or ""
+        self._sync_vga_memory()
+        self._write_vga()
+
+    def _on_vga_memory_changed(self, entry):
+        """Take a video memory size, once it is one.
+
+        Digits only, so a stray letter never reaches the server, and out of
+        range says so on the field rather than being written and refused by
+        Proxmox. Empty is not an error: it removes memory= from the line and
+        leaves the guest on Proxmox's own default.
+        """
+        if self._loading:
+            return
+        text = entry.get_text().strip()
+        if text and not text.isdigit():
+            # Re-enters this handler with the cleaned text, which does the
+            # write; the same shape as the VLAN field above.
+            entry.set_text("".join(c for c in text if c.isdigit()))
+            return
+        if text and not (VGA_MEMORY_MIN <= int(text) <= VGA_MEMORY_MAX):
+            entry.set_icon_from_icon_name(
+                Gtk.EntryIconPosition.SECONDARY, "dialog-warning-symbolic"
+            )
+            entry.set_icon_tooltip_text(
+                Gtk.EntryIconPosition.SECONDARY,
+                f"Proxmox accepts {VGA_MEMORY_MIN} to {VGA_MEMORY_MAX} MiB.",
+            )
+            return
+        entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, None)
+        self._write_vga()
+
+    def _sync_vga_memory(self):
+        """Grey the memory field out for adapters that have none."""
+        kind = self._vga_combo.get_active_id() or ""
+        applies = kind not in ("none", "serial0")
+        # Never re-enable a field _gate has locked because the VM is running.
+        if self.running:
+            return
+        self._vga_memory.set_sensitive(applies)
+
+    def _write_vga(self):
+        """Compose the vga line from the two fields, keeping the rest."""
+        chosen = self._vga_combo.get_active_id() or ""
         if chosen == "default":
             chosen = ""
         _, rest = self._vga_type(self._vga_pairs)
-        # Everything else on the line -- a QXL memory size, most likely --
-        # is carried over rather than dropped on the floor.
+        memory = self._vga_memory.get_text().strip()
+        if not self._vga_memory.get_sensitive():
+            # An adapter with no framebuffer to size. The field keeps its text
+            # for when the adapter changes back, but the line does not.
+            memory = ""
+        # Everything else on the line is carried over rather than dropped on
+        # the floor; only memory= is ours to set, and an empty box removes it.
+        rest = devices.set_pair(rest, "memory", memory or None)
         pairs = ([(None, chosen)] if chosen else []) + rest
         self._edit("vga", devices.render_pairs(pairs), str(self.config.get("vga", "")))
 
@@ -747,6 +842,20 @@ class VMSettingsDialog(Gtk.Dialog):
         self._combo(
             grid,
             row,
+            "File drag and drop",
+            FILE_TRANSFER_CHOICES,
+            "file_transfer",
+            tooltip=(
+                "Accept files dragged onto the console and send them to the "
+                "guest. Needs a SPICE console and spice-vdagent running in "
+                "the guest, which is what writes the file."
+            ),
+            sensitive=not container,
+        )
+        row += 1
+        self._combo(
+            grid,
+            row,
             "Folder sharing",
             FOLDER_SHARING_CHOICES,
             "folder_sharing",
@@ -836,10 +945,10 @@ class VMSettingsDialog(Gtk.Dialog):
         note.set_line_wrap(True)
         note.set_margin_top(8)
         text = (
-            "The clipboard, audio and microphone buttons in the status "
-            "bar, and Reopen Console with VNC, only change the console in "
-            "front of you for as long as it is open. They never change "
-            "what is set here."
+            "The clipboard, file drag and drop, audio, microphone and "
+            "smartcard buttons in the status bar, and Reopen Console with "
+            "VNC, only change the console in front of you for as long as it "
+            "is open. They never change what is set here."
         )
         if container:
             text = (
@@ -847,7 +956,10 @@ class VMSettingsDialog(Gtk.Dialog):
                 "and the microphone do not apply to them.\n\n" + text
             )
         note.set_text(text)
-        grid.attach(note, 0, 4, 2, 1)
+        # At the row the page has actually reached, not a fixed one. This
+        # said row 4, which was the bottom when the page had four rows and
+        # has been landing on top of a real setting ever since.
+        grid.attach(note, 0, row, 2, 1)
         return grid
 
     def _folder_row(self, grid, row, sensitive=True):

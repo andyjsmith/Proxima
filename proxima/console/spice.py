@@ -290,6 +290,9 @@ class SpiceConsole(Gtk.Box):
         "view_only": True,
         "effects": True,
         "usb": True,
+        # Files dropped on the console, sent to the guest. spice-gtk does the
+        # transfer; what this client owns is whether the drop is accepted.
+        "file_transfer": True,
         # Whether a guest head can be given a monitor of its own. Capable in
         # principle here; whether this guest actually has a second head is
         # monitor_count()'s question, not this one's.
@@ -322,6 +325,7 @@ class SpiceConsole(Gtk.Box):
         share_smartcard=False,
         shared_folder="",
         shared_folder_ro=True,
+        allow_file_transfer=True,
         view_only=False,
         disable_effects=(),
         on_usb=None,
@@ -370,6 +374,12 @@ class SpiceConsole(Gtk.Box):
         # means share nothing, which is the default. See _build_session.
         self.shared_folder = str(shared_folder or "")
         self.shared_folder_ro = bool(shared_folder_ro)
+        # Files dropped on the console, which spice-gtk sends to the guest.
+        # The widget's own drop target is the switch -- see
+        # _apply_file_transfer -- so this needs no session property and takes
+        # hold live.
+        self.allow_file_transfer = bool(allow_file_transfer)
+        self._drop_targets = None
         self.view_only = bool(view_only)
         # Guest desktop effects to ask the agent to drop, for a link where
         # the wallpaper is not worth the bandwidth. See _build_session.
@@ -672,6 +682,64 @@ class SpiceConsole(Gtk.Box):
         """
         self.disable_effects = tuple(effects or ())
         return False
+
+    # -- file transfer --------------------------------------------------
+    #
+    # spice-gtk puts a drop target on its own display widget and answers a
+    # drop by calling spice_main_file_copy_async, so dropping a file on a
+    # console already sends it to the guest. What was missing is a way to
+    # say no, and the widget's target list is exactly that switch: taken off
+    # to refuse drops, put back to accept them again.
+    #
+    # It is the guest's agent that writes the file, so this needs
+    # spice-vdagent (Linux) or the SPICE guest tools (Windows) running in it.
+    # Without one the drop is refused by the guest rather than by us, which
+    # is what file_transfer_available() reports rather than hiding the
+    # switch and leaving the refusal unexplained.
+
+    def _file_transfer_displays(self):
+        """Every display widget a file could be dropped on."""
+        displays = [self._display] if self._display is not None else []
+        displays += [d for d in self._head_displays.values() if d is not None]
+        return displays
+
+    def _apply_file_transfer(self, display=None):
+        """Accept or refuse dropped files on one display, or on all of them."""
+        displays = [display] if display is not None else self._file_transfer_displays()
+        applied = False
+        for widget in displays:
+            if widget is None:
+                continue
+            if self._drop_targets is None:
+                # Whatever spice-gtk set up, kept so that turning the switch
+                # back on restores the targets it chose rather than a guess
+                # at what they were.
+                self._drop_targets = widget.drag_dest_get_target_list()
+            try:
+                if self.allow_file_transfer:
+                    widget.drag_dest_set(
+                        Gtk.DestDefaults.ALL, None, Gdk.DragAction.COPY
+                    )
+                    if self._drop_targets is not None:
+                        widget.drag_dest_set_target_list(self._drop_targets)
+                    else:
+                        widget.drag_dest_add_uri_targets()
+                else:
+                    widget.drag_dest_unset()
+                applied = True
+            except Exception as exc:
+                log.warning("could not set the file drop target: %s", exc)
+        return applied
+
+    def set_file_transfer_enabled(self, enabled):
+        """Allow or refuse files dropped on this console. Applies at once."""
+        self.allow_file_transfer = bool(enabled)
+        log.info("file transfer %s", "enabled" if enabled else "disabled")
+        return self._apply_file_transfer()
+
+    def file_transfer_available(self):
+        """Whether the guest could actually receive a file right now."""
+        return bool(self.agent_connected)
 
     def set_shared_folder(self, path, read_only=True):
         """Record which folder to share. Returns False: it needs a rebuild.
@@ -1468,6 +1536,9 @@ class SpiceConsole(Gtk.Box):
         display.connect("enter-notify-event", self._on_display_enter)
         display.connect("leave-notify-event", self._on_display_leave)
         display.connect("hierarchy-changed", self._on_head_hierarchy_changed)
+        # A file dropped on the second monitor goes to the same guest, so it
+        # answers to the same switch as the first.
+        self._apply_file_transfer(display)
 
     # -- did the guest actually make it? --------------------------------
 
@@ -1749,6 +1820,10 @@ class SpiceConsole(Gtk.Box):
         )
         display.connect("enter-notify-event", self._on_display_enter)
         display.connect("leave-notify-event", self._on_display_leave)
+
+        # Reads the targets spice-gtk just set, and takes them off again if
+        # this guest is not allowed to be handed files.
+        self._apply_file_transfer(display)
 
         holder = DisplayHolder()
         holder.add(display)

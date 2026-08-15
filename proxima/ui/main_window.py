@@ -285,7 +285,6 @@ class MainWindow(Gtk.Window):
             row_ypad=theme_row_ypad(),
             name_format=config.get("tree_name_format", "name"),
             templates_last=bool(config.get("templates_last", True)),
-            dnd_enabled=bool(config.get("enable_dnd", True)),
         )
         self.sidebar.connect("guest-selected", self._on_guest_selected)
         self.sidebar.connect("guest-activated", self._on_guest_activated)
@@ -969,13 +968,17 @@ class MainWindow(Gtk.Window):
         )
         strip.pack_start(self.usb_icon, False, False, 0)
 
-        # Dragging a guest between folders. Not about the console at all,
-        # but it belongs with the other two: it is a thing that is either
-        # armed or not, and this is where you find out which.
-        self.dnd_icon = StatusIndicator(
-            "document-send-symbolic", "Drag and drop", on_toggle=self._toggle_dnd
+        # Files dragged from this machine onto the console, which spice-gtk
+        # sends to the guest. Last, because it is the one that happens
+        # without any of the menus being opened -- a drop on the console is
+        # the whole interface -- and this is where you find out whether the
+        # guest will take one.
+        self.transfer_icon = StatusIndicator(
+            "document-send-symbolic",
+            "File drag and drop",
+            on_toggle=self._toggle_file_transfer,
         )
-        strip.pack_start(self.dnd_icon, False, False, 0)
+        strip.pack_start(self.transfer_icon, False, False, 0)
 
         self._set_indicator(self.vdagent_icon, None, "SPICE agent")
         self._set_indicator(self.qga_icon, None, "Guest agent")
@@ -983,7 +986,7 @@ class MainWindow(Gtk.Window):
         self._set_indicator(self.mic_icon, None, "Microphone")
         self._set_indicator(self.smartcard_icon, None, "Smartcard")
         self._set_indicator(self.usb_icon, None, "USB redirection")
-        self._update_dnd_indicator()
+        self._set_indicator(self.transfer_icon, None, "File drag and drop")
 
         # Protocol of the active console tab. This is the persistent signal
         # that a guest is on VNC rather than SPICE, now that the console has
@@ -1104,6 +1107,10 @@ class MainWindow(Gtk.Window):
         def update():
             if console is self.current_console():
                 self._update_clipboard_indicator(console, connected)
+                # File drag and drop rides on the same agent: it is what
+                # writes the file inside the guest, so the indicator moves
+                # with the agent rather than only when the tab changes.
+                self._update_file_transfer_indicator(console)
             return False
 
         GLib.idle_add(update)
@@ -1217,52 +1224,72 @@ class MainWindow(Gtk.Window):
     def _toggle_smartcard(self):
         self._toggle_switch("smartcard", "smartcard redirection")
 
-    def _toggle_dnd(self):
-        """Arm or disarm dragging guests between folders.
+    def _toggle_file_transfer(self):
+        self._toggle_switch("file_transfer", "file drag and drop")
 
-        A client-wide preference rather than a per-guest one: it is about
-        how the tree behaves under your hand, not about any one VM. Saved
-        immediately, because it exists to stop an accident and would be no
-        use if it forgot itself.
+    def _update_file_transfer_indicator(self, console=_CURRENT):
+        """Whether a file dropped on this console would reach the guest.
+
+        Three things decide it and they fail differently: VNC has no channel
+        to carry a file, a guest without its agent has nothing to write one,
+        and the switch is somebody saying no. Only the last is a state to
+        click out of.
         """
-        enabled = not bool(self.config.get("enable_dnd", True))
-        self.config["enable_dnd"] = enabled
-        self.config.save()
-        self.sidebar.set_dnd_enabled(enabled)
-        self._update_dnd_indicator()
-        self.set_status("Drag and drop " + ("on" if enabled else "off"))
+        if console is _CURRENT:
+            console = self.current_console()
+        guest = self.context_guest(console)
+        enabled = self._guest_switch(guest, "file_transfer")
+        label = "File drag and drop"
 
-    def _update_dnd_indicator(self):
-        enabled = bool(self.config.get("enable_dnd", True))
-        label = "Drag and drop"
-        if not self.sidebar.folder_view:
-            # Node view has no folders to drop onto, so the setting is real
-            # but has nothing to act on. Still toggleable: switching it on
-            # here so it is ready in folder view is a reasonable thing to do.
+        if console is None or not getattr(console, "supports", {}).get("file_transfer"):
             self._set_indicator(
-                self.dnd_icon,
+                self.transfer_icon,
                 None,
                 label,
                 enabled=enabled,
+                can_toggle=False,
+                detail=(
+                    "n/a - "
+                    + (
+                        "this console is VNC, which has no channel to carry a file"
+                        if console is not None
+                        else "needs an open SPICE console"
+                    )
+                ),
+            )
+            return
+        if not enabled:
+            self._set_indicator(
+                self.transfer_icon,
+                False,
+                label,
+                enabled=False,
+                can_toggle=True,
+                detail="turned off - click to accept files dropped on the console",
+            )
+            return
+        # The switch is on, so the only question left is whether the guest
+        # could write the file if one arrived.
+        if not getattr(console, "file_transfer_available", lambda: False)():
+            self._set_indicator(
+                self.transfer_icon,
+                False,
+                label,
+                enabled=True,
                 can_toggle=True,
                 detail=(
-                    "n/a in node view - "
-                    + ("on" if enabled else "off")
-                    + " for folder view"
+                    "spice-vdagent is not running in the guest, so a dropped "
+                    "file has nothing to receive it"
                 ),
             )
             return
         self._set_indicator(
-            self.dnd_icon,
-            enabled,
+            self.transfer_icon,
+            True,
             label,
-            enabled=enabled,
+            enabled=True,
             can_toggle=True,
-            detail=(
-                "guests can be dragged between folders - click to turn off"
-                if enabled
-                else "turned off - click to allow dragging guests between folders"
-            ),
+            detail="drop files on the console to send them - click to turn off",
         )
 
     def _update_clipboard_indicator(self, console=_CURRENT, connected=None):
@@ -2467,7 +2494,7 @@ class MainWindow(Gtk.Window):
             self,
             api,
             guest,
-            on_saved=lambda settings, k=guest.key: self._guest_settings_saved(
+            on_saved=lambda settings, k=guest.key: self._guest_config_saved(
                 k, settings
             ),
             local={
@@ -2486,6 +2513,48 @@ class MainWindow(Gtk.Window):
                 k, values
             ),
         )
+
+    def _guest_config_saved(self, key, settings):
+        """A save in the settings dialog landed: take it into use, and re-read.
+
+        The re-read hangs off this callback rather than off _guest_settings_saved
+        because only this one means the server was written. The local half calls
+        that too, and nothing this machine keeps to itself can have changed the
+        guest's hardware.
+        """
+        self._guest_settings_saved(key, settings)
+        self._reload_guest_details(key)
+
+    def _reload_guest_details(self, key):
+        """Read a guest's config again after something has changed it.
+
+        Two readers, because they cache separately. The window's own copy is
+        what the status bar, the menus and an open console's head limit are
+        driven from, and it is loaded once per guest. The summary makes its
+        per-guest calls only when the tab changes guest, so a hardware change
+        saved under an open summary is invisible to it -- the display
+        adapter, processors and NICs it lists are the ones read when the tab
+        was opened, and nothing else would ask it to look again. On a tab
+        sitting on one guest, that is indefinitely.
+
+        Both are told rather than left to their own schedules: a save is a
+        moment when the answer is known to have changed, which is exactly
+        when a cache should be dropped.
+        """
+        guest = self.sidebar.guests.get(key)
+        if guest is None:
+            return
+        self._ensure_config_loaded(guest, force=True)
+
+        tab = self.tabs.get(key)
+        summary = getattr(tab, "summary", None)
+        if summary is None:
+            return
+        try:
+            api = self.api_for(guest)
+        except ProxmoxError:
+            return
+        summary.reload_guest(guest, api)
 
     def _guest_local_saved(self, key, values):
         """Store this machine's own settings for a guest, and apply them.
@@ -3047,7 +3116,6 @@ class MainWindow(Gtk.Window):
         self.config["tree_view"] = self.sidebar.view_mode
         self.config.save()
         # Dragging only means anything in folder view.
-        self._update_dnd_indicator()
 
     def _rebuild_disconnect_menu(self):
         for child in self.disconnect_menu.get_children():
@@ -3185,18 +3253,23 @@ class MainWindow(Gtk.Window):
         self._update_audio_indicator(console)
         self._update_microphone_indicator(console)
         self._update_smartcard_indicator(console)
+        self._update_file_transfer_indicator(console)
         self._update_clipboard_indicator(console)
         self._update_usb_indicator(console)
         self._ensure_config_loaded(guest)
 
-    def _ensure_config_loaded(self, guest):
-        """Read the guest config once.
+    def _ensure_config_loaded(self, guest, force=False):
+        """Read the guest config once, or again when told to.
 
         Containers are included even though they have no display or audio to
         report: the config is also where the delete-protection flag lives,
         and that decides whether Delete is offered at all.
+
+        "Once" is right for the context switches that call this, and wrong
+        after something has changed the config on the server -- see
+        _reload_guest_details, which is the only caller that passes force.
         """
-        if guest is None or guest.config_loaded:
+        if guest is None or (guest.config_loaded and not force):
             return
         key = guest.key
 
@@ -3251,6 +3324,7 @@ class MainWindow(Gtk.Window):
             self._update_audio_indicator()
             self._update_microphone_indicator()
             self._update_smartcard_indicator()
+            self._update_file_transfer_indicator()
             self._update_clipboard_indicator()
         return False
 
@@ -4225,6 +4299,7 @@ class MainWindow(Gtk.Window):
                     else ""
                 ),
                 shared_folder_ro=prefs["shared_folder_ro"],
+                allow_file_transfer=self._guest_switch(guest, "file_transfer"),
                 view_only=guest.key in self._view_only,
                 disable_effects=prefs["disable_effects"],
                 on_agent=lambda connected, c=None: self._on_console_agent(
@@ -4959,6 +5034,7 @@ class MainWindow(Gtk.Window):
         self._update_audio_indicator(console)
         self._update_microphone_indicator(console)
         self._update_smartcard_indicator(console)
+        self._update_file_transfer_indicator(console)
         self._update_clipboard_indicator(console)
         self._update_usb_indicator(console)
 
@@ -5269,6 +5345,7 @@ class MainWindow(Gtk.Window):
         self._update_audio_indicator()
         self._update_microphone_indicator()
         self._update_smartcard_indicator()
+        self._update_file_transfer_indicator()
         self._update_clipboard_indicator()
 
     def _clear_session_choices(self, key):

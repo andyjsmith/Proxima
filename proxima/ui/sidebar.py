@@ -143,9 +143,7 @@ class Sidebar(Gtk.Box):
         "settings-requested": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
-    def __init__(
-        self, row_ypad=1, name_format="name", templates_last=True, dnd_enabled=True
-    ):
+    def __init__(self, row_ypad=1, name_format="name", templates_last=True):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
 
         self.guests = {}
@@ -165,7 +163,6 @@ class Sidebar(Gtk.Box):
         self.view_mode = NODE_VIEW
         self.name_format = name_format
         self.templates_last = templates_last
-        self.dnd_enabled = bool(dnd_enabled)
         self._connections = []
         self._menu = None
         self._folders = set()  # folder paths currently in the tree
@@ -371,28 +368,10 @@ class Sidebar(Gtk.Box):
         self.view.connect("drag-data-get", self._on_drag_data_get)
         self.view.connect("drag-data-received", self._on_drag_data_received)
         self.view.connect("drag-motion", self._on_drag_motion)
-        self._apply_dnd()
-
-    def _apply_dnd(self):
-        """Arm or disarm dragging entirely.
-
-        Unset rather than refused in the handlers: a drag that starts, draws
-        a row under the pointer and then quietly does nothing is worse than
-        one that never starts. With the source unset the tree behaves like an
-        ordinary list again, which is the point of turning it off.
-        """
-        if self.dnd_enabled:
-            self.view.enable_model_drag_source(
-                Gdk.ModifierType.BUTTON1_MASK, [DRAG_TARGET], Gdk.DragAction.MOVE
-            )
-            self.view.enable_model_drag_dest([DRAG_TARGET], Gdk.DragAction.MOVE)
-        else:
-            self.view.unset_rows_drag_source()
-            self.view.unset_rows_drag_dest()
-
-    def set_dnd_enabled(self, enabled):
-        self.dnd_enabled = bool(enabled)
-        self._apply_dnd()
+        self.view.enable_model_drag_source(
+            Gdk.ModifierType.BUTTON1_MASK, [DRAG_TARGET], Gdk.DragAction.MOVE
+        )
+        self.view.enable_model_drag_dest([DRAG_TARGET], Gdk.DragAction.MOVE)
 
     # -- appearance ----------------------------------------------------
 
@@ -1049,7 +1028,7 @@ class Sidebar(Gtk.Box):
 
     def _on_drag_motion(self, view, context, x, y, time):
         """Only folders and folder-view roots are valid drop targets."""
-        if not self.folder_view or not self.dnd_enabled:
+        if not self.folder_view:
             Gdk.drag_status(context, 0, time)
             return True
         result = view.get_dest_row_at_pos(x, y)
@@ -1063,7 +1042,7 @@ class Sidebar(Gtk.Box):
         return True
 
     def _on_drag_data_received(self, view, context, x, y, selection_data, _info, time):
-        if not self.folder_view or not self.dnd_enabled:
+        if not self.folder_view:
             Gtk.drag_finish(context, False, False, time)
             return
         payload = selection_data.get_data()
