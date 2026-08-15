@@ -1,6 +1,6 @@
-import {themes as prismThemes} from 'prism-react-renderer';
-import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import type { Config } from '@docusaurus/types';
+import { themes as prismThemes } from 'prism-react-renderer';
 
 const config: Config = {
   title: 'Proxima',
@@ -15,10 +15,10 @@ const config: Config = {
   // custom domain, put a CNAME file in static/, set url to the domain and
   // baseUrl back to '/'.
   url: 'https://andyjsmith.github.io',
-  baseUrl: '/proxima/',
+  baseUrl: '/Proxima/',
 
   organizationName: 'andyjsmith',
-  projectName: 'proxima',
+  projectName: 'Proxima',
   // Stated rather than left undefined, because GitHub Pages adds a trailing
   // slash of its own. With this on, the links the site generates are the
   // URLs Pages serves, so nothing takes a redirect on the way.
@@ -111,9 +111,9 @@ const config: Config = {
         {
           title: 'Documentation',
           items: [
-            {label: 'Overview', to: '/docs/'},
-            {label: 'Installation', to: '/docs/getting-started/installation'},
-            {label: 'Troubleshooting', to: '/docs/troubleshooting'},
+            { label: 'Overview', to: '/docs/' },
+            { label: 'Installation', to: '/docs/getting-started/installation' },
+            { label: 'Troubleshooting', to: '/docs/troubleshooting' },
           ],
         },
         {
