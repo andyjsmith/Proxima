@@ -630,9 +630,9 @@ def test_the_tree_accepts_guest_drops(window):
     files dropped on a console, not rows dropped on a folder.
     """
     targets = window.sidebar.view.drag_dest_get_target_list()
-    assert targets is not None and targets.find(
-        Gdk.Atom.intern("proxima/guest", False)
-    )[0], "the tree does not accept guest drops"
+    assert (
+        targets is not None and targets.find(Gdk.Atom.intern("proxima/guest", False))[0]
+    ), "the tree does not accept guest drops"
 
 
 # -- several servers at once ----------------------------------------------
